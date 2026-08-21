@@ -1,0 +1,672 @@
+# Plugins
+
+Every integration point in Oarlock is a Go interface in `pkg/plugin` with a working
+default. Two rules shape all of them:
+
+1. **`go run` needs nothing.** Clone, build, run — no database, no broker, no identity
+   provider. Every default is in-process or a file on disk.
+2. **Scale must not need a fork.** Nothing that talks to the outside world is reached
+   except through one of these interfaces, so replacing it is a config line and an import,
+   never a patch.
+
+---
+
+## 1. How a plugin is wired
+
+**Not** via Go's `plugin` package. It requires an exact toolchain and dependency-version
+match between host and plugin, does not work on every platform Oarlock targets, and cannot
+be unloaded. The cure is worse than the disease.
+
+Instead: a registry, populated by `init()`, selected by name in config.
+
+```go
+// plugins/oidc/oidc.go
+package oidc
+
+import "github.com/oarlock/oarlock/pkg/plugin"
+
+func init() {
+    plugin.RegisterAuthenticator("oidc", New)
+}
+
+func New(cfg plugin.Config) (plugin.Authenticator, error) { /* … */ }
+```
+
+```yaml
+# oarlock.yaml
+authenticator:
+  kind: oidc
+  issuer: https://id.example.com
+  audience: oarlock
+```
+
+Built-ins under `plugins/` are imported by `cmd/oarlockd`. **For something out of tree,
+you write your own `main`** — twelve lines, and it is the supported path, not a workaround:
+
+```go
+package main
+
+import (
+    "github.com/oarlock/oarlock/cmd/oarlockd/app"
+    _ "github.com/oarlock/oarlock/plugins/mqtt"
+    _ "example.com/our-stack/oarlock-casdoor"   // yours
+)
+
+func main() { app.Main() }
+```
+
+You get a single static binary with your integrations in it, your own release cadence, and
+no ABI to keep in step. `pkg/plugin` is versioned as public API; the rest of the tree is
+not.
+
+### 1.1 Rules every plugin obeys
+
+- **Take a `context.Context` and honour it.** The gateway sets deadlines and cancels; a
+  plugin that ignores cancellation holds a session open after the operator has gone.
+- **Be safe for concurrent use.** One instance serves every session.
+- **Do not block the pump.** Anything on the per-frame path must return in microseconds.
+  `Recorder` writes are the only per-byte call, and they are expected to buffer internally
+  and flush on their own schedule.
+- **Fail closed, but distinguish a denial from an outage.** Returning
+  `Decision{Allow:false}` is a decision, and it closes the session as `revoked`. Returning
+  an `error` means *you could not decide*: new sessions are refused immediately, live ones
+  get `authz.grace` re-checks before closing as `authz_unavailable`. Never return
+  `Allow:false` to signal that your backend is down — that writes a lie into the audit
+  trail. `Recorder` errors are absorbed by the spool until it is exhausted. An `AuditSink`
+  error is logged and swallowed, because audit must never be the thing that breaks a shell —
+  that turns the audit trail into a denial-of-service lever.
+- **Expose metrics through the passed registry.** Every plugin gets a
+  `prometheus.Registerer`; a plugin whose latency you cannot see is a plugin you cannot
+  operate.
+
+## 2. `Authenticator` — who is this operator
+
+```go
+type Authenticator interface {
+    // AuthPublicKey is called during SSH publickey auth. Returning a nil error
+    // accepts the key and binds the connection to the returned principal.
+    AuthPublicKey(ctx context.Context, user string, key ssh.PublicKey) (*Principal, error)
+
+    // AuthDelegated verifies that `service` may act for the subject named in a signed
+    // assertion, and returns the SUBJECT's principal. The assertion is a token the
+    // subject's own login produced — never a bare identifier in a header. Returning
+    // ErrUnsupported disables delegated access, which refuses every On-Behalf-Of call.
+    AuthDelegated(ctx context.Context, service *Principal, assertion string) (*Principal, error)
+
+    // AuthInteractive backs keyboard-interactive: an OIDC device-code flow, a TOTP
+    // prompt, anything conversational. Nil means "not supported by this backend".
+    AuthInteractive(ctx context.Context, user string, c Challenger) (*Principal, error)
+
+    // AuthHTTP authenticates the browser and API surface: a session cookie, a bearer
+    // token, an OIDC id_token.
+    AuthHTTP(ctx context.Context, r *http.Request) (*Principal, error)
+}
+
+type Principal struct {
+    ID     string            // stable, unique, and what gets recorded — never the SSH user
+    Email  string
+    Groups []string
+    Attrs  map[string]string // opaque, passed to Authorizer
+    Expiry time.Time         // zero means "no expiry known"; drives the re-check floor
+}
+```
+
+The SSH *user* is the **device id**, not the operator: `ssh treadmill-4821@gw`. The
+operator's identity comes from their key or their token. This is the one piece of SSH
+convention Oarlock breaks, and it earns it — an operator connects to a fleet of thousands
+of devices with one set of credentials, so the addressable thing in the connection string
+has to be the device.
+
+`Expiry` is worth setting. It puts a ceiling on how long a session can outlive the
+credential that opened it, independent of the re-check interval.
+
+| built-in | notes |
+|---|---|
+| `authorized_keys` (default) | one file, `oarlock` extension comments carry the principal id. Fine for a handful of operators; revocation means editing a file on every replica. |
+| `oidc` | device-code flow over keyboard-interactive for CLI, standard code flow for the browser. The one most people should use. |
+| `sshca` | trust one CA, accept short-lived user certificates, read the principal from the cert. No per-operator state on the gateway at all, and expiry is enforced by the protocol. |
+| `static` | tokens in config. For tests and CI. Refuses to start if `env != dev`. |
+
+**`sshca` is the recommendation at any real size.** One key to trust, certificates that
+expire on their own, and revocation becomes "stop issuing" rather than a push to every
+replica. It is the one idea worth importing from the mode-A world without importing mode A.
+
+## 3. `Authorizer` — may they, on this device, right now
+
+```go
+type Authorizer interface {
+    Authorize(ctx context.Context, p *Principal, dev *Device, a Action) (Decision, error)
+
+    // Watch streams revocations as they happen. Returning ErrUnsupported is fine —
+    // the gateway falls back to polling Authorize on recheck_interval.
+    Watch(ctx context.Context) (<-chan RevocationEvent, error)
+}
+
+type Action string // shell, exec, file:read, file:write, tcp, passthrough, replay, observe
+
+type Decision struct {
+    Allow  bool
+    Reason string        // shown to the operator on a deny; make it actionable
+    Limits *Limits       // optional per-grant override, only ever more restrictive
+    TTL    time.Duration // re-check sooner than the default for this grant
+}
+
+type RevocationEvent struct {
+    PrincipalID string // "" means every principal
+    DeviceID    string // "" means every device
+    Reason      string
+}
+```
+
+This is the interface that justifies the whole architecture, so it gets called more than
+once per session:
+
+**`plugintest` enforces this table**, and its most important case is the last column: a
+backend that answers `Allow: false` when its own dependency is down fails the suite. See
+§ 11.1.
+
+| when | on a deny | on an *error* |
+|---|---|---|
+| at open | `403`, no session row, `not_authorized` | `503`, no session row, `authz_unavailable` |
+| every `recheck_interval` (default 30 s) | closed, `revoked` | grace window, then `authz_unavailable` |
+| on a `RevocationEvent` | closed, `revoked`, typically <1 s | n/a — a dropped stream is not a denial |
+| `DELETE /api/sessions/{id}` | closed, `admin_kill` | n/a |
+
+**`Limits` may only tighten.** A grant that widened a limit would let an authorisation
+backend raise the ceilings the gateway operator set, which inverts who is in charge. The
+gateway takes the minimum of the two, always.
+
+`Watch` reconnects with backoff if the stream drops, and **a broken `Watch` is not a
+security failure** — the re-check interval is the guarantee and `Watch` is the
+optimisation. Design your backend so that being disconnected for a minute costs you a
+minute of staleness, not a missed revocation.
+
+Two things follow, and `plugintest` checks both. **Close the channel when the context
+ends**, or the gateway leaks a watcher goroutine per reconnect. And **never close it to
+mean "everything is revoked"** — the gateway treats a close as "reconnect", because a
+stream that dies must not be able to kill a fleet. Say that with a `RevocationEvent`
+naming neither a principal nor a device, which is the explicit way to state it.
+
+| built-in | notes |
+|---|---|
+| `rules` (default) | `principal → device selector → actions` in YAML, reloaded on file change. Selectors match on device id, tags, or glob; a `deny: true` rule beats every allow. **Never returns an error** — its source of truth is a file already in memory, so there is no outage in which it starts denying people, and a file that fails to reload leaves the previous rules in place. |
+| `webhook` | `POST` per decision with a short cache TTL, plus an SSE endpoint for `Watch`. The escape hatch for anything: Casdoor, OPA, a permission table in your own database. |
+
+### 3.1 The `rules` file
+
+```yaml
+rules:
+  # Everyone on call gets a shell on the treadmills.
+  - principals: ["*@oncall.example.com"]
+    devices: ["treadmill-*"]
+    actions: ["shell", "exec"]
+
+  # A contractor, on a leash: fifteen minutes, and re-checked every ten seconds.
+  - principals: ["contractor@partner.example.com"]
+    devices: ["treadmill-4821"]
+    actions: ["shell"]
+    max_duration: 15m
+    idle: 2m
+    ttl: 10s
+
+  # Auditors read recordings and watch live sessions. They never get a keyboard.
+  - principals: ["auditor@example.com"]
+    actions: ["replay", "observe"]
+
+  # A carve-out. A matching deny beats every allow, wherever it appears in the file,
+  # so this cannot be defeated by rule ordering somebody else controls.
+  - principals: ["*"]
+    tags: {scope: "pci"}
+    actions: ["*"]
+    deny: true
+    reason: "PCI-scoped devices need a change ticket"
+```
+
+- **`actions` is never defaulted.** An empty list is refused at load: it is far more
+  likely to be an unfinished rule than an intent to grant the fleet. Write
+  `actions: ["*"]` if you mean every action.
+- **Every listed tag must match.** A rule scoped to PCI *and* the EU does not grant on a
+  device that is only one of them.
+- **`max_duration`, `idle` and `ttl` only tighten**, like every per-grant limit: the
+  gateway takes the minimum of its own ceiling and the grant's.
+- **A file that fails to load changes nothing.** A syntax error, or a deleted file, leaves
+  the rules already in memory in place and logs loudly. Dropping to no rules would deny
+  everybody instantly because of a typo — and it would look exactly like a mass revocation
+  to every operator it hit.
+- **Unknown keys are refused.** A typo in a key name must not silently mean "default".
+
+## 4. `Recorder` — the artefact
+
+**A backend implements `Store`, not `RecordingWriter`.** The first cut made the whole
+recorder pluggable — a backend received `Output`/`Input`/`Resize` and encoded asciicast
+itself — and building the spool showed that to be the wrong seam, for three reasons:
+
+1. The spool must buffer exactly the bytes destined for storage, so it has to sit *below*
+   the encoder. Above it, a retry would mean re-encoding, and the hash chain would have to
+   be recomputed — so a retry could change a recording's identity.
+2. A spooled fragment dumped to disk is then a valid *slice* of a .cast file, recoverable by
+   appending it at a known byte offset. Buffered events are not.
+3. It is far less for a third-party backend to implement, and it removes the possibility of
+   a backend encoding asciicast subtly wrongly — which would produce recordings that verify
+   but do not play.
+
+So the encoder, the chain and the manifest are Oarlock's, and a backend answers one
+question: where do these bytes go.
+
+```go
+// Store is the pluggable seam.
+type Store interface {
+    Create(ctx context.Context, m *SessionMeta) (io.WriteCloser, error)
+    PutManifest(ctx context.Context, sessionID string, b []byte) error
+    Get(ctx context.Context, sessionID string) (io.ReadCloser, error)
+    GetManifest(ctx context.Context, sessionID string) ([]byte, error)
+    // URL returns a time-limited direct link if the backend can issue one,
+    // so replay does not stream through the gateway. ErrUnsupported otherwise.
+    URL(ctx context.Context, sessionID string, ttl time.Duration) (string, error)
+}
+
+// Recorder is the gateway-facing interface, which Oarlock implements over a Store.
+type Recorder interface {
+    // Open is called before the operator sees a prompt. An error here fails the session.
+    Open(ctx context.Context, m *SessionMeta) (RecordingWriter, error)
+    Get(ctx context.Context, sessionID string) (io.ReadCloser, error)
+    URL(ctx context.Context, sessionID string, ttl time.Duration) (string, error)
+}
+
+// The gateway puts a bounded spool in front of these calls (ARCHITECTURE § 8.1), so a
+// backend failing for thirty seconds is invisible to the operator. Return errors honestly
+// and let the spool absorb them — retrying internally forever hides the failure from the
+// mechanism built to handle it.
+type RecordingWriter interface {
+    // Output is on the per-byte path. Buffer; do not do I/O per call.
+    Output(at time.Duration, b []byte) error
+    Input(at time.Duration, b []byte) error   // only if record_input is on
+    Resize(at time.Duration, cols, rows int) error
+    // Close writes the sidecar. It runs even when the session died badly.
+    Close(ctx context.Context, r Result) error
+}
+```
+
+Output is [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/): a JSON header
+line, then one `[time, "o", data]` line per chunk. **Stream it, do not buffer it.** A
+gateway killed mid-session must still leave a playable file, and an asciicast truncated at
+any line boundary plays perfectly up to that point.
+
+`Close` writes a sidecar with the exit code, `close_reason`, principal, device, byte
+counts and duration — so a recording is self-describing even if it is copied away from the
+store that indexed it.
+
+| built-in | notes |
+|---|---|
+| `file` (default) | `./recordings/YYYY-MM-DD/{session_id}.cast` + `.json`. `fsync` on close, and the manifest is written to a temp file then renamed, so a reader never sees half of one. |
+| `s3`, `gcs` | multipart streaming upload, part per ~5 MiB, finalised on close. `URL` issues a signed link. See § 4.2 before pointing one at a bucket. |
+| `none` | records nothing, and **logs a warning at every session open**. Chosen unrecorded is a legitimate configuration; quietly unrecorded is not. |
+
+### 4.2 Storage immutability, and why the chain is not enough
+
+The hash chain and the signed manifest make tampering **detectable**. Only storage
+makes it **impossible**, and the two are not substitutes: detection tells you
+afterwards, and afterwards is when somebody is already asking why the recording
+disagrees with the incident report.
+
+A store reports what it can enforce, through an optional interface:
+
+```go
+type ImmutabilityReporter interface {
+    Immutability(ctx context.Context) (Immutability, error)
+}
+```
+
+| mode | what it means | what it survives |
+|---|---|---|
+| `unknown` | the store does not implement the interface | nothing — **silence is not a guarantee**, so this is treated as mutable |
+| `mutable` | anything with write access can alter or delete a recording | nothing |
+| `declared` | an operator says the storage is protected and the gateway cannot verify it | whatever the operator actually did |
+| `governance` | an object lock that sufficiently privileged users can lift | an accident, and a compromised writer |
+| `compliance` | a lock nobody can lift until retention expires, including the account owner | a compromised administrator |
+
+**Whatever it reports is written into the manifest and signed.** That is the point:
+the chain proves the bytes have not changed, and this records what stood between them
+and a change. An auditor reading a recording two years from now should not have to
+guess whether the bucket had object lock enabled in 2026 — and because the field is
+inside the signed bytes, the claim cannot be upgraded after the fact.
+
+#### Configuring it
+
+**S3.** Object Lock must be enabled **at bucket creation** — it cannot be turned on
+afterwards, which is the single most common way this gets missed. Then set a default
+retention:
+
+```
+aws s3api create-bucket --bucket oarlock-recordings --object-lock-enabled-for-bucket
+aws s3api put-object-lock-configuration --bucket oarlock-recordings   --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":365}}}'
+```
+
+`COMPLIANCE` cannot be shortened or lifted by anyone, including the root account.
+`GOVERNANCE` can be lifted with `s3:BypassGovernanceRetention`, which is the right
+choice only if you have a real need to delete recordings early — and if you do, the
+people holding that permission are now part of your audit story.
+
+**GCS.** A bucket-level retention policy, then **lock it** — an unlocked policy can be
+shortened or removed, which makes it a preference rather than a control:
+
+```
+gcloud storage buckets update gs://oarlock-recordings --retention-period=365d
+gcloud storage buckets update gs://oarlock-recordings --lock-retention-period
+```
+
+Locking is irreversible. That is the feature.
+
+**Both.** Retention interacts with the spool
+([ARCHITECTURE § 8.1](../ARCHITECTURE.md#81-what-happens-when-the-recorder-fails)): a
+dumped fragment recovered later has to be written as a *new* object, because the
+original is immutable by design. Name it after the fragment's offset and keep it
+beside the original rather than trying to append.
+
+**The keys.** Immutable storage does not help if the signing key lives in the same
+account: whoever can rewrite the manifest can re-sign it. Keep the recording signing
+key somewhere the recording store cannot reach — a KMS, an HSM, a different account.
+`Signer` is a `crypto.Signer`, so that costs configuration and not code.
+
+### 4.3 `record_input` is off by default
+
+Keystroke capture records whatever an operator types into a `sudo` or `mysql -p` prompt.
+Echo is suppressed on the *device*, so the gateway sees the characters regardless of what
+the screen shows. Turn it on and your recordings are a credential store that must be
+encrypted, access-controlled and retention-bounded like one.
+
+Output-only recording still shows every command, because the shell echoes it. You lose
+keystroke timing and typo history; you gain not having built a secrets file by accident.
+
+## 5. `SessionStore` — the ledger
+
+```go
+type SessionStore interface {
+    Create(ctx context.Context, s *Session) error   // enforces the concurrency caps
+    Update(ctx context.Context, id string, f func(*Session) error) error
+    Close(ctx context.Context, id string, reason CloseReason, res Result) error
+    Get(ctx context.Context, id string) (*Session, error)
+    List(ctx context.Context, q Query) ([]*Session, string, error) // cursor-paginated
+}
+```
+
+`Create` is where `sessions_per_device` and `sessions_per_principal` are enforced, and it
+must be **atomic** — a unique index or a transaction, not a read-then-write. Two operators
+opening a shell on the same device in the same second is exactly the race this exists to
+lose gracefully, and "we checked and it was fine" is not an enforcement mechanism.
+
+| built-in | notes |
+|---|---|
+| `memory` (default) | single node; sessions are lost on restart, which is honest rather than surprising. |
+| `sqlite` | one file, survives restarts, plenty for one gateway. |
+| `postgres` | multi-node, partial unique index for the per-device cap. |
+
+## 6. `DeviceRegistry` — what the gateway knows about a device
+
+```go
+type DeviceRegistry interface {
+    Get(ctx context.Context, id string) (*Device, error)
+    List(ctx context.Context, q DeviceQuery) ([]*Device, string, error)
+}
+
+type Device struct {
+    ID               string
+    Platform         Platform             // android | linux | container | other
+    Mode             Mode                 // persistent | dispatch | "" = resolve from Platform
+    Keys             []ed25519.PublicKey  // control-channel identity; a list, so keys rotate
+    AllowPassthrough bool                 // mode A, per device, default false
+    Tags             map[string]string    // what Authorizer and policy selectors match on
+    Profiles         []string             // what this device may be asked to do
+}
+```
+
+**`Keys` are Ed25519, not SSH keys.** A device's identity key signs a challenge on
+the control channel; it is not an SSH key and never appears in an SSH handshake.
+Typing it as `ssh.PublicKey` would pull an SSH library into the device-identity
+layer for nothing. The registry file still accepts the `ssh-ed25519 AAAA…` form
+because that is what `ssh-keygen -t ed25519` produces, and requiring a bespoke
+encoding for no reason is how a config file becomes something only a script can
+write.
+
+```go
+```
+
+Read-only by design. Oarlock does not enroll devices, does not name them, and does not own
+their lifecycle — it reads from whatever already does. The default `file` backend is a YAML
+list, which is enough for a lab and obviously not enough for a fleet.
+
+**`Platform` exists to pick the reachability default**, and it earns its place because the
+right default differs by platform rather than by deployment: `android` resolves to
+`dispatch`, because the platform resists held connections; `linux` and `container` resolve to
+`persistent`, because nothing there objects and it needs no doorbell. An explicit `Mode`
+always wins. The resolved value is logged at registration, so a surprising default is visible
+once rather than never.
+
+**`Tags` do double duty** — `Authorizer` selectors and `record_input` policy selectors both
+match on them ([ARCHITECTURE § 8.2](../ARCHITECTURE.md#82-record_input-is-a-policy-not-a-preference)).
+That is deliberate: compliance scope and jurisdiction get expressed through a mechanism that
+already exists, and no tenancy concept has to be invented to carry them.
+
+## 7. `AgentAuthenticator` — is this really that device
+
+```go
+type AgentAuthenticator interface {
+    // Persistent mode: verify the challenge-response from protocol §3.1.
+    VerifyDeviceKey(ctx context.Context, deviceID string, nonces Nonces, sig []byte) error
+    // Dispatch mode: redeem a one-time ticket, atomically.
+    RedeemTicket(ctx context.Context, ticket string) (*TicketClaims, error)
+}
+```
+
+`RedeemTicket` **must be atomic** — a compare-and-delete, not a read then a delete. A
+ticket that can be redeemed twice is a ticket an attacker can race the real agent for.
+
+| built-in | notes |
+|---|---|
+| `devicekey` (default) | Ed25519, keys from `DeviceRegistry`. |
+| `mtls` | client certificates; moves the whole problem into the TLS layer and skips the in-band handshake. If you already run a device PKI — an MQTT mTLS one, say — this reuses it. |
+
+## 8. `Dispatcher` — the doorbell (`dispatch` mode only)
+
+```go
+type Dispatcher interface {
+    // Wake must be fast and must distinguish "device is not reachable" from
+    // "I could not deliver". The gateway shows the operator different things.
+    Wake(ctx context.Context, dev *Device, t *Invitation) error
+}
+
+type Invitation struct {
+    Ticket    string
+    SessionID string
+    URL       string        // which gateway to dial — the node, not the LB
+    Profile   string
+    ExpiresAt time.Time
+}
+```
+
+`URL` names the specific node. That is what makes `dispatch` mode scale without the
+node-to-node forwarding `persistent` mode needs: the agent connects to the right replica
+the first time.
+
+**Distinguishing the two failures matters more than it sounds.** "Device is offline" sends
+someone to look at hardware in a gym. "I couldn't deliver the wake-up" sends someone to
+look at the broker. Returning the wrong one wastes an on-call hour.
+
+| built-in | notes |
+|---|---|
+| `mqtt` | publish to a per-device topic, QoS 1. |
+| `webhook` | `POST` to your own push service. |
+| `exec` | run a command with the invitation on stdin. For testing, and for the one place a shell script is genuinely the right integration. |
+
+## 9. `Ownership` — which gateway holds this device
+
+```go
+type Ownership interface {
+    Claim(ctx context.Context, deviceID, nodeID string, ttl time.Duration) (bool, error)
+    Renew(ctx context.Context, deviceID, nodeID string, ttl time.Duration) error
+    Release(ctx context.Context, deviceID, nodeID string) error
+    Lookup(ctx context.Context, deviceID string) (nodeID string, err error)
+}
+```
+
+Only used with more than one replica. `Lookup` is what lets replica B forward an
+operator's session to replica A, which holds the agent's socket. Leases expire so that a
+node dying does not strand its devices; TTL defaults to 3× the renew interval.
+
+| built-in | notes |
+|---|---|
+| `memory` (default) | single node. `Lookup` always returns self. |
+| `redis` | `SET NX PX` claim, `EXPIRE` renew. |
+
+## 10. `AuditSink` — the events
+
+```go
+type AuditSink interface {
+    Emit(ctx context.Context, e Event) // must not block, must not error
+}
+```
+
+Structured events for everything that matters: authn, authz allow and deny, session open,
+close with reason, revocation, passthrough use, replay access, config reload, limit hit.
+
+`Emit` returns nothing, and that is the contract. **Audit must never be able to break a
+shell** — a sink that can fail a session is a denial-of-service lever pointed at your own
+operators. Buffer, drop on overflow, and count the drops.
+
+| built-in | notes |
+|---|---|
+| `stderr` (default) | JSON lines. Whatever collects your logs collects your audit. |
+| `http` | batched `POST`, at-least-once, bounded queue. |
+| `syslog` | RFC 5424. |
+
+## 11. Writing one — a worked example
+
+An `Authorizer` backed by an internal permissions API, with revocation over SSE:
+
+```go
+package ourauthz
+
+import (
+    "context"
+    "net/http"
+    "time"
+
+    "github.com/oarlock/oarlock/pkg/plugin"
+)
+
+func init() { plugin.RegisterAuthorizer("ourstack", New) }
+
+type authz struct {
+    api   *http.Client
+    base  string
+    cache *plugin.TTLCache[plugin.Decision] // provided; 5 s default, metrics included
+}
+
+func New(cfg plugin.Config) (plugin.Authorizer, error) {
+    base, err := cfg.RequireString("base_url")
+    if err != nil {
+        return nil, err // config errors must fail at boot, never at first session
+    }
+    return &authz{
+        api:   cfg.HTTPClient(),           // timeouts, tracing and metrics pre-wired
+        base:  base,
+        cache: plugin.NewTTLCache[plugin.Decision](cfg.Duration("cache_ttl", 5*time.Second)),
+    }, nil
+}
+
+func (a *authz) Authorize(ctx context.Context, p *plugin.Principal,
+    dev *plugin.Device, act plugin.Action) (plugin.Decision, error) {
+
+    key := p.ID + "|" + dev.ID + "|" + string(act)
+    if d, ok := a.cache.Get(key); ok {
+        return d, nil
+    }
+    d, err := a.ask(ctx, p, dev, act)
+    if err != nil {
+        // An error is not a denial. The gateway refuses NEW sessions immediately and gives
+        // live ones authz.grace re-checks before closing them as authz_unavailable.
+        // Returning Decision{Allow:false} here would write "revoked" into the audit trail
+        // for what is actually an outage.
+        return plugin.Decision{}, err
+    }
+    a.cache.Put(key, d)
+    return d, nil
+}
+
+func (a *authz) Watch(ctx context.Context) (<-chan plugin.RevocationEvent, error) {
+    ch := make(chan plugin.RevocationEvent, 64)
+    go a.streamSSE(ctx, ch) // reconnects with backoff; closes ch when ctx is done
+    return ch, nil
+}
+```
+
+Then build your own gateway:
+
+```go
+package main
+
+import (
+    "github.com/oarlock/oarlock/cmd/oarlockd/app"
+    _ "example.com/our-stack/ourauthz"
+)
+
+func main() { app.Main() }
+```
+
+```yaml
+authorizer:
+  kind: ourstack
+  base_url: https://api.internal/permissions
+  cache_ttl: 5s
+recheck_interval: 30s
+```
+
+### 11.1 The test kit
+
+`pkg/plugin/plugintest` is a conformance suite. Call it from your own tests:
+
+```go
+func TestConformance(t *testing.T) {
+    plugintest.Authorizer(t, plugintest.AuthorizerHarness{
+        New:     func(t *testing.T) plugin.Authorizer { return newMyAuthz(t) },
+        Allowed: func() (*plugin.Principal, *plugin.Device, plugin.Action) { … },
+        Denied:  func() (*plugin.Principal, *plugin.Device, plugin.Action) { … },
+
+        // Make your dependency unavailable. This is the case the suite exists for.
+        BreakDependency: func(t *testing.T) (restore func()) { … },
+    })
+}
+```
+
+It checks what is easy to get wrong and hard to notice: that you distinguish "no" from
+"I could not decide", that a denial carries a reason an operator can act on, that
+cancellation is honoured, that concurrent calls agree, that a per-grant limit only
+tightens, and that a dropped `Watch` stream closes its channel rather than leaking a
+goroutine per reconnect.
+
+**The suite fails a backend that returns `Allow: false` when its dependency is down.**
+That is its reason for existing. A backend that conflates the two writes `revoked` into
+an audit trail for an outage, tells an operator their access was withdrawn when nothing
+about it changed, and converts one service's bad minute into a fleet-wide session kill —
+during the incident that put those operators on those devices. Documenting the contract
+was the first attempt at preventing this; the suite is the second.
+
+**Nothing in it skips quietly.** A conformance suite whose most important case can be
+omitted by leaving a field nil reports success for a backend it never tested, so the cases
+that carry a contract *fail* when their harness is incomplete. Opting out takes a field
+whose name says what it costs — `NoDependencyToBreak` for an authorizer that genuinely
+has nothing that can be unavailable, `NoTransportToBreak` for an in-process dispatcher —
+and even then the suite checks the part of the claim that is checkable.
+
+Suites available now: `Authorizer`, `Authenticator`, `Dispatcher`. The shipped backends
+run through them (`plugins/dispatch/exec`, `plugins/dispatch/webhook`,
+`internal/auth/authorizedkeys`, `internal/auth/statictoken`), which is not ceremony: a
+suite the first-party implementations do not pass is one nobody should trust.
+
+**The suite tests itself.** `plugintest`'s own tests run each suite against backends that
+are wrong in each specific way — denies on error, allows on error, errors instead of
+denying, denies with no reason, ignores cancellation, disagrees under concurrency, hangs
+on `Watch`, leaks a `Watch` goroutine, blames the device for its own outage, leaks a
+ticket into an error message — and assert that the suite *fails* them. A conformance suite
+that passes a wrong backend is worthless, and the only way to know it does not is to try.
+

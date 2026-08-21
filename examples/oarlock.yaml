@@ -1,0 +1,79 @@
+# A working development gateway.
+#
+#   go build -o oarlockd ./cmd/oarlockd
+#   go build -o oarlock-agent ./cmd/oarlock-agent
+#   ./oarlockd -config examples/oarlock.yaml -check     # validate without starting
+#   ./oarlockd -config examples/oarlock.yaml
+#
+# Unknown keys are refused rather than ignored: `allow_unrecoreded: true` that quietly
+# stays false is a security setting somebody believes they set.
+
+# Anything that is not dev or test gets the production checks, including an empty
+# value — an unset environment must fail safe rather than open.
+env: dev
+
+# The address agents dial back on. **Not a load balancer**: an agent has to reach the
+# replica the operator is waiting on (ADR-025), so this is the address of this process.
+url: ws://127.0.0.1:8443
+
+listen:
+  ssh: "127.0.0.1:2222"
+  http: "127.0.0.1:8443"
+  # Required outside dev. `wss://` needs TLS, and a device-key handshake over `ws://`
+  # is a handshake anybody on the path can watch.
+  # tls_cert: /etc/oarlock/tls.crt
+  # tls_key: /etc/oarlock/tls.key
+
+ssh:
+  # Every replica must present the same key. If they do not, operators get a
+  # host-key-mismatch warning whenever a load balancer moves them — and an operator
+  # trained to ignore that warning will ignore a real one.
+  host_key: ./hostkey
+  # Dev only. The boot gate refuses a generated key in production, because a key that
+  # changes on restart warns every operator every time.
+  generate_host_key: true
+  authorized_keys: ./authorized_keys
+
+devices: ./devices.yaml
+
+authorizer:
+  kind: rules
+  path: ./rules.yaml
+  # How many consecutive failed re-checks a live session survives before closing as
+  # authz_unavailable. Omit for the default of 3; `grace: 0` is strict fail-closed,
+  # which is the right setting where a session is more dangerous than an outage.
+  # grace: 3
+  recheck_interval: 30s
+
+recorder:
+  # Empty records nothing — and says so in the operator's banner and in the session
+  # row, because an unrecorded session must be a fact you can query for rather than an
+  # absence somebody has to notice.
+  dir: ./recordings
+  signing_key: ./recording.key
+  # Dev only: a recording signed by a key that changes on restart cannot be verified
+  # afterwards, which is most of the point of signing it.
+  generate_signing_key: true
+  key_id: dev-recording-key
+
+api:
+  # For development and CI. A real deployment uses an authenticator that can validate
+  # a token it did not mint.
+  tokens:
+    dev-token-long-enough-for-the-check: phuc@example.com
+  rate_per_minute: 120
+
+# Every limit here is server-side. A client-side limit is a suggestion. Omitting a key
+# gets the documented default from ARCHITECTURE § 9.3 rather than Go's zero value — for
+# a rate limit those are very different, because zero is not "unlimited", it is a stall.
+limits:
+  rate: 262144          # 256 KiB/s sustained, device → operator
+  burst: 1048576        # absorbs a screen redraw
+  batch: 65536          # ceiling on one coalesced DATA frame
+  window: 25ms          # how long output may be held to batch it
+  idle: 5m              # no traffic either way
+  idle_input: 1h        # no operator input, even while output flows
+  max_duration: 4h
+  scrollback: 262144    # what a reattaching operator gets replayed
+  sessions_per_device: 1
+  sessions_per_principal: 5

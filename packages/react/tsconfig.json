@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.tsx", "src/**/*.ts"],
+  "references": [{ "path": "../terminal" }]
+}

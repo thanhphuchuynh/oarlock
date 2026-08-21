@@ -1,0 +1,239 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The nightly fuzz job below is gated on this trigger; without it the job is a
+    # silent no-op that looks like coverage.
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "not gofmt'd:"; echo "$out"; exit 1; fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test with the race detector
+        run: go test -race -cover ./...
+
+      # The conformance suite is the mitigation for the top risk in the authorisation
+      # epic: a third-party backend that reports its own outage as a denial. Its own
+      # tests run it against backends that are wrong in each specific way and assert it
+      # fails them — because a suite that passes a wrong backend is worthless, and the
+      # only way to know it does not is to try. Called out separately so that a break
+      # here is legible rather than one line in a full-suite run.
+      - name: the conformance suite rejects wrong backends
+        run: go test -race -count=1 -v ./pkg/plugin/plugintest/
+
+      # The daemon smoke test: a real gateway built from a real configuration file, a real
+      # agent, and a real SSH client. Called out separately because everything below it
+      # had tests and it did not — and running it by hand immediately found three bugs a
+      # harness could not: a session killed by a PTY with no reported size, one closed on
+      # stdin EOF before the output came back, and a drain whose reason never reached the
+      # ledger.
+      - name: the daemon starts and gives an operator a shell
+        run: go test -race -count=1 -v ./cmd/oarlockd/...
+
+      # And the example configuration is valid, with the boot gate satisfied. A config
+      # file in the README that does not load is worse than no config file.
+      - name: the example configuration loads
+        run: |
+          set -e
+          go build -o /tmp/oarlockd ./cmd/oarlockd
+          d=$(mktemp -d)
+          cp examples/oarlock.yaml examples/rules.yaml examples/devices.yaml "$d"/
+          : > "$d"/authorized_keys
+          (cd "$d" && /tmp/oarlockd -config ./oarlock.yaml -check)
+
+      # NFR6. Terrapin (CVE-2023-48795) is a prefix-truncation attack on the SSH
+      # binary packet protocol, and the advisory carries a specific warning for
+      # *custom* SSH services — which is exactly what the gateway is.
+      #
+      # There is no switch to turn on: x/crypto implements strict key exchange from
+      # v0.17.0 and negotiates it automatically, so pinning the version IS the
+      # control. It is asserted rather than trusted because a transitive downgrade
+      # would otherwise walk it backwards silently.
+      - name: assert the x/crypto floor (Terrapin)
+        run: |
+          set -euo pipefail
+          if ! grep -q 'golang.org/x/crypto' go.mod; then
+            echo "golang.org/x/crypto is missing, but the SSH front door requires it"
+            exit 1
+          fi
+          have=$(go list -m -f '{{.Version}}' golang.org/x/crypto)
+          echo "golang.org/x/crypto $have"
+          min=v0.17.0
+          lowest=$(printf '%s\n%s\n' "$have" "$min" | sed 's/^v//' | sort -V | head -1)
+          if [ "v$lowest" != "$min" ] && [ "$have" != "$min" ]; then
+            echo "x/crypto $have is below $min (Terrapin, CVE-2023-48795)"; exit 1
+          fi
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # J1 is the journey the product exists for, and it runs over both reachability
+  # modes because the primary target platform uses the one that would otherwise be
+  # tested last. Its own job, so a failure here is unmissable rather than one line
+  # in a wall of package results.
+  smoke:
+    name: smoke (J1, both reachability modes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+      - name: J1 — operator fixes a frozen device
+        run: go test -race -count=1 -v ./internal/e2e/
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      # The device leg is the largest untrusted-input surface in the system and it
+      # terminates in a process that can open a shell. Short runs on every PR to
+      # catch regressions; the nightly job below runs long enough to find things.
+      - name: fuzz the frame decoder
+        run: go test ./pkg/frame/ -run=NONE -fuzz=FuzzDecode -fuzztime=60s
+
+      # The ring decides where a terminal may safely resume a replay. Getting it wrong
+      # corrupts an operator's screen in a way they cannot distinguish from real output,
+      # so it is fuzzed rather than only exampled.
+      - name: fuzz the scrollback ring
+        run: go test ./internal/ring/ -run=NONE -fuzz=FuzzRingNeverReplaysMidSequence -fuzztime=60s
+
+      - name: upload any crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          # Both targets. A crasher that is found and then thrown away is the same
+          # silent no-op as a fuzz job with no trigger.
+          path: |
+            pkg/frame/testdata/fuzz/
+            internal/ring/testdata/fuzz/
+
+  fuzz-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - run: go test ./pkg/frame/ -run=NONE -fuzz=FuzzDecode -fuzztime=30m
+      - run: go test ./internal/ring/ -run=NONE -fuzz=FuzzRingNeverReplaysMidSequence -fuzztime=15m
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-nightly
+          path: |
+            pkg/frame/testdata/fuzz/
+            internal/ring/testdata/fuzz/
+
+  # The front end. Two tiers in one runner: `unit` is pure logic in Node — the codec,
+  # the disclosure policy — and `component` mounts the real component in real Chromium,
+  # because xterm.js draws to a canvas and measures a DOM. jsdom cannot tell you whether
+  # a terminal rendered, and a test that cannot tell is worse than no test.
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # R-013. The component ships CSS custom properties and the console uses Tailwind;
+      # both palettes are generated from tokens/tokens.json. A stale generated file means
+      # a colour has been written twice, which is how two styling systems drift.
+      - name: tokens are current
+        run: pnpm tokens:check
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      # The console is built before the browser tests run, because the console suite
+      # starts a real oarlockd and drives the page it serves. A stub gateway would drift
+      # from the protocol and then test the stub.
+      - name: build the console
+        run: pnpm build:ui
+
+      - name: test
+        run: pnpm exec playwright test
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+
+  # Three things are generated from Go and read by the front end: the wire vectors, the
+  # failure conditions, and the token palette. A second implementation of any of them is
+  # where a contract forks quietly — both suites pass and the two disagree in production.
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: the shared wire vectors are current
+        run: go test ./pkg/frame/ -run TestSharedVectorsAreCurrent
+
+      # The browser renders a screen per failure condition from a table generated out of
+      # pkg/condition. A stale copy means the gateway can emit a condition the component
+      # has never heard of — which is how "eleven conditions, eleven screens" came to be
+      # written about a set with nine entries.
+      - name: the failure conditions are current
+        run: go test ./pkg/condition/ -run TestGeneratedTableIsCurrent
+
+      # And nothing emits a code that has no screen behind it.
+      - name: every emitted code has a screen
+        run: go test ./pkg/condition/ -run TestNoCodeIsEmittedThatHasNoScreen
+
+      # The browser's replay tests read recordings this repository generated and then
+      # damaged in the ways the verifier distinguishes. A stale fixture means the
+      # component is being tested against a format the gateway no longer produces — and
+      # the thing it is testing is whether a tampered recording can be told from an intact
+      # one, which is not a test worth running against yesterday's format.
+      - name: the recording fixtures are current
+        run: go test ./internal/record/ -run TestRecordingFixturesAreCurrent

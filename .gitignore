@@ -1,0 +1,43 @@
+# ── build outputs ────────────────────────────────────────────────────────────────
+/oarlockd
+/oarlock-agent
+/dist/
+packages/*/dist/
+# A stale console build lands here when vite is run without the outDir override.
+/web/dist/
+
+# TypeScript's incremental build metadata: a cache, and it names absolute paths.
+*.tsbuildinfo
+
+# The console's built assets. The *directory* stays (see the .gitkeep inside it):
+# `go:embed all:dist` needs something to embed on a clean checkout, so that a build
+# without the front-end toolchain still produces a working gateway.
+cmd/oarlockd/app/ui/dist/*
+!cmd/oarlockd/app/ui/dist/.gitkeep
+
+# ── dependencies ─────────────────────────────────────────────────────────────────
+node_modules/
+
+# The BMAD tooling, installed rather than written. Its *output* is committed —
+# _bmad-output/ holds the PRD, the epics and the risk registers, which are why the
+# code is shaped as it is.
+/_bmad/
+
+# ── test and run artefacts ───────────────────────────────────────────────────────
+/playwright-report/
+/test-results/
+/.playwright/
+
+# A scratch deployment: private keys (device, operator, host, recording-signing), a
+# session database and real recordings. Nothing in it belongs in a repository, and
+# examples/ carries the same configuration without the secrets.
+/demo/
+
+# Fuzzing corpora that Go writes on a crash are useful locally and are committed
+# deliberately when they are a regression case, so this ignores nothing by default.
+
+# ── editors and platforms ────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+.idea/
+.vscode/

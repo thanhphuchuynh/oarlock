@@ -1,0 +1,466 @@
+/* @oarlock/terminal — the whole stylesheet.
+ *
+ * Every rule *we* write lives under .oarlock-term, and every custom property we define
+ * is namespaced --oarlock-*. There are no bare element selectors and no resets: this
+ * renders inside somebody else's application, where a reset of ours would be an
+ * uninvited change to their page (R-011).
+ *
+ * One honest exception, because importing it here is still the right trade: xterm's own
+ * stylesheet arrives global, under its own .xterm* class namespace. Scoping it would
+ * mean rewriting a dependency's selectors at build time and re-doing that on every
+ * upgrade, and the alternative — making each integrator remember a second CSS import —
+ * fails as a silently broken terminal. So the guarantee is precisely this: our rules are
+ * scoped, xterm's are namespaced, and nothing either of us ships is a bare element
+ * selector. The styling test enforces exactly that, per sheet.
+ *
+ * Colours come from tokens.css, which is generated from tokens/tokens.json.
+ */
+@import "@xterm/xterm/css/xterm.css";
+@import "./tokens.css";
+
+.oarlock-term {
+  /* Non-colour tokens live here; the generated file owns colour and only colour. */
+  --oarlock-font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --oarlock-font-mono: "JetBrains Mono", "SF Mono", ui-monospace, "Menlo", monospace;
+  --oarlock-radius: 6px;
+  --oarlock-gap: 10px;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  font-family: var(--oarlock-font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--oarlock-fg);
+  background: var(--oarlock-bg);
+  border: 1px solid var(--oarlock-border);
+  border-radius: var(--oarlock-radius);
+  /* Deliberately *not* overflow: hidden. Clipping here cuts off the pre-flight gate in
+     any container the host sized to its content — the panel renders, is reported
+     visible, and cannot be clicked. Clipping belongs on the terminal surface, which is
+     the thing that actually needs to stay inside the rounded corner. */
+}
+
+/* theme="inherit" defers to the host's own properties where it has them, so an
+   integrator gets a terminal that looks like their product without configuring one. */
+.oarlock-term[data-oarlock-theme="inherit"] {
+  color: var(--color-foreground, var(--oarlock-fg));
+  background: var(--color-background, var(--oarlock-bg));
+  border-color: var(--color-border, var(--oarlock-border));
+}
+
+/* ── the status bar ─────────────────────────────────────────────────────────── */
+
+.oarlock-term .oarlock-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--oarlock-gap);
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  background: var(--oarlock-bg-raised);
+  border-bottom: 1px solid var(--oarlock-border);
+  font-size: 13px;
+  /* Never scrolls, never collapses. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.oarlock-term .oarlock-mono {
+  font-family: var(--oarlock-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.oarlock-term .oarlock-bar__device {
+  font-weight: 600;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oarlock-term .oarlock-bar__spacer {
+  flex: 1 1 auto;
+}
+
+.oarlock-term .oarlock-bar__principal {
+  color: var(--oarlock-fg-muted);
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oarlock-term .oarlock-bar__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* `hidden` on an element whose class sets `display` does nothing: an author rule beats
+   the UA stylesheet's [hidden] { display: none } regardless of specificity. Every badge
+   in this bar is conditional, so getting this wrong means every one of them is always
+   visible — which for the OBSERVED badge would be a permanent claim that somebody is
+   watching. */
+.oarlock-term .oarlock-bar__badge[hidden] {
+  display: none;
+}
+
+.oarlock-term .oarlock-bar__badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.oarlock-term .oarlock-bar__badge[data-state="recorded"] {
+  color: var(--oarlock-state-recorded);
+}
+
+.oarlock-term .oarlock-bar__badge[data-state="unrecorded"] {
+  color: var(--oarlock-state-unrecorded);
+}
+
+.oarlock-term .oarlock-bar__badge--observed {
+  color: var(--oarlock-state-observed);
+}
+
+.oarlock-term .oarlock-bar__conn {
+  color: var(--oarlock-fg-muted);
+  font-size: 12px;
+}
+
+.oarlock-term .oarlock-bar__conn[data-state="reconnecting"] {
+  color: var(--oarlock-state-reconnecting);
+  font-weight: 600;
+}
+
+.oarlock-term .oarlock-bar__conn[data-state="closed"] {
+  color: var(--oarlock-state-ended);
+}
+
+/* ── the terminal surface ───────────────────────────────────────────────────── */
+
+.oarlock-term .oarlock-screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  background: var(--oarlock-bg-terminal);
+  padding: 6px 4px 4px 8px;
+  overflow: hidden;
+  border-bottom-left-radius: var(--oarlock-radius);
+  border-bottom-right-radius: var(--oarlock-radius);
+}
+
+.oarlock-term .oarlock-screen .xterm {
+  height: 100%;
+}
+
+/* Reconnecting dims the screen and says so in the bar. A dropped connection is the
+   normal case, so it must not look like a failure — dimmed, not greyed out. */
+.oarlock-term[data-oarlock-state="reconnecting"] .oarlock-screen {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oarlock-term[data-oarlock-state="reconnecting"] .oarlock-screen {
+    transition: none;
+  }
+}
+
+/* ── the pre-flight gate ────────────────────────────────────────────────────── */
+
+.oarlock-term .oarlock-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--oarlock-bg) 88%, transparent);
+}
+
+.oarlock-term .oarlock-gate__panel {
+  max-width: 46ch;
+  padding: 20px 22px;
+  background: var(--oarlock-bg-raised);
+  border: 1px solid var(--oarlock-state-unrecorded);
+  border-radius: var(--oarlock-radius);
+  box-shadow: 0 10px 30px -12px rgb(0 0 0 / 0.35);
+}
+
+.oarlock-term .oarlock-gate__headline {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-wrap: balance;
+  color: var(--oarlock-fg);
+}
+
+.oarlock-term .oarlock-gate__body {
+  margin: 0 0 12px;
+  color: var(--oarlock-fg-muted);
+}
+
+.oarlock-term .oarlock-gate__detail {
+  margin: 0 0 18px;
+  padding-left: 1.1em;
+  color: var(--oarlock-fg-muted);
+  font-size: 13px;
+}
+
+.oarlock-term .oarlock-gate__detail > li {
+  margin-bottom: 4px;
+}
+
+.oarlock-term .oarlock-gate__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.oarlock-term .oarlock-gate__go,
+.oarlock-term .oarlock-gate__cancel {
+  font: inherit;
+  padding: 7px 14px;
+  border-radius: var(--oarlock-radius);
+  border: 1px solid var(--oarlock-border-strong);
+  background: transparent;
+  color: var(--oarlock-fg);
+  cursor: pointer;
+}
+
+.oarlock-term .oarlock-gate__go {
+  border-color: var(--oarlock-state-unrecorded);
+  background: var(--oarlock-state-unrecorded);
+  color: var(--oarlock-fg-inverse);
+  font-weight: 600;
+}
+
+.oarlock-term .oarlock-gate__go:focus-visible,
+.oarlock-term .oarlock-gate__cancel:focus-visible {
+  outline: 2px solid var(--oarlock-state-observed);
+  outline-offset: 2px;
+}
+
+/* ── refusal, for a session the component will not render ───────────────────── */
+
+.oarlock-term .oarlock-refusal {
+  margin: auto;
+  max-width: 44ch;
+  padding: 20px;
+  text-align: left;
+  color: var(--oarlock-fg-muted);
+}
+
+.oarlock-term .oarlock-refusal__headline {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--oarlock-state-refused);
+}
+
+.oarlock-term .oarlock-refusal__code {
+  font-family: var(--oarlock-font-mono);
+  font-size: 12px;
+  color: var(--oarlock-fg-faint);
+}
+
+/* ── the failure screen ─────────────────────────────────────────────────────── */
+
+.oarlock-term .oarlock-fail {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--oarlock-bg) 92%, transparent);
+}
+
+.oarlock-term .oarlock-fail__panel {
+  max-width: 48ch;
+  padding: 20px 22px;
+  background: var(--oarlock-bg-raised);
+  border: 1px solid var(--oarlock-border-strong);
+  border-left: 3px solid var(--oarlock-state-ended);
+  border-radius: var(--oarlock-radius);
+}
+
+/* Fault, not severity: whose problem it is changes where somebody is sent, and the
+   border is the only place on the screen that says it at a glance. */
+.oarlock-term .oarlock-fail[data-oarlock-fault="principal"] .oarlock-fail__panel {
+  border-left-color: var(--oarlock-state-refused);
+}
+
+.oarlock-term .oarlock-fail[data-oarlock-fault="gateway"] .oarlock-fail__panel,
+.oarlock-term .oarlock-fail[data-oarlock-fault="client"] .oarlock-fail__panel {
+  border-left-color: var(--oarlock-state-reconnecting);
+}
+
+.oarlock-term .oarlock-fail[data-oarlock-fault="device"] .oarlock-fail__panel {
+  border-left-color: var(--oarlock-state-unrecorded);
+}
+
+.oarlock-term .oarlock-fail__headline {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-wrap: balance;
+  color: var(--oarlock-fg);
+}
+
+.oarlock-term .oarlock-fail__next {
+  margin: 0 0 12px;
+  color: var(--oarlock-fg-muted);
+}
+
+/* The gateway's own words: visibly secondary, because a message that varies with the
+   server's mood must not be the sentence an operator navigates by. */
+.oarlock-term .oarlock-fail__detail {
+  margin: 0 0 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--oarlock-border);
+  color: var(--oarlock-fg-faint);
+  font-size: 13px;
+}
+
+.oarlock-term .oarlock-fail__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0 0 16px;
+  font-size: 12px;
+}
+
+.oarlock-term .oarlock-fail__label {
+  color: var(--oarlock-fg-faint);
+}
+
+.oarlock-term .oarlock-fail__value {
+  margin: 0;
+  color: var(--oarlock-fg-muted);
+  /* Copyable: an operator quoting a reference should be able to select just it. */
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.oarlock-term .oarlock-fail__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.oarlock-term .oarlock-fail__retry,
+.oarlock-term .oarlock-fail__dismiss {
+  font: inherit;
+  padding: 7px 14px;
+  border-radius: var(--oarlock-radius);
+  border: 1px solid var(--oarlock-border-strong);
+  background: transparent;
+  color: var(--oarlock-fg);
+  cursor: pointer;
+}
+
+.oarlock-term .oarlock-fail__retry {
+  border-color: var(--oarlock-fg-muted);
+  font-weight: 600;
+}
+
+.oarlock-term .oarlock-fail__retry:focus-visible,
+.oarlock-term .oarlock-fail__dismiss:focus-visible {
+  outline: 2px solid var(--oarlock-state-observed);
+  outline-offset: 2px;
+}
+
+/* A watcher's own bar. Leads with what they are, because it is the first thing they need
+   to know about their own situation. */
+.oarlock-term .oarlock-bar__badge--readonly {
+  color: var(--oarlock-state-observed);
+  border-style: dashed;
+}
+
+/* The watcher's terminal is visibly not theirs to type in. Muted rather than greyed
+   out: they are here to read it. */
+.oarlock-term[data-oarlock-read-only="true"] .oarlock-screen {
+  border-top: 2px dashed var(--oarlock-state-observed);
+}
+
+/* ── the integrity verdict ──────────────────────────────────────────────────── */
+/* Kept here rather than in player.css because it is exported on its own: a host that
+   renders its own replay chrome still gets a styled verdict, and the verdict is the part
+   that must not be optional. */
+
+.oarlock-term .oarlock-verdict {
+  flex: 0 0 auto;
+  padding: 14px 16px;
+  background: var(--oarlock-bg-raised);
+  border-bottom: 1px solid var(--oarlock-border);
+  border-left: 3px solid var(--oarlock-state-ended);
+}
+
+/* Tone, not severity. A truncated recording is honest as far as it goes; an altered one
+   is a different conversation. Collapsing them into one red banner would throw away the
+   distinction the verifier worked to make. */
+.oarlock-term .oarlock-verdict[data-oarlock-tone="trusted"] {
+  border-left-color: var(--oarlock-state-recorded);
+}
+
+.oarlock-term .oarlock-verdict[data-oarlock-tone="partial"] {
+  border-left-color: var(--oarlock-state-unrecorded);
+}
+
+.oarlock-term .oarlock-verdict[data-oarlock-tone="broken"] {
+  border-left-color: var(--oarlock-state-refused);
+}
+
+.oarlock-term .oarlock-verdict__headline {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-wrap: balance;
+  color: var(--oarlock-fg);
+}
+
+.oarlock-term .oarlock-verdict__body {
+  margin: 0 0 10px;
+  color: var(--oarlock-fg-muted);
+  font-size: 13px;
+  max-width: 78ch;
+}
+
+.oarlock-term .oarlock-verdict__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.oarlock-term .oarlock-verdict__label {
+  color: var(--oarlock-fg-faint);
+}
+
+.oarlock-term .oarlock-verdict__value {
+  margin: 0;
+  color: var(--oarlock-fg-muted);
+  user-select: all;
+  overflow-wrap: anywhere;
+}

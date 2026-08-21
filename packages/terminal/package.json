@@ -1,0 +1,34 @@
+{
+  "name": "@oarlock/terminal",
+  "version": "0.0.0",
+  "description": "Framework-agnostic browser terminal for an Oarlock gateway.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./disclosure": "./src/disclosure.ts",
+    "./frame": "./src/frame.ts",
+    "./session": "./src/session.ts",
+    "./oarlock.css": "./src/oarlock.css",
+    "./conditions": "./src/conditions.ts",
+    "./verdict": "./src/verdict.ts",
+    "./player.css": "./src/player.css",
+    "./player": "./src/player.ts"
+  },
+  "$comment": [
+    "The three subpaths above need no DOM: the codec, the disclosure policy and the",
+    "socket controller are environment-free, and are exported separately so that they",
+    "can be tested in Node and reused by a non-browser consumer. The root export pulls",
+    "in xterm.js and is browser-only."
+  ],
+  "sideEffects": [
+    "*.css"
+  ],
+  "dependencies": {
+    "@xterm/xterm": "^6.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "asciinema-player": "^3.17.0"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "oarlock-frontend",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.5.0",
+  "scripts": {
+    "tokens": "node tokens/generate.mjs",
+    "tokens:check": "node tokens/generate.mjs --check",
+    "typecheck": "tsc --build tsconfig.json",
+    "test": "pnpm tokens:check && pnpm typecheck && playwright test",
+    "test:unit": "playwright test --project=unit",
+    "test:component": "playwright test --project=component",
+    "harness": "vite dev --mode harness",
+    "build:ui": "vite build --mode console --outDir ../cmd/oarlockd/app/ui/dist --emptyOutDir && node tokens/keep-dist.mjs",
+    "dev:ui": "vite dev --mode console"
+  },
+  "devDependencies": {
+    "@oarlock/react": "workspace:*",
+    "@oarlock/terminal": "workspace:*",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/vite": "^4",
+    "@types/node": "^22.20.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4",
+    "react": "^19",
+    "react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3"
+  },
+  "dependencies": {
+    "asciinema-player": "^3.17.0"
+  }
+}

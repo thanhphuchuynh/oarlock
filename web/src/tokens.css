@@ -1,0 +1,152 @@
+/* GENERATED FROM tokens/tokens.json — do not edit. Run `pnpm tokens`. */
+
+@theme {
+  --color-bg: var(--oarlock-bg);
+  --color-bg-raised: var(--oarlock-bg-raised);
+  --color-bg-terminal: var(--oarlock-bg-terminal);
+  --color-border: var(--oarlock-border);
+  --color-border-strong: var(--oarlock-border-strong);
+  --color-fg: var(--oarlock-fg);
+  --color-fg-muted: var(--oarlock-fg-muted);
+  --color-fg-faint: var(--oarlock-fg-faint);
+  --color-fg-inverse: var(--oarlock-fg-inverse);
+  --color-fg-terminal: var(--oarlock-fg-terminal);
+  --color-state-recorded: var(--oarlock-state-recorded);
+  --color-state-unrecorded: var(--oarlock-state-unrecorded);
+  --color-state-observed: var(--oarlock-state-observed);
+  --color-state-reconnecting: var(--oarlock-state-reconnecting);
+  --color-state-ended: var(--oarlock-state-ended);
+  --color-state-refused: var(--oarlock-state-refused);
+  --color-terminal-black: var(--oarlock-terminal-black);
+  --color-terminal-red: var(--oarlock-terminal-red);
+  --color-terminal-green: var(--oarlock-terminal-green);
+  --color-terminal-yellow: var(--oarlock-terminal-yellow);
+  --color-terminal-blue: var(--oarlock-terminal-blue);
+  --color-terminal-magenta: var(--oarlock-terminal-magenta);
+  --color-terminal-cyan: var(--oarlock-terminal-cyan);
+  --color-terminal-white: var(--oarlock-terminal-white);
+  --color-terminal-bright-black: var(--oarlock-terminal-bright-black);
+  --color-terminal-bright-red: var(--oarlock-terminal-bright-red);
+  --color-terminal-bright-green: var(--oarlock-terminal-bright-green);
+  --color-terminal-bright-yellow: var(--oarlock-terminal-bright-yellow);
+  --color-terminal-bright-blue: var(--oarlock-terminal-bright-blue);
+  --color-terminal-bright-magenta: var(--oarlock-terminal-bright-magenta);
+  --color-terminal-bright-cyan: var(--oarlock-terminal-bright-cyan);
+  --color-terminal-bright-white: var(--oarlock-terminal-bright-white);
+  --color-terminal-cursor: var(--oarlock-terminal-cursor);
+  --color-terminal-selection: var(--oarlock-terminal-selection);
+}
+
+/* The console is a normal application, so here the tokens do live on :root. */
+:root {
+  --oarlock-bg: #faf9f7;
+  --oarlock-bg-raised: #ffffff;
+  --oarlock-bg-terminal: #1a1a1e;
+  --oarlock-border: #e3e0da;
+  --oarlock-border-strong: #c9c5bd;
+  --oarlock-fg: #1b1b1f;
+  --oarlock-fg-muted: #5c5a5f;
+  --oarlock-fg-faint: #8a878d;
+  --oarlock-fg-inverse: #faf9f7;
+  --oarlock-fg-terminal: #eceaeb;
+  --oarlock-state-recorded: #1f6f4a;
+  --oarlock-state-unrecorded: #a8541b;
+  --oarlock-state-observed: #7a4cc4;
+  --oarlock-state-reconnecting: #8a6a12;
+  --oarlock-state-ended: #5c5a5f;
+  --oarlock-state-refused: #a32b2b;
+  --oarlock-terminal-black: #1a1a1e;
+  --oarlock-terminal-red: #c0473f;
+  --oarlock-terminal-green: #4a9e6a;
+  --oarlock-terminal-yellow: #c19a3c;
+  --oarlock-terminal-blue: #4a7fc1;
+  --oarlock-terminal-magenta: #a06ac1;
+  --oarlock-terminal-cyan: #3f9ea6;
+  --oarlock-terminal-white: #d6d3ce;
+  --oarlock-terminal-bright-black: #5c5a5f;
+  --oarlock-terminal-bright-red: #e0665c;
+  --oarlock-terminal-bright-green: #6fc48c;
+  --oarlock-terminal-bright-yellow: #e0bb5c;
+  --oarlock-terminal-bright-blue: #6f9ee0;
+  --oarlock-terminal-bright-magenta: #bf8ce0;
+  --oarlock-terminal-bright-cyan: #5fbfc7;
+  --oarlock-terminal-bright-white: #f2f0ed;
+  --oarlock-terminal-cursor: #eceaeb;
+  --oarlock-terminal-selection: #3d5a80;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --oarlock-bg: #131316;
+    --oarlock-bg-raised: #1c1c20;
+    --oarlock-bg-terminal: #0e0e11;
+    --oarlock-border: #2b2b31;
+    --oarlock-border-strong: #3d3d45;
+    --oarlock-fg: #eceaeb;
+    --oarlock-fg-muted: #a3a1a6;
+    --oarlock-fg-faint: #6e6c72;
+    --oarlock-fg-inverse: #131316;
+    --oarlock-fg-terminal: #eceaeb;
+    --oarlock-state-recorded: #4cb98a;
+    --oarlock-state-unrecorded: #e08a4a;
+    --oarlock-state-observed: #b18ae8;
+    --oarlock-state-reconnecting: #d4ad3c;
+    --oarlock-state-ended: #a3a1a6;
+    --oarlock-state-refused: #e8706e;
+    --oarlock-terminal-black: #0e0e11;
+    --oarlock-terminal-red: #e8706e;
+    --oarlock-terminal-green: #7fd39b;
+    --oarlock-terminal-yellow: #e0c46a;
+    --oarlock-terminal-blue: #7fb0e8;
+    --oarlock-terminal-magenta: #c79ae8;
+    --oarlock-terminal-cyan: #6fd0d8;
+    --oarlock-terminal-white: #c9c6c1;
+    --oarlock-terminal-bright-black: #4a4a52;
+    --oarlock-terminal-bright-red: #f28f8c;
+    --oarlock-terminal-bright-green: #9ae8b3;
+    --oarlock-terminal-bright-yellow: #f0da8c;
+    --oarlock-terminal-bright-blue: #9fc8f0;
+    --oarlock-terminal-bright-magenta: #dcb5f0;
+    --oarlock-terminal-bright-cyan: #8fe4ea;
+    --oarlock-terminal-bright-white: #eceaeb;
+    --oarlock-terminal-cursor: #eceaeb;
+    --oarlock-terminal-selection: #33507a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --oarlock-bg: #131316;
+  --oarlock-bg-raised: #1c1c20;
+  --oarlock-bg-terminal: #0e0e11;
+  --oarlock-border: #2b2b31;
+  --oarlock-border-strong: #3d3d45;
+  --oarlock-fg: #eceaeb;
+  --oarlock-fg-muted: #a3a1a6;
+  --oarlock-fg-faint: #6e6c72;
+  --oarlock-fg-inverse: #131316;
+  --oarlock-fg-terminal: #eceaeb;
+  --oarlock-state-recorded: #4cb98a;
+  --oarlock-state-unrecorded: #e08a4a;
+  --oarlock-state-observed: #b18ae8;
+  --oarlock-state-reconnecting: #d4ad3c;
+  --oarlock-state-ended: #a3a1a6;
+  --oarlock-state-refused: #e8706e;
+  --oarlock-terminal-black: #0e0e11;
+  --oarlock-terminal-red: #e8706e;
+  --oarlock-terminal-green: #7fd39b;
+  --oarlock-terminal-yellow: #e0c46a;
+  --oarlock-terminal-blue: #7fb0e8;
+  --oarlock-terminal-magenta: #c79ae8;
+  --oarlock-terminal-cyan: #6fd0d8;
+  --oarlock-terminal-white: #c9c6c1;
+  --oarlock-terminal-bright-black: #4a4a52;
+  --oarlock-terminal-bright-red: #f28f8c;
+  --oarlock-terminal-bright-green: #9ae8b3;
+  --oarlock-terminal-bright-yellow: #f0da8c;
+  --oarlock-terminal-bright-blue: #9fc8f0;
+  --oarlock-terminal-bright-magenta: #dcb5f0;
+  --oarlock-terminal-bright-cyan: #8fe4ea;
+  --oarlock-terminal-bright-white: #eceaeb;
+  --oarlock-terminal-cursor: #eceaeb;
+  --oarlock-terminal-selection: #33507a;
+}

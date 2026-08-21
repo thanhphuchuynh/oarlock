@@ -1,0 +1,31 @@
+# The default Authorizer: principal → device selector → actions.
+#
+# It never returns an error, and that is what makes it a safe default: its source of
+# truth is a file already in memory, so there is no outage in which it starts denying
+# people. A file that fails to reload leaves the previous rules in place.
+
+rules:
+  # Everyone on call gets a shell on the treadmills.
+  - principals: ["*@oncall.example.com", "phuc@example.com"]
+    devices: ["treadmill-*"]
+    actions: ["shell", "exec"]
+
+  # A contractor, on a leash: fifteen minutes, and re-checked every ten seconds.
+  - principals: ["contractor@partner.example.com"]
+    devices: ["treadmill-4821"]
+    actions: ["shell"]
+    max_duration: 15m
+    idle: 2m
+    ttl: 10s
+
+  # Auditors read recordings and watch live sessions. They never get a keyboard.
+  - principals: ["auditor@example.com"]
+    actions: ["replay", "observe"]
+
+  # A carve-out. A matching deny beats every allow, wherever it appears in the file, so
+  # it cannot be defeated by rule ordering somebody else controls.
+  - principals: ["*"]
+    tags: {pci_scope: "true"}
+    actions: ["*"]
+    deny: true
+    reason: "PCI-scoped devices need a change ticket"

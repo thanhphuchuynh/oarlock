@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "types": [
+      "node"
+    ],
+    "jsx": "react-jsx",
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist/tests",
+    "resolveJsonModule": true
+  },
+  "include": [
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "playwright.config.ts",
+    "vite.config.ts",
+    "tokens/*.mjs",
+    "tests/fixtures/**/*.json"
+  ]
+}

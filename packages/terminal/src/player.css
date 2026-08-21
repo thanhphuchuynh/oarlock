@@ -1,0 +1,52 @@
+/* @oarlock/terminal/player.css — replay only.
+ *
+ * Separate from oarlock.css on purpose. asciinema-player ships ~120 global rules under
+ * its own `.ap-*` and `.asciinema-player-theme-*` namespaces, and folding them into the
+ * main stylesheet would make every integrator who embeds a live terminal carry the
+ * replay player's styles too. Import this one only where you replay.
+ *
+ * The same honest caveat applies as for xterm: the player's rules arrive global under
+ * their own namespace, because rewriting a dependency's selectors at build time is a
+ * commitment to redoing it on every upgrade. Everything *we* write is scoped under
+ * .oarlock-term, and the styling test enforces that per sheet.
+ */
+@import "asciinema-player/dist/bundle/asciinema-player.css";
+
+.oarlock-term .oarlock-replay__stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--oarlock-bg-terminal);
+}
+
+.oarlock-term .oarlock-replay__failed {
+  margin: 0;
+  padding: 20px;
+  color: var(--oarlock-state-refused);
+  font-size: 13px;
+}
+
+/* The player's own palette, from the generated tokens, so replay and live sessions do not
+   drift into two different terminals. */
+.oarlock-term .asciinema-player-theme-oarlock {
+  --term-color-background: var(--oarlock-bg-terminal);
+  /* Not --oarlock-fg: the terminal ground is dark in both themes, so text on it is
+     light in both. Using the interface foreground here put #1b1b1f on #1a1a1e in the
+     light theme — invisible, and only in replay. */
+  --term-color-foreground: var(--oarlock-fg-terminal);
+  --term-color-0: var(--oarlock-terminal-black);
+  --term-color-1: var(--oarlock-terminal-red);
+  --term-color-2: var(--oarlock-terminal-green);
+  --term-color-3: var(--oarlock-terminal-yellow);
+  --term-color-4: var(--oarlock-terminal-blue);
+  --term-color-5: var(--oarlock-terminal-magenta);
+  --term-color-6: var(--oarlock-terminal-cyan);
+  --term-color-7: var(--oarlock-terminal-white);
+  --term-color-8: var(--oarlock-terminal-bright-black);
+  --term-color-9: var(--oarlock-terminal-bright-red);
+  --term-color-10: var(--oarlock-terminal-bright-green);
+  --term-color-11: var(--oarlock-terminal-bright-yellow);
+  --term-color-12: var(--oarlock-terminal-bright-blue);
+  --term-color-13: var(--oarlock-terminal-bright-magenta);
+  --term-color-14: var(--oarlock-terminal-bright-cyan);
+  --term-color-15: var(--oarlock-terminal-bright-white);
+}

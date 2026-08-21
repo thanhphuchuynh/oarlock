@@ -1,0 +1,65 @@
+# The default DeviceRegistry: one file, read-only.
+#
+# Enough for a lab and obviously not enough for a fleet. The point at which it
+# stops being enough is when you would rather edit a device through an API than
+# through a file — which is when to implement plugin.DeviceRegistry against
+# whatever already owns enrollment.
+#
+# Every problem in this file is reported at once, and a failed reload keeps the
+# previous contents rather than half-applying: devices that failed to parse must
+# not silently stop being reachable.
+
+devices:
+  # An appliance in a customer's gym. No `mode`, so it resolves from the platform:
+  # android → dispatch, because the platform *resists* a held connection — it does
+  # not forbid one.
+  #
+  # So this device needs no doorbell to be usable during development: run the agent
+  # on a desk, it holds a control channel, and the gateway rings it through that
+  # rather than through a `Dispatcher` it has no reason to need. Configure a
+  # dispatcher for the fleet, where the agents genuinely cannot hold one.
+  - id: treadmill-4821
+    platform: android
+    keys:
+      # Either the raw base64 of the 32-byte Ed25519 key, or the form ssh-keygen
+      # produces. A list, so rotation is: publish the new key, let devices roll
+      # over, retire the old.
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB6+Nvxc0k7yHqCJqmVvHTf3O7Fh0kwWQZM6xLXKZG7Y treadmill-4821"
+    tags:
+      # Tags do double duty: Authorizer selectors and record_input policy selectors
+      # both match on them, so jurisdiction and compliance scope ride the mechanism
+      # that already exists instead of a tenancy concept nobody needed.
+      region: eu
+      pci_scope: "false"
+    profiles: [shell, exec, log]
+
+  # A Linux host. Resolves to persistent: nothing there objects to a held channel
+  # and it needs no doorbell.
+  - id: build-runner-2
+    platform: linux
+    keys:
+      - "Ck7yHqCJqmVvHTf3O7Fh0kwWQZM6xLXKZG7Y6+Nvxc0="
+    tags:
+      region: us
+    profiles: [shell, exec]
+
+  # Dispatch-mode devices may have no key at all: every connection they make is a
+  # session connection authenticated by a single-use ticket, so there is no control
+  # channel to authenticate. A persistent-mode device with no key is refused at
+  # load, because it could never connect.
+  - id: rower-9001
+    platform: android
+    mode: dispatch
+    tags:
+      region: eu
+
+  # Passthrough is opt-in per device *and* gated by gateway policy, and it is
+  # loudly labelled: a session that runs this way is written to the log with
+  # recording_state: not_recorded, so an unrecorded session is a fact you can
+  # query for rather than an absence you have to notice.
+  - id: lab-bench-1
+    platform: linux
+    allow_passthrough: true
+    keys:
+      - "HqCJqmVvHTf3O7Fh0kwWQZM6xLXKZG7Y6+Nvxc0k7y8="
+    profiles: [shell, exec, tcp]

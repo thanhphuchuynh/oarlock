@@ -1,0 +1,19 @@
+{
+  "name": "@oarlock/react",
+  "version": "0.0.0",
+  "description": "React wrappers for @oarlock/terminal.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./player": "./src/player.tsx"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "dependencies": {
+    "@oarlock/terminal": "workspace:*"
+  }
+}

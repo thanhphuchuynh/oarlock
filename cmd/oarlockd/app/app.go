@@ -1,0 +1,657 @@
+// Package app builds and runs a gateway from a configuration file.
+//
+// It is a package rather than just a main so that a deployment can link its own plugins
+// in and still get the standard wiring:
+//
+//	package main
+//
+//	import (
+//	    "github.com/oarlock/oarlock/cmd/oarlockd/app"
+//	    _ "example.com/our-stack/ourauthz"
+//	)
+//
+//	func main() { app.Main() }
+//
+// # What this file is for
+//
+// Everything it assembles was already tested — the codec, the pump, the recorder, the
+// authorisation contract — but none of it could be *started*. The gateway existed only
+// inside its own test harness, which is a real gap and not a cosmetic one: a harness
+// arranges components in whatever order the test needs, and nothing forced the arrangement
+// to be one a process could actually boot. The boot gate in internal/safety was the
+// clearest symptom, sitting fully tested with no caller.
+package app
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	encPEM "encoding/pem"
+
+	gssh "github.com/gliderlabs/ssh"
+	xssh "golang.org/x/crypto/ssh"
+
+	"github.com/oarlock/oarlock/cmd/oarlockd/app/ui"
+	"github.com/oarlock/oarlock/internal/apisrv"
+	"github.com/oarlock/oarlock/internal/attachsrv"
+	"github.com/oarlock/oarlock/internal/auth/authorizedkeys"
+	"github.com/oarlock/oarlock/internal/auth/statictoken"
+	"github.com/oarlock/oarlock/internal/authz"
+	"github.com/oarlock/oarlock/internal/config"
+	"github.com/oarlock/oarlock/internal/controlsrv"
+	"github.com/oarlock/oarlock/internal/handshake"
+	"github.com/oarlock/oarlock/internal/hub"
+	"github.com/oarlock/oarlock/internal/invite"
+	"github.com/oarlock/oarlock/internal/record"
+	"github.com/oarlock/oarlock/internal/registry/file"
+	"github.com/oarlock/oarlock/internal/safety"
+	"github.com/oarlock/oarlock/internal/sessionrun"
+	"github.com/oarlock/oarlock/internal/sessions"
+	"github.com/oarlock/oarlock/internal/sessions/sqlitestore"
+	"github.com/oarlock/oarlock/internal/sessionsrv"
+	"github.com/oarlock/oarlock/internal/sshsrv"
+	"github.com/oarlock/oarlock/internal/ticket"
+	"github.com/oarlock/oarlock/pkg/frame"
+	"github.com/oarlock/oarlock/pkg/plugin"
+	"github.com/oarlock/oarlock/pkg/transport/websocket"
+	"github.com/oarlock/oarlock/plugins/authz/rules"
+)
+
+// Version is stamped at build time with -ldflags.
+var Version = "dev"
+
+// Main is the entry point. It never returns; it exits.
+func Main() {
+	var (
+		cfgPath = flag.String("config", "oarlock.yaml", "path to the configuration file")
+		check   = flag.Bool("check", false,
+			"validate the configuration and the boot gate, then exit")
+		showVersion = flag.Bool("version", false, "print the version and exit")
+		logLevel    = flag.String("log-level", "info", "debug, info, warn or error")
+	)
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("oarlockd", Version)
+		return
+	}
+
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		fmt.Fprintf(os.Stderr, "oarlockd: -log-level %q: %v\n", *logLevel, err)
+		os.Exit(2)
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(log)
+
+	code, err := run(*cfgPath, *check, log)
+	if err != nil {
+		log.Error("oarlockd", "error", err)
+	}
+	os.Exit(code)
+}
+
+func run(cfgPath string, checkOnly bool, log *slog.Logger) (int, error) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return 2, err
+	}
+
+	g, err := Build(cfg, log)
+	if err != nil {
+		return 2, err
+	}
+	defer g.Close()
+
+	// The boot gate, at last with a caller. It reports every problem at once, because a
+	// deployment with three unsafe settings should take one edit to fix rather than
+	// three boots.
+	problems, gateErr := safety.Check(g.Settings, log)
+	for _, p := range problems {
+		if p.Fatal {
+			log.Error("boot refused", "setting", p.Setting, "problem", p.Message)
+		} else {
+			log.Warn("unsafe configuration", "setting", p.Setting, "problem", p.Message)
+		}
+	}
+	if gateErr != nil {
+		return 3, gateErr
+	}
+
+	if checkOnly {
+		log.Info("configuration and boot gate are satisfied", "config", cfgPath)
+		return 0, nil
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := g.Serve(ctx); err != nil {
+		return 1, err
+	}
+	return 0, nil
+}
+
+// Gateway is an assembled gateway.
+type Gateway struct {
+	Cfg      *config.Config
+	Settings safety.Settings
+	Log      *slog.Logger
+
+	ledger     *sqlitestore.Store
+	live       *sessions.Registry
+	hub        *hub.Hub
+	inviter    *invite.Inviter
+	supervisor *authz.Supervisor
+	authorizer interface{ Close() error }
+	ssh        *sshsrv.Server
+	httpMux    *http.ServeMux
+
+	sshListener  net.Listener
+	httpListener net.Listener
+}
+
+// Build assembles a gateway without starting it. Exported so a test can boot the real
+// thing rather than a hand-arranged approximation of it.
+func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	g := &Gateway{Cfg: cfg, Log: log}
+
+	// ── the device registry ──
+	reg, err := file.Open(cfg.Devices)
+	if err != nil {
+		return nil, err
+	}
+
+	// ── the session ledger ──
+	dbPath := filepath.Join(filepath.Dir(cfg.Devices), "sessions.db")
+	if cfg.Recorder.Dir != "" {
+		dbPath = filepath.Join(cfg.Recorder.Dir, "sessions.db")
+		if err := os.MkdirAll(cfg.Recorder.Dir, 0o700); err != nil {
+			return nil, fmt.Errorf("oarlockd: creating %s: %w", cfg.Recorder.Dir, err)
+		}
+	}
+	ledger, err := sqlitestore.Open(dbPath, sessions.Limits{
+		PerDevice:    cfg.Limits.SessionsPerDevice,
+		PerPrincipal: cfg.Limits.SessionsPerPrincipal,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	g.ledger = ledger
+	g.live = sessions.NewRegistry()
+
+	// ── the recorder ──
+	var recorder plugin.Recorder
+	var replays apisrv.Replays
+	var recStoreMode, recStoreDetail string
+	recProtected := false
+	if cfg.Recorder.Dir != "" {
+		signer, pub, err := loadOrGenerateRecordingKey(cfg, log)
+		if err != nil {
+			return nil, err
+		}
+		fr, err := record.NewFileRecorder(cfg.Recorder.Dir, signer)
+		if err != nil {
+			return nil, err
+		}
+		recorder = fr
+		replays = &fileReplays{rec: fr, pub: pub}
+		imm := fr.Immutability()
+		recStoreMode, recStoreDetail = string(imm.Mode), imm.Detail
+		recProtected = imm.Mode != "mutable"
+	}
+
+	// ── authorisation ──
+	var backend plugin.Authorizer
+	switch cfg.Authz.Kind {
+	case "rules":
+		ra, err := rules.Open(cfg.Authz.Path, log)
+		if err != nil {
+			return nil, err
+		}
+		backend, g.authorizer = ra, ra
+	case "none":
+		// Refused in production by the boot gate below. Allowed here so that somebody
+		// evaluating the gateway is not forced to write a rules file before their first
+		// shell — authentication still applies.
+		log.Warn("running with no authorizer: every authenticated operator may open a " +
+			"session on any device in the registry")
+	}
+	checker := &authz.Checker{Backend: backend, Grace: cfg.Authz.Grace, Log: log}
+	g.supervisor = &authz.Supervisor{
+		Checker: checker, Live: g.live,
+		Interval: cfg.Authz.RecheckInterval, Log: log,
+	}
+
+	// ── tickets, the hub, invitations ──
+	g.hub = hub.New(hub.Options{Log: log})
+	g.inviter = &invite.Inviter{
+		Tickets:   ticket.NewMemory(time.Now),
+		Hub:       g.hub,
+		NodeURL:   strings.TrimRight(cfg.URL, "/") + "/ws/session",
+		AttachURL: strings.TrimRight(cfg.URL, "/") + "/ws/attach",
+		Log:       log,
+	}
+
+	// ── operator authentication ──
+	authn, authnKind, err := buildAuthenticator(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+
+	runner := &sessionrun.Runner{
+		Sessions: ledger, Live: g.live, Recorder: recorder,
+		Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
+		Scrollback: cfg.Limits.Scrollback, Authz: g.supervisor, Log: log,
+	}
+
+	// ── the HTTP surface ──
+	api, err := apisrv.New(apisrv.Options{
+		Sessions: ledger, Live: g.live, Authenticator: authn, Authz: checker,
+		Registry: reg, Inviter: g.inviter, Replays: replays,
+		AttachURL:     strings.TrimRight(cfg.URL, "/") + "/ws/attach",
+		RatePerMinute: cfg.API.RatePerMinute, Log: log,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws/control", &controlsrv.Server{
+		Upgrader: websocket.Upgrader{},
+		Handshake: &handshake.Gateway{
+			Registry: reg, GatewayID: cfg.URL, Log: log,
+		},
+		Hub: g.hub, Log: log,
+	})
+	mux.Handle("/ws/session", &sessionsrv.Server{
+		Upgrader: websocket.Upgrader{}, Inviter: g.inviter, Log: log,
+		Ready: func(c *ticket.Claims) frame.Ready {
+			return frame.Ready{
+				SessionID: c.SessionID, Mode: "gateway", Recording: recorder != nil,
+			}
+		},
+	})
+	mux.Handle("/ws/attach", &attachsrv.Server{
+		Upgrader: websocket.Upgrader{}, Inviter: g.inviter,
+		Runner: runner, Live: g.live, Log: log,
+	})
+	mux.Handle("/api/", api)
+	// The console. Optional: a binary built without the front-end assets is a working
+	// gateway, and the handler says so rather than serving a blank page.
+	mux.Handle("/ui/", ui.Handler("/ui"))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/ui/", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		// Ready means "can serve a session", which is not the same as "the process is
+		// up": a gateway whose ledger is unreachable should be taken out of rotation
+		// rather than left to refuse every session it is handed.
+		// A query rather than a flag: a gateway whose ledger is unreachable should be
+		// taken out of rotation rather than left to refuse every session it is handed.
+		if _, err := ledger.Len(r.Context()); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, "ledger: %v\n", err)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, "ok live=%d watch=%s\n",
+			g.live.Len(), g.supervisor.WatchStatus())
+	})
+	g.httpMux = mux
+
+	// ── the SSH front door ──
+	hostKey, generated, err := loadOrGenerateHostKey(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	ssh, err := sshsrv.New(sshsrv.Options{
+		Addr: cfg.Listen.SSH, Authenticator: authn, Authz: checker,
+		AuthzSupervisor: g.supervisor, Registry: reg, Inviter: g.inviter,
+		Sessions: ledger, Live: g.live, Recorder: recorder,
+		Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
+		HostKey: hostKey, Log: log,
+	})
+	if err != nil {
+		return nil, err
+	}
+	g.ssh = ssh
+
+	// ── what the boot gate is asked about ──
+	devices, _, _ := reg.List(context.Background(), plugin.DeviceQuery{})
+	passthrough := 0
+	for _, d := range devices {
+		if d.AllowPassthrough {
+			passthrough++
+		}
+	}
+	grace := authz.DefaultGrace
+	if cfg.Authz.Grace != nil {
+		grace = *cfg.Authz.Grace
+	}
+	g.Settings = safety.Settings{
+		Env:                        cfg.SafetyEnv(),
+		AuthenticatorKind:          authnKind,
+		RecorderConfigured:         recorder != nil,
+		RecordingStoreProtected:    recProtected,
+		RecordingStoreMode:         recStoreMode,
+		DevicesAllowingPassthrough: passthrough,
+		SSHHostKeyConfigured:       !generated,
+		AuthzGrace:                 grace,
+		AuthzKind:                  cfg.Authz.Kind,
+	}
+	_ = recStoreDetail
+	return g, nil
+}
+
+// Serve runs until the context ends, then drains.
+func (g *Gateway) Serve(ctx context.Context) error {
+	if err := g.Listen(); err != nil {
+		return err
+	}
+	g.Log.Info("oarlockd is listening",
+		"ssh", g.sshListener.Addr().String(),
+		"http", g.httpListener.Addr().String(),
+		"url", g.Cfg.URL, "env", g.Cfg.Env, "version", Version,
+		"console", ui.Built())
+	if !ui.Built() {
+		g.Log.Info("the console is not built into this binary; " +
+			"run `pnpm build:ui` and rebuild to serve /ui")
+	}
+
+	errs := make(chan error, 2)
+	httpSrv := &http.Server{
+		Handler: g.httpMux,
+		// A slow or absent OPEN must not hold a connection open indefinitely; the
+		// session handlers apply their own budgets on top.
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		var err error
+		if g.Cfg.Listen.TLSCert != "" {
+			err = httpSrv.ServeTLS(g.httpListener, g.Cfg.Listen.TLSCert, g.Cfg.Listen.TLSKey)
+		} else {
+			err = httpSrv.Serve(g.httpListener)
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errs <- fmt.Errorf("http: %w", err)
+		}
+	}()
+	go func() {
+		if err := g.ssh.Handler().Serve(g.sshListener); err != nil &&
+			!errors.Is(err, gssh.ErrServerClosed) {
+			errs <- fmt.Errorf("ssh: %w", err)
+		}
+	}()
+	go g.supervisor.WatchRevocations(ctx)
+
+	select {
+	case err := <-errs:
+		return err
+	case <-ctx.Done():
+	}
+
+	// ── drain ──
+	//
+	// Stop accepting first, then tell live sessions why. An operator whose session ends
+	// during a deploy should see `gateway_shutdown` rather than a dropped connection:
+	// one is a deploy and the other is a bug they will report.
+	g.Log.Info("draining", "live_sessions", g.live.Len())
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(shutdownCtx)
+	_ = g.ssh.Close()
+	if n := g.live.KillAll("gateway_shutdown"); n > 0 {
+		g.Log.Info("closed live sessions for a drain", "sessions", n)
+	}
+	// A moment for the CLOSE frames to land before the process goes.
+	select {
+	case <-time.After(500 * time.Millisecond):
+	case <-shutdownCtx.Done():
+	}
+	g.Log.Info("stopped")
+	return nil
+}
+
+// Listen binds the listeners without serving, so a test can learn the ports.
+func (g *Gateway) Listen() error {
+	if g.sshListener != nil {
+		return nil
+	}
+	sl, err := net.Listen("tcp", g.Cfg.Listen.SSH)
+	if err != nil {
+		return fmt.Errorf("oarlockd: listening on %s: %w", g.Cfg.Listen.SSH, err)
+	}
+	hl, err := net.Listen("tcp", g.Cfg.Listen.HTTP)
+	if err != nil {
+		_ = sl.Close()
+		return fmt.Errorf("oarlockd: listening on %s: %w", g.Cfg.Listen.HTTP, err)
+	}
+	g.sshListener, g.httpListener = sl, hl
+	return nil
+}
+
+// Addrs are the bound addresses, for tests and for logging.
+func (g *Gateway) Addrs() (ssh, http string) {
+	if g.sshListener == nil {
+		return "", ""
+	}
+	return g.sshListener.Addr().String(), g.httpListener.Addr().String()
+}
+
+// Close releases everything Build acquired.
+func (g *Gateway) Close() {
+	if g.authorizer != nil {
+		_ = g.authorizer.Close()
+	}
+	if g.ledger != nil {
+		_ = g.ledger.Shutdown()
+	}
+}
+
+func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authenticator, string, error) {
+	// An SSH key file authenticates operators at the front door; static tokens
+	// authenticate the API. A deployment needs both surfaces, so the two are combined
+	// rather than chosen between.
+	var keys plugin.Authenticator
+	if cfg.SSH.AuthorizedKeys != "" {
+		ak, err := authorizedkeys.Open(cfg.SSH.AuthorizedKeys, log)
+		if err != nil {
+			return nil, "", err
+		}
+		keys = ak
+	}
+	var tokens plugin.Authenticator
+	if len(cfg.API.Tokens) > 0 {
+		st, err := statictoken.Open(cfg.Env, cfg.API.Tokens)
+		if err != nil {
+			return nil, "", err
+		}
+		tokens = st
+	}
+	switch {
+	case keys == nil && tokens == nil:
+		return nil, "", errors.New("oarlockd: no authenticator configured: set " +
+			"ssh.authorized_keys, api.tokens, or both")
+	case tokens == nil:
+		return keys, "authorized_keys", nil
+	case keys == nil:
+		return tokens, "static_token", nil
+	default:
+		return &pair{keys: keys, tokens: tokens}, "authorized_keys+static_token", nil
+	}
+}
+
+// pair routes each surface to the backend that can answer for it.
+//
+// Deliberately not a general-purpose chain: each method has exactly one backend that can
+// answer it, so "try both and take the first that succeeds" would only add a way for an
+// SSH key to be accepted as an API token by a future backend that guesses.
+type pair struct {
+	keys   plugin.Authenticator
+	tokens plugin.Authenticator
+}
+
+func (p *pair) AuthPublicKey(ctx context.Context, user string, key xssh.PublicKey) (*plugin.Principal, error) {
+	return p.keys.AuthPublicKey(ctx, user, key)
+}
+
+func (p *pair) AuthDelegated(ctx context.Context, svc *plugin.Principal, assertion string) (*plugin.Principal, error) {
+	return nil, plugin.ErrUnsupported
+}
+
+func (p *pair) AuthHTTP(ctx context.Context, r *http.Request) (*plugin.Principal, error) {
+	return p.tokens.AuthHTTP(ctx, r)
+}
+
+func loadOrGenerateHostKey(cfg *config.Config, log *slog.Logger) (xssh.Signer, bool, error) {
+	b, err := os.ReadFile(cfg.SSH.HostKey)
+	if err == nil {
+		signer, perr := xssh.ParsePrivateKey(b)
+		if perr != nil {
+			return nil, false, fmt.Errorf("oarlockd: parsing %s: %w", cfg.SSH.HostKey, perr)
+		}
+		return signer, false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, false, fmt.Errorf("oarlockd: reading %s: %w", cfg.SSH.HostKey, err)
+	}
+	if !cfg.SSH.GenerateHostKey {
+		return nil, false, fmt.Errorf("oarlockd: %s does not exist. Generate one and "+
+			"distribute it to every replica, or set ssh.generate_host_key for a "+
+			"throwaway one — the boot gate refuses a generated key outside dev, because "+
+			"a key that changes on restart warns operators every time",
+			cfg.SSH.HostKey)
+	}
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, false, err
+	}
+	block, err := xssh.MarshalPrivateKey(priv, "oarlockd generated host key")
+	if err != nil {
+		return nil, false, err
+	}
+	if err := os.WriteFile(cfg.SSH.HostKey, encPEM.EncodeToMemory(block), 0o600); err != nil {
+		return nil, false, fmt.Errorf("oarlockd: writing %s: %w", cfg.SSH.HostKey, err)
+	}
+	signer, err := xssh.NewSignerFromKey(priv)
+	if err != nil {
+		return nil, false, err
+	}
+	log.Warn("generated an SSH host key",
+		"path", cfg.SSH.HostKey,
+		"note", "every replica must present the same key, and a key generated at boot "+
+			"warns every operator on every restart")
+	return signer, true, nil
+}
+
+// fileReplays adapts the file recorder to what the API serves.
+//
+// Verification happens here rather than in the browser because it needs the manifest and a
+// public key the deployment trusts — neither of which a page can be given without also
+// giving it the ability to be lied to about them.
+type fileReplays struct {
+	rec *record.Recorder
+	pub ed25519.PublicKey
+}
+
+func (f *fileReplays) Cast(ctx context.Context, sessionID string) ([]byte, error) {
+	rc, err := f.rec.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+func (f *fileReplays) Verdict(ctx context.Context, sessionID string) (apisrv.ReplayVerdict, error) {
+	v, err := f.rec.Verify(ctx, sessionID, f.pub)
+	if err != nil {
+		return apisrv.ReplayVerdict{}, err
+	}
+	return apisrv.ReplayVerdict{
+		Status:             string(v.Status),
+		OK:                 v.OK,
+		EventsFound:        v.EventsFound,
+		EventsExpected:     v.EventsExpected,
+		LastGoodCheckpoint: v.LastGoodCheckpoint,
+		Detail:             v.Detail,
+	}, nil
+}
+
+func loadOrGenerateRecordingKey(cfg *config.Config, log *slog.Logger) (record.Signer, ed25519.PublicKey, error) {
+	b, err := os.ReadFile(cfg.Recorder.SigningKey)
+	if err == nil {
+		key, perr := parseEd25519Seed(b)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("oarlockd: reading %s: %w", cfg.Recorder.SigningKey, perr)
+		}
+		return &record.KeySigner{Key: key, ID: cfg.Recorder.KeyID},
+			key.Public().(ed25519.PublicKey), nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("oarlockd: reading %s: %w", cfg.Recorder.SigningKey, err)
+	}
+	if !cfg.Recorder.GenerateSigningKey {
+		return nil, nil, fmt.Errorf("oarlockd: %s does not exist. Generate a recording key "+
+			"and keep it apart from the SSH host key — one is presented to every "+
+			"operator and the other attests that recordings were not altered, so "+
+			"rotating one must not force rotating the other. Set "+
+			"recorder.generate_signing_key for a throwaway one",
+			cfg.Recorder.SigningKey)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.WriteFile(cfg.Recorder.SigningKey, priv.Seed(), 0o600); err != nil {
+		return nil, nil, err
+	}
+	pubPath := cfg.Recorder.SigningKey + ".pub"
+	if err := os.WriteFile(pubPath, pub, 0o644); err != nil {
+		return nil, nil, err
+	}
+	log.Warn("generated a recording signing key",
+		"path", cfg.Recorder.SigningKey, "public", pubPath,
+		"note", "recordings signed by a key that changes on restart cannot be verified "+
+			"afterwards")
+	return &record.KeySigner{Key: priv, ID: cfg.Recorder.KeyID}, pub, nil
+}
+
+func parseEd25519Seed(b []byte) (ed25519.PrivateKey, error) {
+	if len(b) == ed25519.SeedSize {
+		return ed25519.NewKeyFromSeed(b), nil
+	}
+	if len(b) == ed25519.PrivateKeySize {
+		return ed25519.PrivateKey(b), nil
+	}
+	return nil, fmt.Errorf("not an ed25519 key: %d bytes, want %d or %d",
+		len(b), ed25519.SeedSize, ed25519.PrivateKeySize)
+}

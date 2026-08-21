@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>oarlock component harness</title>
+<!--
+  The component test harness.
+
+  It mounts @oarlock/terminal against a stub gateway inside the page, so a component
+  test can hand the terminal exactly the frames it wants to test — an unrecorded READY,
+  an OSC 52 sequence, a passthrough session — without a gateway process. The end-to-end
+  tests go the other way and drive a real gateway; a stub that drifted from the protocol
+  would only ever test the stub.
+-->
+<style>
+  /* An aggressively hostile host page. Every rule here exists to break a component
+     that leaks styles or relies on inheriting sane defaults (R-011). */
+  * { margin: 0; padding: 0; box-sizing: content-box; font-family: "Comic Sans MS", cursive; }
+  div, span, p, ul, li, h2, button { all: revert-layer; }
+  body { background: #ff00ff; color: #00ff00; font-size: 22px; line-height: 3; }
+  button { text-transform: uppercase; border: 6px dashed red; }
+  ul { list-style: square inside; }
+</style>
+<div id="host" style="width: 900px; height: 460px; display: flex;"></div>
+<div id="react-host" style="width: 900px; height: 460px; display: flex;"></div>
+<div id="player-host" style="width: 900px;"></div>
+<script type="module" src="./main.ts"></script>

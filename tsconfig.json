@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/terminal"
+    },
+    {
+      "path": "packages/react"
+    },
+    {
+      "path": "./tsconfig.tests.json"
+    }
+  ]
+}

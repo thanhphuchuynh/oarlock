@@ -1,0 +1,63 @@
+/* The console's stylesheet.
+ *
+ * Tailwind, unlike the component — which ships plain CSS because it renders inside
+ * somebody else's application, where a utility framework would collide with the host's
+ * styles or force them to adopt our toolchain. Nothing inherits the console, so it can be
+ * built the fast way.
+ *
+ * The one rule that spans both: **a colour is never written twice.** tokens.css is
+ * generated from tokens/tokens.json and defines the palette once, as CSS custom
+ * properties and as a Tailwind theme; CI fails if it is stale.
+ */
+@import "tailwindcss";
+@import "./tokens.css";
+@import "@oarlock/terminal/oarlock.css";
+@import "@oarlock/terminal/player.css";
+
+@layer base {
+  body {
+    /* An explicit ground: the page must not inherit a colour from whatever is behind it. */
+    background: var(--oarlock-bg);
+    color: var(--oarlock-fg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Machine values are monospaced everywhere, so they read as values rather than prose. */
+  .mono {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, "Menlo", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply rounded-md border border-border-strong bg-transparent px-3 py-1.5 text-sm
+      text-fg transition-colors hover:bg-bg-raised;
+  }
+
+  .btn:focus-visible {
+    @apply outline-2 outline-offset-2 outline-state-observed;
+  }
+
+  .btn-primary {
+    @apply border-state-recorded bg-state-recorded font-semibold text-fg-inverse
+      hover:opacity-90;
+  }
+
+  /* Destructive actions state the consequence rather than asking a question, so the
+     button says what happens and the confirmation says what it costs. */
+  .btn-danger {
+    @apply border-state-refused text-state-refused hover:bg-bg-raised;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-border bg-bg-raised px-3 py-2 text-fg
+      placeholder:text-fg-faint;
+  }
+
+  .not-mono {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+}
