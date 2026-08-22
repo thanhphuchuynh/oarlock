@@ -27,6 +27,7 @@ node_modules/
 /playwright-report/
 /test-results/
 /.playwright/
+/.cache/
 
 # A scratch deployment: private keys (device, operator, host, recording-signing), a
 # session database and real recordings. Nothing in it belongs in a repository, and

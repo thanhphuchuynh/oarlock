@@ -28,13 +28,22 @@ ssh:
   # Every replica must present the same key. If they do not, operators get a
   # host-key-mismatch warning whenever a load balancer moves them — and an operator
   # trained to ignore that warning will ignore a real one.
+  # Generate once, store as a secret, and mount the same bytes on every replica.
   host_key: ./hostkey
   # Dev only. The boot gate refuses a generated key in production, because a key that
   # changes on restart warns every operator every time.
   generate_host_key: true
   authorized_keys: ./authorized_keys
 
+# The historical form reads a YAML registry and keeps session metadata beside recordings.
 devices: ./devices.yaml
+
+# Or let the admin API/UI add, update and delete devices in the operational DB.
+# store:
+#   kind: sqlite
+#   path: ./oarlock.db
+# devices:
+#   kind: sqlite
 
 authorizer:
   kind: rules
@@ -44,6 +53,16 @@ authorizer:
   # which is the right setting where a session is more dangerous than an outage.
   # grace: 3
   recheck_interval: 30s
+
+# Optional. Required only for dispatch-mode devices that are not already connected over
+# a persistent control channel.
+# dispatcher:
+#   kind: mqtt
+#   url: mqtt://127.0.0.1:1883
+#   topic: oarlock/devices/{device_id}/wake
+#   client_id: oarlock-dev
+#   qos: 1
+#   timeout: 10s
 
 recorder:
   # Empty records nothing — and says so in the operator's banner and in the session
@@ -56,12 +75,34 @@ recorder:
   generate_signing_key: true
   key_id: dev-recording-key
 
+audit:
+  # JSON lines on stderr by default. The queue is bounded: if it fills, events are
+  # dropped and counted rather than blocking a session.
+  kind: stderr
+  buffer: 1024
+
 api:
   # For development and CI. A real deployment uses an authenticator that can validate
   # a token it did not mint.
   tokens:
     dev-token-long-enough-for-the-check: phuc@example.com
   rate_per_minute: 120
+
+policy:
+  record_input:
+    # Output is recorded when a recorder is configured. Input capture is a separate
+    # per-session policy because PCI scope and employment/privacy law can point in
+    # opposite directions.
+    default: false
+    rules:
+      - name: pci capture
+        when:
+          device_tags: {pci_scope: "true"}
+        value: true
+      - authority: employment-law
+        when:
+          principal_groups: ["eu-*"]
+        value: false
 
 # Every limit here is server-side. A client-side limit is a suggestion. Omitting a key
 # gets the documented default from ARCHITECTURE § 9.3 rather than Go's zero value — for

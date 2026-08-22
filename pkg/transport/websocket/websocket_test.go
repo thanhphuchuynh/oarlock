@@ -238,3 +238,37 @@ func TestCloseReasonIsTruncated(t *testing.T) {
 	cc := dial(t, url, transport.Options{})
 	_, _ = cc.Recv(ctx)
 }
+
+func TestCloseAfterPeerCloseIsClean(t *testing.T) {
+	ctx := context.Background()
+	ready := make(chan transport.Conn, 1)
+	done := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sc, err := (Upgrader{}).Upgrade(w, r, transport.Options{})
+		if err != nil {
+			done <- err
+			return
+		}
+		ready <- sc
+		_, _ = sc.Recv(ctx)
+		done <- sc.Close(transport.CloseGoingAway, "admin_disconnect")
+	}))
+	t.Cleanup(srv.Close)
+
+	cc := dial(t, "ws"+strings.TrimPrefix(srv.URL, "http"), transport.Options{})
+	sc := <-ready
+	if sc == nil {
+		t.Fatal("server connection was not accepted")
+	}
+	if err := cc.Close(transport.CloseNormal, "done"); err != nil {
+		t.Fatalf("client close: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("server close after peer close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not finish")
+	}
+}

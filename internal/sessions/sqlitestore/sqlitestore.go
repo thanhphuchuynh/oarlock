@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   principal       TEXT    NOT NULL DEFAULT '',
   opened_by       TEXT    NOT NULL DEFAULT '',
   unattended      INTEGER NOT NULL DEFAULT 0,
+  record_input    INTEGER NOT NULL DEFAULT 0,
   reason          TEXT    NOT NULL DEFAULT '',
   state           TEXT    NOT NULL,
   recording_state TEXT    NOT NULL,
@@ -115,6 +116,10 @@ func Open(path string, l sessions.Limits, now func() time.Time) (*Store, error) 
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("sqlitestore: applying the schema: %w", err)
+	}
+	if err := ensureColumn(db, `ALTER TABLE sessions ADD COLUMN record_input INTEGER NOT NULL DEFAULT 0`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("sqlitestore: migrating sessions.record_input: %w", err)
 	}
 	return &Store{db: db, limits: l, now: now}, nil
 }
@@ -189,10 +194,10 @@ func (s *Store) Create(ctx context.Context, sess *sessions.Session) error {
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO sessions (id, device_id, profile, mode, principal, opened_by,
-		  unattended, reason, state, recording_state, created_at, live_device)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  unattended, record_input, reason, state, recording_state, created_at, live_device)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		row.ID, row.DeviceID, row.Profile, row.Mode, row.Principal, row.OpenedBy,
-		boolToInt(row.Unattended), row.Reason, string(row.State),
+		boolToInt(row.Unattended), boolToInt(row.RecordInput), row.Reason, string(row.State),
 		string(row.RecordingState), ts(row.CreatedAt), live)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -238,11 +243,12 @@ func (s *Store) Update(ctx context.Context, id string, f func(*sessions.Session)
 	_, err = tx.ExecContext(ctx, `
 		UPDATE sessions SET state=?, recording_state=?, close_reason=?, exit_code=?,
 		  bytes_in=?, bytes_out=?, bytes_dropped=?, attached_at=?, closed_at=?,
-		  reason=?, mode=?, opened_by=?, unattended=?, live_device=?
+		  reason=?, mode=?, opened_by=?, unattended=?, record_input=?, live_device=?
 		WHERE id=?`,
 		string(row.State), string(row.RecordingState), row.CloseReason, row.ExitCode,
 		row.BytesIn, row.BytesOut, row.BytesDropped, tsp(row.AttachedAt), tsp(row.ClosedAt),
-		row.Reason, row.Mode, row.OpenedBy, boolToInt(row.Unattended), live, id)
+		row.Reason, row.Mode, row.OpenedBy, boolToInt(row.Unattended),
+		boolToInt(row.RecordInput), live, id)
 	if err != nil {
 		return fmt.Errorf("sqlitestore: update: %w", err)
 	}
@@ -293,6 +299,10 @@ func (s *Store) List(ctx context.Context, q sessions.Query) ([]*sessions.Session
 	if q.Live {
 		where = append(where, liveState)
 	}
+	if q.Unattended != nil {
+		where = append(where, "unattended = ?")
+		args = append(args, boolToInt(*q.Unattended))
+	}
 	if q.After != "" {
 		where = append(where, "id > ?")
 		args = append(args, q.After)
@@ -342,7 +352,7 @@ func (s *Store) Len(ctx context.Context) (int, error) {
 // ── scanning ────────────────────────────────────────────────────────────────────
 
 const selectCols = `SELECT id, device_id, profile, mode, principal, opened_by,
-  unattended, reason, state, recording_state, close_reason, exit_code,
+  unattended, record_input, reason, state, recording_state, close_reason, exit_code,
   bytes_in, bytes_out, bytes_dropped, created_at, attached_at, closed_at
   FROM sessions`
 
@@ -364,20 +374,21 @@ func scanInto(r scanner) (*sessions.Session, error) {
 	var (
 		row                  sessions.Session
 		state, recState      string
-		unattended           int
+		unattended, recInput int
 		exitCode             sql.NullInt64
 		createdAt            string
 		attachedAt, closedAt sql.NullString
 	)
 	if err := r.Scan(&row.ID, &row.DeviceID, &row.Profile, &row.Mode, &row.Principal,
-		&row.OpenedBy, &unattended, &row.Reason, &state, &recState, &row.CloseReason,
-		&exitCode, &row.BytesIn, &row.BytesOut, &row.BytesDropped,
+		&row.OpenedBy, &unattended, &recInput, &row.Reason, &state, &recState,
+		&row.CloseReason, &exitCode, &row.BytesIn, &row.BytesOut, &row.BytesDropped,
 		&createdAt, &attachedAt, &closedAt); err != nil {
 		return nil, err
 	}
 	row.State = sessions.State(state)
 	row.RecordingState = sessions.RecordingState(recState)
 	row.Unattended = unattended != 0
+	row.RecordInput = recInput != 0
 	if exitCode.Valid {
 		c := int(exitCode.Int64)
 		row.ExitCode = &c
@@ -390,6 +401,14 @@ func scanInto(r scanner) (*sessions.Session, error) {
 		row.ClosedAt = parseTS(closedAt.String)
 	}
 	return &row, nil
+}
+
+func ensureColumn(db *sql.DB, stmt string) error {
+	if _, err := db.Exec(stmt); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return err
+	}
+	return nil
 }
 
 // Timestamps are RFC 3339 with nanoseconds, in UTC. SQLite has no time type, and a

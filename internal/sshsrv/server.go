@@ -24,6 +24,7 @@ import (
 	"github.com/oarlock/oarlock/internal/authz"
 	"github.com/oarlock/oarlock/internal/invite"
 	"github.com/oarlock/oarlock/internal/pump"
+	"github.com/oarlock/oarlock/internal/recordpolicy"
 	"github.com/oarlock/oarlock/internal/sessionrun"
 	"github.com/oarlock/oarlock/internal/sessions"
 	"github.com/oarlock/oarlock/pkg/condition"
@@ -81,6 +82,10 @@ type Options struct {
 	// and in the session row, because an unrecorded session must be a fact you can
 	// query for rather than an absence somebody has to notice.
 	Recorder plugin.Recorder
+	// RecordInput resolves whether the session recording captures keystrokes.
+	RecordInput recordpolicy.RecordInput
+	// Audit receives SSH open/refusal events. Nil disables audit emission.
+	Audit plugin.AuditSink
 
 	// HostKey is the gateway's SSH identity. **Every replica must present the same
 	// one.** If they do not, operators get a host-key-mismatch warning on every
@@ -271,6 +276,18 @@ func (s *Server) handleSession(sess gssh.Session) {
 		_ = sess.Exit(1)
 		return
 	}
+	recordInput, err := s.o.RecordInput.Resolve(p, dev)
+	if err != nil {
+		log.Warn("session refused by record_input policy", "error", err)
+		s.audit(ctx, plugin.AuditEvent{
+			Kind: plugin.AuditSessionRejected, DeviceID: dev.ID, Principal: p.ID,
+			Surface: "ssh", Code: "policy_conflict", Reason: err.Error(),
+			Action: string(plugin.ActionShell),
+		})
+		fmt.Fprintf(sess.Stderr(), "oarlock: record_input policy conflict: %s\r\n", err)
+		_ = sess.Exit(1)
+		return
+	}
 
 	sessionID := s.o.NewSessionID()
 
@@ -280,7 +297,8 @@ func (s *Server) handleSession(sess gssh.Session) {
 	row := &sessions.Session{
 		ID: sessionID, DeviceID: dev.ID, Profile: "shell",
 		Mode: string(dev.ResolvedMode()), Principal: p.ID,
-		State: sessions.StateWaking, RecordingState: sessions.NotRecorded,
+		RecordInput: recordInput,
+		State:       sessions.StateWaking, RecordingState: sessions.NotRecorded,
 	}
 	if err := s.o.Sessions.Create(ctx, row); err != nil {
 		if errors.Is(err, sessions.ErrLimit) {
@@ -296,9 +314,10 @@ func (s *Server) handleSession(sess gssh.Session) {
 	}
 
 	pending, err := s.o.Inviter.Invite(ctx, dev, invite.Request{
-		SessionID: sessionID,
-		Profile:   "shell",
-		Principal: p.ID,
+		SessionID:   sessionID,
+		Profile:     "shell",
+		Principal:   p.ID,
+		RecordInput: recordInput,
 		PTY: &frame.PTY{
 			Cols: ptyReq.Window.Width,
 			Rows: ptyReq.Window.Height,
@@ -353,7 +372,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	}
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: "shell", Principal: p.ID,
-		Surface: "ssh", Grantee: p, Device: att.Conn,
+		Surface: "ssh", Grantee: p, Device: att.Conn, RecordInput: recordInput,
 		PTY: &frame.PTY{
 			Cols: ptyReq.Window.Width, Rows: ptyReq.Window.Height, Term: ptyReq.Term,
 		},
@@ -397,6 +416,12 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// Said again, at a point no prefix-truncation attack can reach.
 	fmt.Fprint(sess.Stderr(), closingDisclosure(dev, sessionID, res.Reason, recording))
 	_ = sess.Exit(code)
+}
+
+func (s *Server) audit(ctx context.Context, e plugin.AuditEvent) {
+	if s.o.Audit != nil {
+		s.o.Audit.Emit(ctx, e)
+	}
 }
 
 // reject marks a session that never opened. The row keeps the reason, so "why did

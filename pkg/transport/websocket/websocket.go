@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -72,7 +73,11 @@ func (c *conn) Close(code transport.CloseCode, reason string) error {
 	if len(reason) > 120 {
 		reason = reason[:120]
 	}
-	return c.c.Close(status(code), reason)
+	err := c.c.Close(status(code), reason)
+	if err != nil && (ws.CloseStatus(err) != -1 || errors.Is(err, net.ErrClosed)) {
+		return nil
+	}
+	return err
 }
 
 func (c *conn) RemoteAddr() string { return c.addr }

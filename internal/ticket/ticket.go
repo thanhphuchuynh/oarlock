@@ -55,12 +55,15 @@ var (
 // Claims are what a ticket authorises. Scoped narrowly on purpose: one device, one
 // profile, one principal, one leg.
 type Claims struct {
-	SessionID string
-	DeviceID  string
-	Profile   string
-	Principal string
-	Kind      Kind
-	ExpiresAt time.Time
+	SessionID   string
+	DeviceID    string
+	Profile     string
+	Principal   string
+	OpenedBy    string
+	Unattended  bool
+	RecordInput bool
+	Kind        Kind
+	ExpiresAt   time.Time
 }
 
 // Want is the scope a redeemer expects. Empty fields are not checked.

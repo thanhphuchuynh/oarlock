@@ -18,7 +18,7 @@ const Player = lazy(async () => {
 });
 import { get as getCondition, type Condition } from "@oarlock/terminal/conditions";
 import type { Verdict } from "@oarlock/terminal";
-import { ApiError, Client, type Attach, type Session } from "./api";
+import { ApiError, Client, type Agent, type Attach, type Device, type Session } from "./api";
 import { SessionList } from "./SessionList";
 import { Waits, type Step } from "./Waits";
 
@@ -42,6 +42,8 @@ export function App() {
 
   const [view, setView] = useState<View>({ kind: "list" });
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [device, setDevice] = useState("");
   const [reason, setReason] = useState("");
   const [me, setMe] = useState("");
@@ -50,8 +52,14 @@ export function App() {
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const { sessions } = await client.current.sessions();
+      const [{ sessions }, { agents }, { devices }] = await Promise.all([
+        client.current.sessions(),
+        client.current.agents(),
+        client.current.devices(),
+      ]);
       setSessions(sessions);
+      setAgents(agents);
+      setDevices(devices);
       setListError(null);
       if (sessions.length > 0 && !me) setMe(sessions[0]!.principal);
     } catch (err) {
@@ -183,6 +191,48 @@ export function App() {
     }
   }
 
+  async function disconnectAgent(agent: Agent) {
+    if (!confirm(`Stop ${agent.device_id}?\n\nThe agent exits on that device. ` +
+      `Start oarlock-agent there again to reconnect it.`)) {
+      return;
+    }
+    try {
+      await client.current.disconnectAgent(agent.device_id);
+      void refresh();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function createDevice(input: DeviceForm) {
+    try {
+      await client.current.createDevice({
+        id: input.id.trim(),
+        platform: input.platform,
+        mode: input.mode,
+        keys: splitList(input.keys),
+        tags: parseTags(input.tags),
+        profiles: splitList(input.profiles),
+      });
+      setDevice(input.id.trim());
+      void refresh();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function deleteDevice(deviceID: string) {
+    if (!confirm(`Delete ${deviceID}?\n\nExisting sessions stay in the ledger, but new sessions cannot target this device until it is added again.`)) {
+      return;
+    }
+    try {
+      await client.current.deleteDevice(deviceID);
+      void refresh();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   function fail(err: unknown) {
     const e = err instanceof ApiError ? err : null;
     setView({
@@ -277,6 +327,26 @@ export function App() {
               <span className="text-fg-muted">{listError.nextAction}</span>
             </p>
           )}
+
+          <section
+            className="flex flex-col gap-3 rounded-md border border-border bg-bg-raised p-4"
+            data-testid="admin-agents"
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">Admin</h2>
+                <p className="text-xs text-fg-muted">
+                  Connected agent control channels on this gateway node.
+                </p>
+              </div>
+              <span className="mono text-xs text-fg-faint">
+                {agents.length} connected
+              </span>
+            </div>
+            <AgentList agents={agents} onDisconnect={(a) => void disconnectAgent(a)} />
+            <DeviceCreateForm onCreate={(input) => void createDevice(input)} />
+            <DeviceList devices={devices} onDelete={(id) => void deleteDevice(id)} />
+          </section>
 
           <section className="flex flex-col gap-3">
             <h2 className="font-semibold">Sessions</h2>
@@ -381,5 +451,205 @@ export function App() {
         </section>
       )}
     </main>
+  );
+}
+
+type DeviceForm = {
+  id: string;
+  platform: Device["platform"];
+  mode: NonNullable<Device["mode"]>;
+  keys: string;
+  tags: string;
+  profiles: string;
+};
+
+const emptyDeviceForm: DeviceForm = {
+  id: "",
+  platform: "android",
+  mode: "dispatch",
+  keys: "",
+  tags: "",
+  profiles: "shell",
+};
+
+function splitList(value: string): string[] {
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function parseTags(value: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of splitList(value)) {
+    const [key, ...rest] = part.split("=");
+    const name = key?.trim();
+    if (!name) continue;
+    out[name] = rest.join("=").trim();
+  }
+  return out;
+}
+
+function DeviceCreateForm({ onCreate }: { onCreate: (input: DeviceForm) => void }) {
+  const [form, setForm] = useState<DeviceForm>(emptyDeviceForm);
+  return (
+    <form
+      className="grid gap-3 border-t border-border pt-4 md:grid-cols-[minmax(12rem,1fr)_10rem_10rem_minmax(12rem,1fr)_minmax(10rem,1fr)_auto]"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onCreate(form);
+        setForm(emptyDeviceForm);
+      }}
+    >
+      <input
+        className="field mono"
+        placeholder="device id"
+        value={form.id}
+        onChange={(e) => setForm({ ...form, id: e.target.value })}
+        required
+      />
+      <select
+        className="field"
+        value={form.platform}
+        onChange={(e) => setForm({ ...form, platform: e.target.value as Device["platform"] })}
+      >
+        <option value="android">Android</option>
+        <option value="linux">Linux</option>
+        <option value="container">Container</option>
+        <option value="other">Other</option>
+      </select>
+      <select
+        className="field"
+        value={form.mode}
+        onChange={(e) => setForm({ ...form, mode: e.target.value as DeviceForm["mode"] })}
+      >
+        <option value="dispatch">Dispatch</option>
+        <option value="persistent">Persistent</option>
+        <option value="">Default</option>
+      </select>
+      <input
+        className="field mono"
+        placeholder="public keys"
+        value={form.keys}
+        onChange={(e) => setForm({ ...form, keys: e.target.value })}
+      />
+      <input
+        className="field"
+        placeholder="tags"
+        value={form.tags}
+        onChange={(e) => setForm({ ...form, tags: e.target.value })}
+      />
+      <button className="btn btn-primary" type="submit">
+        Add
+      </button>
+      <input
+        className="field md:col-span-2"
+        placeholder="profiles"
+        value={form.profiles}
+        onChange={(e) => setForm({ ...form, profiles: e.target.value })}
+      />
+    </form>
+  );
+}
+
+function DeviceList({
+  devices,
+  onDelete,
+}: {
+  devices: Device[];
+  onDelete: (id: string) => void;
+}) {
+  if (devices.length === 0) {
+    return (
+      <p className="rounded-md border border-border bg-bg-raised p-4 text-fg-muted">
+        No devices are registered.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border border-border bg-bg">
+      <table className="w-full border-collapse text-left">
+        <thead className="bg-bg-raised text-xs uppercase tracking-wider text-fg-faint">
+          <tr>
+            <th className="px-3 py-2 font-medium">Device</th>
+            <th className="px-3 py-2 font-medium">Platform</th>
+            <th className="px-3 py-2 font-medium">Mode</th>
+            <th className="px-3 py-2 font-medium">Keys</th>
+            <th className="px-3 py-2 font-medium">State</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody>
+          {devices.map((device) => (
+            <tr className="border-t border-border align-middle" key={device.id}>
+              <td className="mono px-3 py-2">{device.id}</td>
+              <td className="px-3 py-2 capitalize">{device.platform}</td>
+              <td className="px-3 py-2">{device.resolved_mode}</td>
+              <td className="mono px-3 py-2 text-xs">{device.keys?.length ?? 0}</td>
+              <td className="px-3 py-2">
+                <span
+                  className={
+                    "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider " +
+                    (device.connected ? "text-state-recorded" : "text-fg-faint")
+                  }
+                >
+                  <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+                  {device.connected ? "Connected" : "Offline"}
+                </span>
+              </td>
+              <td className="px-3 py-2 text-right">
+                <button className="btn btn-danger" onClick={() => onDelete(device.id)}>
+                  Delete
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AgentList({
+  agents,
+  onDisconnect,
+}: {
+  agents: Agent[];
+  onDisconnect: (agent: Agent) => void;
+}) {
+  if (agents.length === 0) {
+    return (
+      <p className="rounded-md border border-border bg-bg-raised p-4 text-fg-muted">
+        No agents are connected to this gateway node.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto rounded-md border border-border bg-bg">
+      <table className="w-full border-collapse text-left">
+        <thead className="bg-bg-raised text-xs uppercase tracking-wider text-fg-faint">
+          <tr>
+            <th className="px-3 py-2 font-medium">Device</th>
+            <th className="px-3 py-2 font-medium">State</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody>
+          {agents.map((agent) => (
+            <tr className="border-t border-border align-middle" key={agent.device_id}>
+              <td className="mono px-3 py-2">{agent.device_id}</td>
+              <td className="px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-state-recorded">
+                  <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+                  Connected
+                </span>
+              </td>
+              <td className="px-3 py-2 text-right">
+                <button className="btn btn-danger" onClick={() => onDisconnect(agent)}>
+                  Stop
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

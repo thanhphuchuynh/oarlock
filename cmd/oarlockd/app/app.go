@@ -48,7 +48,9 @@ import (
 	"github.com/oarlock/oarlock/cmd/oarlockd/app/ui"
 	"github.com/oarlock/oarlock/internal/apisrv"
 	"github.com/oarlock/oarlock/internal/attachsrv"
+	"github.com/oarlock/oarlock/internal/audit"
 	"github.com/oarlock/oarlock/internal/auth/authorizedkeys"
+	"github.com/oarlock/oarlock/internal/auth/delegated"
 	"github.com/oarlock/oarlock/internal/auth/statictoken"
 	"github.com/oarlock/oarlock/internal/authz"
 	"github.com/oarlock/oarlock/internal/config"
@@ -58,6 +60,7 @@ import (
 	"github.com/oarlock/oarlock/internal/invite"
 	"github.com/oarlock/oarlock/internal/record"
 	"github.com/oarlock/oarlock/internal/registry/file"
+	regsqlite "github.com/oarlock/oarlock/internal/registry/sqlite"
 	"github.com/oarlock/oarlock/internal/safety"
 	"github.com/oarlock/oarlock/internal/sessionrun"
 	"github.com/oarlock/oarlock/internal/sessions"
@@ -69,6 +72,10 @@ import (
 	"github.com/oarlock/oarlock/pkg/plugin"
 	"github.com/oarlock/oarlock/pkg/transport/websocket"
 	"github.com/oarlock/oarlock/plugins/authz/rules"
+	authzwebhook "github.com/oarlock/oarlock/plugins/authz/webhook"
+	dispatchexec "github.com/oarlock/oarlock/plugins/dispatch/exec"
+	dispatchmqtt "github.com/oarlock/oarlock/plugins/dispatch/mqtt"
+	dispatchwebhook "github.com/oarlock/oarlock/plugins/dispatch/webhook"
 )
 
 // Version is stamped at build time with -ldflags.
@@ -156,9 +163,14 @@ type Gateway struct {
 	hub        *hub.Hub
 	inviter    *invite.Inviter
 	supervisor *authz.Supervisor
+	registry   interface{ Close() error }
 	authorizer interface{ Close() error }
-	ssh        *sshsrv.Server
-	httpMux    *http.ServeMux
+	audit      interface {
+		plugin.AuditSink
+		Close() error
+	}
+	ssh     *sshsrv.Server
+	httpMux *http.ServeMux
 
 	sshListener  net.Listener
 	httpListener net.Listener
@@ -171,19 +183,20 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		log = slog.Default()
 	}
 	g := &Gateway{Cfg: cfg, Log: log}
+	g.audit = buildAuditSink(cfg, log)
 
 	// ── the device registry ──
-	reg, err := file.Open(cfg.Devices)
+	reg, closer, err := buildDeviceRegistry(cfg)
 	if err != nil {
 		return nil, err
 	}
+	g.registry = closer
 
 	// ── the session ledger ──
-	dbPath := filepath.Join(filepath.Dir(cfg.Devices), "sessions.db")
-	if cfg.Recorder.Dir != "" {
-		dbPath = filepath.Join(cfg.Recorder.Dir, "sessions.db")
-		if err := os.MkdirAll(cfg.Recorder.Dir, 0o700); err != nil {
-			return nil, fmt.Errorf("oarlockd: creating %s: %w", cfg.Recorder.Dir, err)
+	dbPath := sessionDBPath(cfg)
+	if dbPath != ":memory:" {
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+			return nil, fmt.Errorf("oarlockd: creating %s: %w", filepath.Dir(dbPath), err)
 		}
 	}
 	ledger, err := sqlitestore.Open(dbPath, sessions.Limits{
@@ -202,6 +215,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	var recStoreMode, recStoreDetail string
 	recProtected := false
 	if cfg.Recorder.Dir != "" {
+		if err := os.MkdirAll(cfg.Recorder.Dir, 0o700); err != nil {
+			return nil, fmt.Errorf("oarlockd: creating %s: %w", cfg.Recorder.Dir, err)
+		}
 		signer, pub, err := loadOrGenerateRecordingKey(cfg, log)
 		if err != nil {
 			return nil, err
@@ -226,6 +242,13 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 			return nil, err
 		}
 		backend, g.authorizer = ra, ra
+	case "webhook":
+		wa, err := authzwebhook.New(cfg.Authz.URL, cfg.Authz.WatchURL, cfg.Authz.Token,
+			cfg.Authz.Timeout, cfg.Authz.CacheTTL)
+		if err != nil {
+			return nil, err
+		}
+		backend = wa
 	case "none":
 		// Refused in production by the boot gate below. Allowed here so that somebody
 		// evaluating the gateway is not forced to write a rules file before their first
@@ -240,13 +263,18 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	}
 
 	// ── tickets, the hub, invitations ──
+	dispatcher, err := buildDispatcher(cfg)
+	if err != nil {
+		return nil, err
+	}
 	g.hub = hub.New(hub.Options{Log: log})
 	g.inviter = &invite.Inviter{
-		Tickets:   ticket.NewMemory(time.Now),
-		Hub:       g.hub,
-		NodeURL:   strings.TrimRight(cfg.URL, "/") + "/ws/session",
-		AttachURL: strings.TrimRight(cfg.URL, "/") + "/ws/attach",
-		Log:       log,
+		Tickets:    ticket.NewMemory(time.Now),
+		Hub:        g.hub,
+		Dispatcher: dispatcher,
+		NodeURL:    strings.TrimRight(cfg.URL, "/") + "/ws/session",
+		AttachURL:  strings.TrimRight(cfg.URL, "/") + "/ws/attach",
+		Log:        log,
 	}
 
 	// ── operator authentication ──
@@ -254,19 +282,32 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.API.DelegationSecret != "" {
+		authn, err = delegated.New(authn, []byte(cfg.API.DelegationSecret),
+			cfg.API.DelegationAudience, cfg.API.MayActFor, cfg.API.DelegationMaxTTL)
+		if err != nil {
+			return nil, err
+		}
+		authnKind += "+delegated"
+	}
 
 	runner := &sessionrun.Runner{
 		Sessions: ledger, Live: g.live, Recorder: recorder,
 		Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
-		Scrollback: cfg.Limits.Scrollback, Authz: g.supervisor, Log: log,
+		Scrollback: cfg.Limits.Scrollback, Authz: g.supervisor, Audit: g.audit, Log: log,
 	}
 
 	// ── the HTTP surface ──
 	api, err := apisrv.New(apisrv.Options{
 		Sessions: ledger, Live: g.live, Authenticator: authn, Authz: checker,
-		Registry: reg, Inviter: g.inviter, Replays: replays,
-		AttachURL:     strings.TrimRight(cfg.URL, "/") + "/ws/attach",
-		RatePerMinute: cfg.API.RatePerMinute, Log: log,
+		Registry: reg, RegistryAdmin: registryAdmin(reg), Inviter: g.inviter,
+		Agents: g.hub, Replays: replays,
+		RecordInput:     cfg.Policy.RecordInput,
+		Audit:           g.audit,
+		AttachURL:       strings.TrimRight(cfg.URL, "/") + "/ws/attach",
+		RatePerMinute:   cfg.API.RatePerMinute,
+		AllowUnattended: cfg.API.AllowUnattended,
+		Log:             log,
 	})
 	if err != nil {
 		return nil, err
@@ -334,7 +375,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		AuthzSupervisor: g.supervisor, Registry: reg, Inviter: g.inviter,
 		Sessions: ledger, Live: g.live, Recorder: recorder,
 		Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
-		HostKey: hostKey, Log: log,
+		RecordInput: cfg.Policy.RecordInput,
+		Audit:       g.audit,
+		HostKey:     hostKey, Log: log,
 	})
 	if err != nil {
 		return nil, err
@@ -356,6 +399,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	g.Settings = safety.Settings{
 		Env:                        cfg.SafetyEnv(),
 		AuthenticatorKind:          authnKind,
+		RecordInputDefault:         cfg.Policy.RecordInput.Default,
 		RecorderConfigured:         recorder != nil,
 		RecordingStoreProtected:    recProtected,
 		RecordingStoreMode:         recStoreMode,
@@ -366,6 +410,59 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	}
 	_ = recStoreDetail
 	return g, nil
+}
+
+func buildDispatcher(cfg *config.Config) (plugin.Dispatcher, error) {
+	switch cfg.Dispatch.Kind {
+	case "", "none":
+		return nil, nil
+	case "exec":
+		return dispatchexec.New(cfg.Dispatch.Command, cfg.Dispatch.Timeout)
+	case "webhook":
+		return dispatchwebhook.New(cfg.Dispatch.URL, []byte(cfg.Dispatch.Secret), cfg.Dispatch.Timeout)
+	case "mqtt":
+		return dispatchmqtt.New(cfg.Dispatch.URL, cfg.Dispatch.Topic, cfg.Dispatch.ClientID,
+			cfg.Dispatch.Username, cfg.Dispatch.Password, dispatchQoS(cfg), cfg.Dispatch.Timeout)
+	default:
+		return nil, fmt.Errorf("dispatcher.kind %q is not known", cfg.Dispatch.Kind)
+	}
+}
+
+func dispatchQoS(cfg *config.Config) int {
+	if cfg.Dispatch.QoS == nil {
+		return 1
+	}
+	return *cfg.Dispatch.QoS
+}
+
+func sessionDBPath(cfg *config.Config) string {
+	if cfg.Store.Kind == "sqlite" && cfg.Store.Path != "" {
+		return cfg.Store.Path
+	}
+	if cfg.Recorder.Dir != "" {
+		return filepath.Join(cfg.Recorder.Dir, "sessions.db")
+	}
+	return filepath.Join(filepath.Dir(cfg.Devices.Path), "sessions.db")
+}
+
+func buildDeviceRegistry(cfg *config.Config) (plugin.DeviceRegistry, interface{ Close() error }, error) {
+	switch cfg.Devices.Kind {
+	case "file":
+		reg, err := file.Open(cfg.Devices.Path)
+		return reg, nil, err
+	case "sqlite":
+		reg, err := regsqlite.Open(cfg.Store.Path)
+		return reg, reg, err
+	case "postgres":
+		return nil, nil, errors.New("devices.kind postgres is not implemented yet")
+	default:
+		return nil, nil, fmt.Errorf("devices.kind %q is not known", cfg.Devices.Kind)
+	}
+}
+
+func registryAdmin(reg plugin.DeviceRegistry) plugin.DeviceRegistryAdmin {
+	admin, _ := reg.(plugin.DeviceRegistryAdmin)
+	return admin
 }
 
 // Serve runs until the context ends, then drains.
@@ -466,12 +563,32 @@ func (g *Gateway) Addrs() (ssh, http string) {
 
 // Close releases everything Build acquired.
 func (g *Gateway) Close() {
+	if g.registry != nil {
+		_ = g.registry.Close()
+	}
 	if g.authorizer != nil {
 		_ = g.authorizer.Close()
+	}
+	if g.audit != nil {
+		_ = g.audit.Close()
 	}
 	if g.ledger != nil {
 		_ = g.ledger.Shutdown()
 	}
+}
+
+func buildAuditSink(cfg *config.Config, log *slog.Logger) interface {
+	plugin.AuditSink
+	Close() error
+} {
+	var sink plugin.AuditSink
+	switch cfg.Audit.Kind {
+	case "none":
+		sink = audit.Discard{}
+	default:
+		sink = audit.NewJSONL(os.Stderr)
+	}
+	return audit.NewAsync(sink, cfg.Audit.Buffer, log)
 }
 
 func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authenticator, string, error) {
@@ -522,7 +639,7 @@ func (p *pair) AuthPublicKey(ctx context.Context, user string, key xssh.PublicKe
 }
 
 func (p *pair) AuthDelegated(ctx context.Context, svc *plugin.Principal, assertion string) (*plugin.Principal, error) {
-	return nil, plugin.ErrUnsupported
+	return p.tokens.AuthDelegated(ctx, svc, assertion)
 }
 
 func (p *pair) AuthHTTP(ctx context.Context, r *http.Request) (*plugin.Principal, error) {

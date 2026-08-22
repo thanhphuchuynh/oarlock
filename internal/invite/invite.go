@@ -115,11 +115,14 @@ type Reacher interface {
 
 // Request is what an operator asked for.
 type Request struct {
-	SessionID string
-	Profile   string
-	Principal string
-	PTY       *frame.PTY
-	Exec      []string
+	SessionID   string
+	Profile     string
+	Principal   string
+	OpenedBy    string
+	Unattended  bool
+	RecordInput bool
+	PTY         *frame.PTY
+	Exec        []string
 
 	// AttachTicket asks for an operator-side ticket as well as the device's.
 	//
@@ -320,11 +323,14 @@ func (i *Inviter) Invite(ctx context.Context, dev *plugin.Device, req Request) (
 	}
 
 	token, err := i.Tickets.Mint(ctx, ticket.Claims{
-		SessionID: req.SessionID,
-		DeviceID:  dev.ID,
-		Profile:   req.Profile,
-		Principal: req.Principal,
-		Kind:      ticket.KindDevice,
+		SessionID:   req.SessionID,
+		DeviceID:    dev.ID,
+		Profile:     req.Profile,
+		Principal:   req.Principal,
+		OpenedBy:    req.OpenedBy,
+		Unattended:  req.Unattended,
+		RecordInput: req.RecordInput,
+		Kind:        ticket.KindDevice,
 	}, ttl)
 	if err != nil {
 		return nil, fmt.Errorf("invite: minting a ticket: %w", err)
@@ -354,11 +360,14 @@ func (i *Inviter) Invite(ctx context.Context, dev *plugin.Device, req Request) (
 	if req.AttachTicket {
 		attachTTL := ttl
 		attach, err := i.Tickets.Mint(ctx, ticket.Claims{
-			SessionID: req.SessionID,
-			DeviceID:  dev.ID,
-			Profile:   req.Profile,
-			Principal: req.Principal,
-			Kind:      ticket.KindAttach,
+			SessionID:   req.SessionID,
+			DeviceID:    dev.ID,
+			Profile:     req.Profile,
+			Principal:   req.Principal,
+			OpenedBy:    req.OpenedBy,
+			Unattended:  req.Unattended,
+			RecordInput: req.RecordInput,
+			Kind:        ticket.KindAttach,
 		}, attachTTL)
 		if err != nil {
 			_ = i.Tickets.Revoke(ctx, token)

@@ -175,6 +175,27 @@ func TestKeyRotation(t *testing.T) {
 	}
 }
 
+func TestRetiredKeyNoLongerAuthenticates(t *testing.T) {
+	pub1, priv1, _ := ed25519.GenerateKey(rand.Reader)
+	pub2, priv2, _ := ed25519.GenerateKey(rand.Reader)
+	pub3, priv3, _ := ed25519.GenerateKey(rand.Reader)
+	dev := &plugin.Device{
+		ID: "rower-rotation", Platform: plugin.PlatformLinux,
+		Keys:        []ed25519.PublicKey{pub1, pub3},
+		RetiredKeys: []ed25519.PublicKey{pub2},
+	}
+	g := &handshake.Gateway{Registry: reg{map[string]*plugin.Device{dev.ID: dev}}, GatewayID: "gw-a"}
+
+	for name, priv := range map[string]ed25519.PrivateKey{"first": priv1, "third": priv3} {
+		if _, _, gerr, aerr := run(t, g, &handshake.Agent{DeviceID: dev.ID, Signer: priv}); gerr != nil || aerr != nil {
+			t.Fatalf("%s active key was rejected: %v / %v", name, gerr, aerr)
+		}
+	}
+	if _, _, gerr, aerr := run(t, g, &handshake.Agent{DeviceID: dev.ID, Signer: priv2}); !errors.Is(gerr, handshake.ErrAuthFailed) {
+		t.Fatalf("retired key gateway error = %v, agent error = %v; want ErrAuthFailed", gerr, aerr)
+	}
+}
+
 func TestResumeCarriesInvitations(t *testing.T) {
 	dev, priv := newDevice(t, "treadmill-1", plugin.PlatformLinux)
 	g := &handshake.Gateway{

@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -568,6 +569,50 @@ func TestADrainRecordsWhyInTheLedger(t *testing.T) {
 			"A drain that does not reach the ledger leaves an operator's session ending "+
 			"for no recorded reason, which is the row somebody reads to find out what "+
 			"the deploy did.", rows)
+	}
+}
+
+func TestConfiguredHostKeyIsServed(t *testing.T) {
+	d := deploy(t, quiet())
+	d.serve(t)
+
+	b, err := os.ReadFile(d.cfg.SSH.HostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := xssh.ParsePrivateKey(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := xssh.Dial("tcp", d.sshAddr, &xssh.ClientConfig{
+		User:            "treadmill-4821",
+		Auth:            []xssh.AuthMethod{xssh.PublicKeys(d.opSigner)},
+		HostKeyCallback: xssh.FixedHostKey(signer.PublicKey()),
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("dial with configured host key: %v", err)
+	}
+	_ = client.Close()
+}
+
+func TestGeneratedHostKeyIsNotLogged(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := deploy(t, log)
+
+	key, err := os.ReadFile(d.cfg.SSH.HostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if bytes.Contains([]byte(out), key) {
+		t.Fatal("startup logs contain the private host key file")
+	}
+	for _, marker := range []string{"BEGIN OPENSSH PRIVATE KEY", "PRIVATE KEY-----"} {
+		if strings.Contains(out, marker) {
+			t.Fatalf("startup logs contain private key material marker %q:\n%s", marker, out)
+		}
 	}
 }
 

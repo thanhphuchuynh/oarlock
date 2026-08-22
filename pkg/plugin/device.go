@@ -72,6 +72,11 @@ type Device struct {
 	// key would make rotation a flag day.
 	Keys []ed25519.PublicKey
 
+	// RetiredKeys are keys that used to identify this device and must no longer
+	// authenticate it. Keeping them explicit makes revocation testable and auditable:
+	// absence could mean "retired" or "never seen", and those are different facts.
+	RetiredKeys []ed25519.PublicKey
+
 	// AllowPassthrough enables mode A for this device. Off by default: an
 	// unrecorded session must never be an accident.
 	AllowPassthrough bool
@@ -136,6 +141,16 @@ func (d Device) HasKey(pub ed25519.PublicKey) bool {
 	return false
 }
 
+// HasRetiredKey reports whether pub used to identify this device and has been retired.
+func (d Device) HasRetiredKey(pub ed25519.PublicKey) bool {
+	for _, k := range d.RetiredKeys {
+		if k.Equal(pub) {
+			return true
+		}
+	}
+	return false
+}
+
 // DeviceQuery filters a List.
 type DeviceQuery struct {
 	Platform Platform
@@ -151,6 +166,13 @@ type DeviceRegistry interface {
 	Get(ctx context.Context, id string) (*Device, error)
 	// List returns a page of devices and the cursor for the next one.
 	List(ctx context.Context, q DeviceQuery) (devices []*Device, next string, err error)
+}
+
+// DeviceRegistryAdmin is the optional write side for registries managed by Oarlock.
+type DeviceRegistryAdmin interface {
+	Create(ctx context.Context, d *Device) error
+	Update(ctx context.Context, d *Device) error
+	Delete(ctx context.Context, id string) error
 }
 
 // ── key encoding ────────────────────────────────────────────────────────────────

@@ -27,6 +27,15 @@ type Principal struct {
 	// credential that opened it, independent of the authorisation re-check interval.
 	// Worth setting.
 	Expiry time.Time
+
+	// OpenedBy is the service account that authenticated to the API when this
+	// principal came from AuthDelegated. ID remains the human subject.
+	OpenedBy string
+
+	// Unattended marks a service session with no human subject. An unattended
+	// principal is authorised as itself, but the session row and recording carry the
+	// flag so robot activity is queryable separately from human work.
+	Unattended bool
 }
 
 // Authenticator answers *who* an operator is. Authorizer answers whether they may.

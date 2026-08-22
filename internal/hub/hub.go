@@ -350,6 +350,23 @@ func (h *Hub) Cancel(ctx context.Context, deviceID, sessionID, reason string) er
 	return ch.send(ctx, frame.TypeCancel, frame.Cancel{SessionID: sessionID, Reason: reason})
 }
 
+// Disconnect closes one agent's control channel.
+//
+// This is an administrative disconnect, not a remote process kill. The agent may
+// reconnect according to its own backoff, which is the right boundary: the gateway
+// owns reachability, not process supervision on customer devices.
+func (h *Hub) Disconnect(ctx context.Context, deviceID, reason string) error {
+	ch, err := h.channel(deviceID)
+	if err != nil {
+		return err
+	}
+	if reason == "" {
+		reason = "admin_stop"
+	}
+	_ = ch.send(ctx, frame.TypeGoAway, frame.GoAway{Reason: reason})
+	return ch.conn.Close(transport.CloseGoingAway, reason)
+}
+
 // Connected reports whether a control channel is live for the device.
 func (h *Hub) Connected(deviceID string) bool {
 	_, err := h.channel(deviceID)

@@ -48,7 +48,7 @@ package main
 
 import (
     "github.com/oarlock/oarlock/cmd/oarlockd/app"
-    _ "github.com/oarlock/oarlock/plugins/mqtt"
+    _ "example.com/our-stack/oarlock-dispatcher"
     _ "example.com/our-stack/oarlock-casdoor"   // yours
 )
 
@@ -130,6 +130,39 @@ credential that opened it, independent of the re-check interval.
 **`sshca` is the recommendation at any real size.** One key to trust, certificates that
 expire on their own, and revocation becomes "stop issuing" rather than a push to every
 replica. It is the one idea worth importing from the mode-A world without importing mode A.
+
+### 2.1 Gateway SSH host key
+
+`ssh.host_key` is the gateway's SSH identity, not an operator credential and not a
+recording-signing key. Every replica behind the same operator-facing name must load the
+same private host key, or operators will see a host-key-mismatch warning whenever a load
+balancer moves them. That trains people to ignore the one SSH warning that matters.
+
+Generate it once, put the private key in a secret store, and mount the same bytes at
+`ssh.host_key` on every replica:
+
+```bash
+ssh-keygen -t ed25519 -N "" -f oarlock_host_ed25519 -C oarlock-gateway
+ssh-keygen -y -f oarlock_host_ed25519 > oarlock_host_ed25519.pub
+```
+
+`ssh.generate_host_key: true` is for development only. The boot gate refuses a generated
+host key in production, and startup logs only the path, never the private key material.
+
+Rotation is an operator trust event, so do it like an SSH host-key rotation rather than a
+silent deploy:
+
+1. Generate the replacement key and publish its public half through the same channel your
+   operators use for known-hosts material.
+2. Deploy the replacement private key to every replica while the old key is still the one
+   operators know.
+3. Drain replicas and restart them as one change window, so all replicas present the same
+   new key.
+4. Remove the old public key from managed `known_hosts` after the window.
+
+Do not reuse the recording signing key here. The SSH host key is presented to every SSH
+client; the recording key attests to archived bytes. Rotating one must not force rotating
+the other.
 
 ## 3. `Authorizer` — may they, on this device, right now
 
@@ -234,6 +267,74 @@ rules:
   everybody instantly because of a typo — and it would look exactly like a mass revocation
   to every operator it hit.
 - **Unknown keys are refused.** A typo in a key name must not silently mean "default".
+
+### 3.2 The `webhook` authorizer
+
+Use `webhook` when the source of truth lives somewhere else: OPA, Casdoor, an internal
+permission table, or a service that already understands on-call state.
+
+```yaml
+authorizer:
+  kind: webhook
+  url: https://permissions.example.com/oarlock/authorize
+  watch_url: https://permissions.example.com/oarlock/revocations
+  token: ${OARLOCK_AUTHZ_TOKEN}
+  timeout: 2s
+  cache_ttl: 5s
+  recheck_interval: 30s
+```
+
+`cache_ttl` must be shorter than `recheck_interval`. The re-check interval is the promise
+that a withdrawn grant goes stale for no longer than that window; a cache that outlived it
+would make the promise untrue, so the boot check refuses it.
+
+The decision endpoint receives:
+
+```json
+{
+  "principal": {
+    "id": "phuc@example.com",
+    "email": "phuc@example.com",
+    "groups": ["on-call"],
+    "attrs": {"jurisdiction": "EU"}
+  },
+  "device": {
+    "id": "treadmill-4821",
+    "platform": "android",
+    "mode": "",
+    "resolved_mode": "dispatch",
+    "tags": {"scope": "pci"},
+    "profiles": ["shell"]
+  },
+  "action": "shell"
+}
+```
+
+Return `2xx` with a decision:
+
+```json
+{
+  "allow": true,
+  "limits": {"max_duration": "15m", "idle": "2m", "rate": 262144},
+  "ttl": "5s"
+}
+```
+
+A denial is still a decision: return `2xx` with `"allow": false` and an actionable
+`reason`, or return `403` with the same JSON body. Other non-2xx responses, malformed JSON
+and transport errors are **unavailable**, not denied; the gateway reports
+`authz_unavailable` and applies the grace-window contract from § 3.
+
+`watch_url` is optional. When set, it is a server-sent event stream whose `data:` payload is
+a JSON `RevocationEvent`:
+
+```text
+data: {"principal_id":"phuc@example.com","device_id":"treadmill-4821","reason":"left on-call"}
+```
+
+An empty `principal_id` or `device_id` means every principal or every device. Closing the
+stream is not a revocation; the gateway reconnects and the re-check interval remains the
+guarantee.
 
 ## 4. `Recorder` — the artefact
 
@@ -378,7 +479,55 @@ encrypted, access-controlled and retention-bounded like one.
 Output-only recording still shows every command, because the shell echoes it. You lose
 keystroke timing and typo history; you gain not having built a secrets file by accident.
 
-## 5. `SessionStore` — the ledger
+`record_input` is resolved per session from `policy.record_input`, matching both the
+operator and the device:
+
+```yaml
+policy:
+  record_input:
+    default: false
+    rules:
+      - name: pci capture
+        when:
+          device_tags: {pci_scope: "true"}
+        value: true
+      - authority: employment-law
+        when:
+          principal_groups: ["eu-*"]
+        value: false
+```
+
+Selectors can match `principals`, `principal_groups`, `principal_attrs`, `devices`, and
+`device_tags`. Principal and device entries are globs; attribute and tag selectors are
+exact key/value matches. A conflict between matching rules refuses the open as
+`policy_conflict` and names both rules. That is deliberate: silently choosing either value
+would silently violate one of the regimes the rules were written to satisfy.
+
+## 5. `AuditSink` — what happened
+
+```go
+type AuditSink interface {
+    Emit(ctx context.Context, e AuditEvent)
+}
+```
+
+`Emit` cannot fail by contract. Audit must never become the thing that breaks a shell, so
+the built-in sink is an async bounded queue. When the queue is full, events are dropped and
+the drop counter is incremented and logged; silent audit loss is the failure this avoids.
+
+The default sink writes JSON lines to stderr:
+
+```yaml
+audit:
+  kind: stderr   # stderr | none
+  buffer: 1024
+```
+
+Current event kinds include `session.opened`, `session.closed`, `session.rejected`,
+`api.error`, and `observe.issued`. A `policy_conflict` API error carries the conflict text
+that names both matching rules.
+
+## 6. `SessionStore` — the ledger
 
 ```go
 type SessionStore interface {
@@ -401,7 +550,7 @@ lose gracefully, and "we checked and it was fine" is not an enforcement mechanis
 | `sqlite` | one file, survives restarts, plenty for one gateway. |
 | `postgres` | multi-node, partial unique index for the per-device cap. |
 
-## 6. `DeviceRegistry` — what the gateway knows about a device
+## 7. `DeviceRegistry` — what the gateway knows about a device
 
 ```go
 type DeviceRegistry interface {
@@ -414,6 +563,7 @@ type Device struct {
     Platform         Platform             // android | linux | container | other
     Mode             Mode                 // persistent | dispatch | "" = resolve from Platform
     Keys             []ed25519.PublicKey  // control-channel identity; a list, so keys rotate
+    RetiredKeys      []ed25519.PublicKey  // old identities that must no longer authenticate
     AllowPassthrough bool                 // mode A, per device, default false
     Tags             map[string]string    // what Authorizer and policy selectors match on
     Profiles         []string             // what this device may be asked to do
@@ -428,12 +578,44 @@ because that is what `ssh-keygen -t ed25519` produces, and requiring a bespoke
 encoding for no reason is how a config file becomes something only a script can
 write.
 
-```go
+Rotation is publish-then-retire:
+
+```yaml
+devices:
+  - id: treadmill-4821
+    platform: linux
+    keys:
+      - "<old public key>"
+      - "<new public key>"
+
+# after the device has rolled:
+devices:
+  - id: treadmill-4821
+    platform: linux
+    keys:
+      - "<new public key>"
+    retired_keys:
+      - "<old public key>"
 ```
 
-Read-only by design. Oarlock does not enroll devices, does not name them, and does not own
-their lifecycle — it reads from whatever already does. The default `file` backend is a YAML
-list, which is enough for a lab and obviously not enough for a fleet.
+A key cannot appear in both lists. A retired key that signs a control-channel handshake is
+rejected with the same `auth_failed` response as any other authentication failure; the
+specific reason is logged server-side, not sent to the unauthenticated peer.
+
+The registry contract starts read-only: Oarlock can read from whatever already owns the
+fleet. A backend may also implement `DeviceRegistryAdmin` to create, update and delete
+devices through the admin API/UI. The default `file` backend remains a YAML list, which is
+enough for a lab and intentionally not rewritten by the gateway; the built-in `sqlite`
+backend stores editable devices in the operational DB with `oarlock_` table prefixes.
+
+```yaml
+store:
+  kind: sqlite
+  path: ./oarlock.db
+
+devices:
+  kind: sqlite
+```
 
 **`Platform` exists to pick the reachability default**, and it earns its place because the
 right default differs by platform rather than by deployment: `android` resolves to
@@ -447,7 +629,7 @@ match on them ([ARCHITECTURE § 8.2](../ARCHITECTURE.md#82-record_input-is-a-pol
 That is deliberate: compliance scope and jurisdiction get expressed through a mechanism that
 already exists, and no tenancy concept has to be invented to carry them.
 
-## 7. `AgentAuthenticator` — is this really that device
+## 8. `AgentAuthenticator` — is this really that device
 
 ```go
 type AgentAuthenticator interface {
@@ -466,13 +648,13 @@ ticket that can be redeemed twice is a ticket an attacker can race the real agen
 | `devicekey` (default) | Ed25519, keys from `DeviceRegistry`. |
 | `mtls` | client certificates; moves the whole problem into the TLS layer and skips the in-band handshake. If you already run a device PKI — an MQTT mTLS one, say — this reuses it. |
 
-## 8. `Dispatcher` — the doorbell (`dispatch` mode only)
+## 9. `Dispatcher` — the doorbell (`dispatch` mode only)
 
 ```go
 type Dispatcher interface {
     // Wake must be fast and must distinguish "device is not reachable" from
     // "I could not deliver". The gateway shows the operator different things.
-    Wake(ctx context.Context, dev *Device, t *Invitation) error
+    Wake(ctx context.Context, dev *Device, inv frame.Invitation) error
 }
 
 type Invitation struct {
@@ -498,7 +680,40 @@ look at the broker. Returning the wrong one wastes an on-call hour.
 | `webhook` | `POST` to your own push service. |
 | `exec` | run a command with the invitation on stdin. For testing, and for the one place a shell script is genuinely the right integration. |
 
-## 9. `Ownership` — which gateway holds this device
+Configured examples:
+
+```yaml
+dispatcher:
+  kind: mqtt
+  url: mqtts://broker.example.org:8883
+  topic: oarlock/devices/{device_id}/wake
+  client_id: oarlock-gateway-a
+  username: oarlock
+  password: ${OARLOCK_MQTT_PASSWORD}
+  qos: 1
+  timeout: 10s
+```
+
+```yaml
+dispatcher:
+  kind: webhook
+  url: https://push.example.org/oarlock/wake
+  secret: shared-webhook-secret
+  timeout: 10s
+```
+
+```yaml
+dispatcher:
+  kind: exec
+  command: ["/usr/local/bin/oarlock-doorbell"]
+  timeout: 10s
+```
+
+The MQTT topic must contain `{device_id}`. Oarlock only substitutes the registry device
+id; the ticket stays in the JSON payload and never appears in the topic, command line or
+URL.
+
+## 10. `Ownership` — which gateway holds this device
 
 ```go
 type Ownership interface {
@@ -659,9 +874,10 @@ has nothing that can be unavailable, `NoTransportToBreak` for an in-process disp
 and even then the suite checks the part of the claim that is checkable.
 
 Suites available now: `Authorizer`, `Authenticator`, `Dispatcher`. The shipped backends
-run through them (`plugins/dispatch/exec`, `plugins/dispatch/webhook`,
-`internal/auth/authorizedkeys`, `internal/auth/statictoken`), which is not ceremony: a
-suite the first-party implementations do not pass is one nobody should trust.
+run through them (`plugins/authz/rules`, `plugins/authz/webhook`,
+`plugins/dispatch/exec`, `plugins/dispatch/webhook`, `plugins/dispatch/mqtt`,
+`internal/auth/authorizedkeys`, `internal/auth/statictoken`), which is not ceremony:
+a suite the first-party implementations do not pass is one nobody should trust.
 
 **The suite tests itself.** `plugintest`'s own tests run each suite against backends that
 are wrong in each specific way — denies on error, allows on error, errors instead of
@@ -669,4 +885,3 @@ denying, denies with no reason, ignores cancellation, disagrees under concurrenc
 on `Watch`, leaks a `Watch` goroutine, blames the device for its own outage, leaks a
 ticket into an error message — and assert that the suite *fails* them. A conformance suite
 that passes a wrong backend is worthless, and the only way to know it does not is to try.
-

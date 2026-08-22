@@ -196,6 +196,15 @@ test("the session list explains itself", async ({ page }) => {
   await expect(page.getByText("Not recorded").first()).toHaveCount(0);
 });
 
+test("the admin panel lists connected agents", async ({ page }) => {
+  await signIn(page);
+  const admin = page.getByTestId("admin-agents");
+  await expect(admin.getByRole("heading", { name: "Admin" })).toBeVisible();
+  await expect(admin).toContainText("1 connected", { timeout: 30_000 });
+  await expect(admin).toContainText("treadmill-4821");
+  await expect(admin.getByRole("button", { name: "Stop" })).toBeVisible();
+});
+
 test("a device that does not exist fails on its own step", async ({ page }) => {
   await signIn(page);
   await page.getByTestId("device").fill("no-such-device");

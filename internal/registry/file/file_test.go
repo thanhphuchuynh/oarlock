@@ -32,6 +32,15 @@ func key(t *testing.T) string {
 	return plugin.EncodeDeviceKey(pub)
 }
 
+func keypair(t *testing.T) (string, ed25519.PublicKey) {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plugin.EncodeDeviceKey(pub), pub
+}
+
 func TestOpenValid(t *testing.T) {
 	k := key(t)
 	p := write(t, `
@@ -112,6 +121,47 @@ devices:
 	}
 	if len(d.Keys) != 1 || len(d.Keys[0]) != ed25519.PublicKeySize {
 		t.Fatalf("key not parsed: %v", d.Keys)
+	}
+}
+
+func TestRetiredKeysLoadSeparately(t *testing.T) {
+	active, activePub := keypair(t)
+	retired, retiredPub := keypair(t)
+	r, err := file.Open(write(t, `
+devices:
+  - id: rower-rotation
+    platform: linux
+    keys: ["`+active+`"]
+    retired_keys: ["`+retired+`"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := r.Get(context.Background(), "rower-rotation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HasKey(activePub) || d.HasKey(retiredPub) {
+		t.Fatalf("active key state wrong: active=%v retired-as-active=%v",
+			d.HasKey(activePub), d.HasKey(retiredPub))
+	}
+	if !d.HasRetiredKey(retiredPub) || d.HasRetiredKey(activePub) {
+		t.Fatalf("retired key state wrong: retired=%v active-as-retired=%v",
+			d.HasRetiredKey(retiredPub), d.HasRetiredKey(activePub))
+	}
+}
+
+func TestAKeyCannotBeActiveAndRetired(t *testing.T) {
+	k := key(t)
+	_, err := file.Open(write(t, `
+devices:
+  - id: confused
+    platform: linux
+    keys: ["`+k+`"]
+    retired_keys: ["`+k+`"]
+`))
+	if err == nil || !strings.Contains(err.Error(), "also retired") {
+		t.Fatalf("got %v, want active/retired conflict", err)
 	}
 }
 

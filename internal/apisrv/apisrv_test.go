@@ -17,12 +17,17 @@ import (
 
 	"errors"
 	"github.com/oarlock/oarlock/internal/apisrv"
+	"github.com/oarlock/oarlock/internal/audit"
 	"github.com/oarlock/oarlock/internal/auth/statictoken"
 	"github.com/oarlock/oarlock/internal/authz"
+	"github.com/oarlock/oarlock/internal/hub"
 	"github.com/oarlock/oarlock/internal/invite"
+	"github.com/oarlock/oarlock/internal/recordpolicy"
+	regsqlite "github.com/oarlock/oarlock/internal/registry/sqlite"
 	"github.com/oarlock/oarlock/internal/sessions"
 	"github.com/oarlock/oarlock/internal/ticket"
 	"github.com/oarlock/oarlock/pkg/condition"
+	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/plugin"
 )
 
@@ -36,6 +41,7 @@ type fixture struct {
 	srv    *httptest.Server
 	ledger *sessions.Memory
 	live   *sessions.Registry
+	agents *agentControls
 }
 
 func newFixture(t *testing.T, ratePerMin int) *fixture {
@@ -47,10 +53,11 @@ func newFixture(t *testing.T, ratePerMin int) *fixture {
 	f := &fixture{
 		ledger: sessions.NewMemory(sessions.Limits{PerDevice: 1, PerPrincipal: 100}, nil),
 		live:   sessions.NewRegistry(),
+		agents: &agentControls{devices: []string{"rower-9001", "treadmill-4821"}},
 	}
 	api, err := apisrv.New(apisrv.Options{
 		Sessions: f.ledger, Live: f.live, Authenticator: authn,
-		RatePerMinute: ratePerMin, Log: quiet(),
+		Agents: f.agents, RatePerMinute: ratePerMin, Log: quiet(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +65,31 @@ func newFixture(t *testing.T, ratePerMin int) *fixture {
 	f.srv = httptest.NewServer(api)
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+type agentControls struct {
+	devices []string
+	err     error
+	killed  atomic.Value
+	reason  atomic.Value
+}
+
+func (a *agentControls) Devices() []string {
+	return append([]string(nil), a.devices...)
+}
+
+func (a *agentControls) Disconnect(_ context.Context, deviceID, reason string) error {
+	if a.err != nil {
+		return a.err
+	}
+	for _, id := range a.devices {
+		if id == deviceID {
+			a.killed.Store(deviceID)
+			a.reason.Store(reason)
+			return nil
+		}
+	}
+	return hub.ErrNotConnected
 }
 
 func (f *fixture) do(t *testing.T, method, path, bearer string) (*http.Response, []byte) {
@@ -90,6 +122,37 @@ func (f *fixture) seed(t *testing.T, id, device, principal string) *sessions.Ses
 		t.Fatal(err)
 	}
 	return row
+}
+
+func newDeviceFixture(t *testing.T) *fixture {
+	t.Helper()
+	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := regsqlite.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixture{
+		ledger: sessions.NewMemory(sessions.Limits{PerDevice: 1, PerPrincipal: 100}, nil),
+		live:   sessions.NewRegistry(),
+		agents: &agentControls{devices: []string{"treadmill-4821"}},
+	}
+	api, err := apisrv.New(apisrv.Options{
+		Sessions: f.ledger, Live: f.live, Authenticator: authn,
+		Registry: reg, RegistryAdmin: reg,
+		Agents: f.agents, Log: quiet(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv = httptest.NewServer(api)
+	t.Cleanup(func() {
+		f.srv.Close()
+		_ = reg.Close()
+	})
+	return f
 }
 
 // ── the error envelope ──────────────────────────────────────────────────────────
@@ -326,6 +389,111 @@ func TestGetSessionShowsWhatMatters(t *testing.T) {
 	}
 }
 
+// ── connected agents ───────────────────────────────────────────────────────────
+
+func TestListAgents(t *testing.T) {
+	f := newFixture(t, 0)
+	resp, body := f.do(t, "GET", apisrv.Prefix+"/agents", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Agents []map[string]any `json:"agents"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents) != 2 {
+		t.Fatalf("agents = %d: %s", len(got.Agents), body)
+	}
+	if got.Agents[0]["device_id"] != "rower-9001" ||
+		got.Agents[1]["device_id"] != "treadmill-4821" {
+		t.Fatalf("agents not sorted or wrong: %+v", got.Agents)
+	}
+	if got.Agents[0]["connected"] != true {
+		t.Fatalf("connected = %v", got.Agents[0]["connected"])
+	}
+}
+
+func TestDisconnectAgent(t *testing.T) {
+	f := newFixture(t, 0)
+	resp, body := f.do(t, "DELETE", apisrv.Prefix+"/agents/treadmill-4821", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	if got, _ := f.agents.killed.Load().(string); got != "treadmill-4821" {
+		t.Fatalf("disconnected %q", got)
+	}
+	if got, _ := f.agents.reason.Load().(string); got != "admin_stop" {
+		t.Fatalf("reason %q", got)
+	}
+}
+
+func TestDisconnectUnknownAgent(t *testing.T) {
+	f := newFixture(t, 0)
+	resp, body := f.do(t, "DELETE", apisrv.Prefix+"/agents/nope", token)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", resp.StatusCode, body)
+	}
+	var p apisrv.Problem
+	_ = json.Unmarshal(body, &p)
+	if p.Code != "not_found" {
+		t.Fatalf("code %q", p.Code)
+	}
+}
+
+// ── device registry admin ──────────────────────────────────────────────────────
+
+func TestDeviceRegistryAdminAPI(t *testing.T) {
+	f := newDeviceFixture(t)
+	create := `{
+		"id":"treadmill-4821",
+		"platform":"android",
+		"mode":"dispatch",
+		"tags":{"fleet":"qa"},
+		"profiles":["shell"]
+	}`
+	resp, body := f.postJSON(t, apisrv.Prefix+"/devices", create)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var created map[string]any
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created["connected"] != true || created["resolved_mode"] != "dispatch" {
+		t.Fatalf("created device = %+v", created)
+	}
+
+	resp, body = f.do(t, "GET", apisrv.Prefix+"/devices?mode=dispatch", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var list struct {
+		Devices []map[string]any `json:"devices"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Devices) != 1 || list.Devices[0]["id"] != "treadmill-4821" {
+		t.Fatalf("devices = %+v", list.Devices)
+	}
+
+	resp, body = f.postJSON(t, apisrv.Prefix+"/devices", `{"id":"bad id","platform":"android"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", resp.StatusCode, body)
+	}
+
+	resp, body = f.do(t, "DELETE", apisrv.Prefix+"/devices/treadmill-4821", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	resp, body = f.do(t, "GET", apisrv.Prefix+"/devices/treadmill-4821", token)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", resp.StatusCode, body)
+	}
+}
+
 // ── killing ─────────────────────────────────────────────────────────────────────
 
 func TestKillEndsALiveSession(t *testing.T) {
@@ -492,6 +660,41 @@ func (unsupportedAuth) AuthDelegated(context.Context, *plugin.Principal, string)
 }
 func (unsupportedAuth) AuthHTTP(context.Context, *http.Request) (*plugin.Principal, error) {
 	return nil, plugin.ErrUnsupported
+}
+
+type delegatingAuth struct {
+	http      map[string]*plugin.Principal
+	delegated map[string]*plugin.Principal
+	err       map[string]error
+}
+
+func (a *delegatingAuth) AuthPublicKey(context.Context, string, ssh.PublicKey) (*plugin.Principal, error) {
+	return nil, plugin.ErrUnsupported
+}
+
+func (a *delegatingAuth) AuthHTTP(_ context.Context, r *http.Request) (*plugin.Principal, error) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return nil, errors.New("no bearer token")
+	}
+	p := a.http[token]
+	if p == nil {
+		return nil, errors.New("unknown token")
+	}
+	out := *p
+	return &out, nil
+}
+
+func (a *delegatingAuth) AuthDelegated(_ context.Context, svc *plugin.Principal, assertion string) (*plugin.Principal, error) {
+	if err := a.err[assertion]; err != nil {
+		return nil, err
+	}
+	p := a.delegated[svc.ID+"|"+assertion]
+	if p == nil {
+		return nil, errors.New("assertion rejected")
+	}
+	out := *p
+	return &out, nil
 }
 
 // ── attach ticket renewal ───────────────────────────────────────────────────────
@@ -755,6 +958,35 @@ func newAuthzFixture(t *testing.T, backend *stubAuthz) *fixture {
 	return f
 }
 
+func newDelegationFixture(t *testing.T, authn plugin.Authenticator, backend *stubAuthz) *fixture {
+	return newDelegationFixtureWithOptions(t, authn, backend, false)
+}
+
+func newDelegationFixtureWithOptions(t *testing.T, authn plugin.Authenticator, backend *stubAuthz,
+	allowUnattended bool) *fixture {
+	t.Helper()
+	f := &fixture{
+		ledger: sessions.NewMemory(sessions.Limits{PerDevice: 1, PerPrincipal: 100}, nil),
+		live:   sessions.NewRegistry(),
+	}
+	inv := &invite.Inviter{
+		Tickets: ticket.NewMemory(time.Now), NodeURL: "wss://gw/ws/session",
+		AttachURL: "wss://gw/ws/attach", Log: quiet(),
+	}
+	api, err := apisrv.New(apisrv.Options{
+		Sessions: f.ledger, Live: f.live, Authenticator: authn,
+		Registry: staticRegistry{}, Inviter: inv,
+		Authz:     &authz.Checker{Backend: backend, Log: quiet()},
+		AttachURL: "wss://gw/ws/attach", AllowUnattended: allowUnattended, Log: quiet(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv = httptest.NewServer(api)
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
 type staticRegistry struct{}
 
 func (staticRegistry) Get(_ context.Context, id string) (*plugin.Device, error) {
@@ -768,13 +1000,62 @@ func (staticRegistry) List(context.Context, plugin.DeviceQuery) ([]*plugin.Devic
 	return nil, "", nil
 }
 
+type taggedRegistry struct {
+	tags map[string]string
+}
+
+func (r taggedRegistry) Get(_ context.Context, id string) (*plugin.Device, error) {
+	if id != "treadmill-4821" {
+		return nil, plugin.ErrNoDevice
+	}
+	return &plugin.Device{ID: id, Platform: plugin.PlatformLinux, Tags: r.tags}, nil
+}
+
+func (taggedRegistry) List(context.Context, plugin.DeviceQuery) ([]*plugin.Device, string, error) {
+	return nil, "", nil
+}
+
+type acceptingHub struct{}
+
+func (acceptingHub) Connected(string) bool { return true }
+
+func (acceptingHub) Invite(context.Context, string, frame.Invitation) error { return nil }
+
+func (acceptingHub) Cancel(context.Context, string, string, string) error { return nil }
+
+type policyAuth struct {
+	p *plugin.Principal
+}
+
+func (a policyAuth) AuthHTTP(_ context.Context, r *http.Request) (*plugin.Principal, error) {
+	if r.Header.Get("Authorization") != "Bearer "+token {
+		return nil, plugin.ErrNoDevice
+	}
+	return a.p, nil
+}
+
+func (policyAuth) AuthPublicKey(context.Context, string, ssh.PublicKey) (*plugin.Principal, error) {
+	return nil, plugin.ErrUnsupported
+}
+
+func (policyAuth) AuthDelegated(context.Context, *plugin.Principal, string) (*plugin.Principal, error) {
+	return nil, plugin.ErrUnsupported
+}
+
 func (f *fixture) postJSON(t *testing.T, path, body string) (*http.Response, []byte) {
+	t.Helper()
+	return f.postJSONWithHeaders(t, path, body, map[string]string{"Authorization": "Bearer " + token})
+}
+
+func (f *fixture) postJSONWithHeaders(t *testing.T, path, body string, headers map[string]string) (*http.Response, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, f.srv.URL+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := f.srv.Client().Do(req)
 	if err != nil {
@@ -874,6 +1155,302 @@ func TestADenialAndAnOutageAreDifferentAnswers(t *testing.T) {
 			}
 		}
 	})
+}
+
+func newRecordPolicyFixture(t *testing.T, principal *plugin.Principal,
+	policy recordpolicy.RecordInput) (*fixture, *invite.Inviter, *audit.Memory) {
+	t.Helper()
+	f := &fixture{
+		ledger: sessions.NewMemory(sessions.Limits{PerDevice: 1, PerPrincipal: 100}, nil),
+		live:   sessions.NewRegistry(),
+	}
+	auditLog := &audit.Memory{}
+	inv := &invite.Inviter{
+		Tickets: ticket.NewMemory(time.Now), Hub: acceptingHub{},
+		NodeURL: "wss://gw/ws/session", AttachURL: "wss://gw/ws/attach", Log: quiet(),
+	}
+	api, err := apisrv.New(apisrv.Options{
+		Sessions: f.ledger, Live: f.live,
+		Authenticator: policyAuth{p: principal},
+		Registry:      taggedRegistry{tags: map[string]string{"pci_scope": "true"}},
+		Inviter:       inv, Authz: &authz.Checker{Backend: &stubAuthz{allow: true}, Log: quiet()},
+		RecordInput: policy,
+		Audit:       auditLog,
+		AttachURL:   "wss://gw/ws/attach", Log: quiet(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv = httptest.NewServer(api)
+	t.Cleanup(f.srv.Close)
+	return f, inv, auditLog
+}
+
+func TestRecordInputPolicyTravelsInAttachTicket(t *testing.T) {
+	f, inv, _ := newRecordPolicyFixture(t,
+		&plugin.Principal{ID: "phuc@example.com", Groups: []string{"apac-staff"}},
+		recordpolicy.RecordInput{Rules: []recordpolicy.Rule{{
+			Name:  "pci capture",
+			When:  recordpolicy.Selector{DeviceTags: map[string]string{"pci_scope": "true"}},
+			Value: true,
+		}}},
+	)
+	resp, raw := f.postJSON(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201: %s", resp.StatusCode, raw)
+	}
+	var got struct {
+		Attach struct {
+			Ticket string `json:"ticket"`
+		} `json:"attach"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	claims, err := inv.Redeem(context.Background(), got.Attach.Ticket,
+		ticket.Want{Kind: ticket.KindAttach})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claims.RecordInput {
+		t.Fatalf("attach claims RecordInput=false, want true: %+v", claims)
+	}
+}
+
+func TestRecordInputPolicyConflictRefusesBeforeRow(t *testing.T) {
+	f, _, auditLog := newRecordPolicyFixture(t,
+		&plugin.Principal{ID: "ana@example.com", Groups: []string{"eu-staff"}},
+		recordpolicy.RecordInput{Rules: []recordpolicy.Rule{
+			{
+				Name:  "pci capture",
+				When:  recordpolicy.Selector{DeviceTags: map[string]string{"pci_scope": "true"}},
+				Value: true,
+			},
+			{
+				Authority: "employment-law",
+				When:      recordpolicy.Selector{PrincipalGroups: []string{"eu-*"}},
+				Value:     false,
+			},
+		}},
+	)
+	resp, raw := f.postJSON(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "policy_conflict") ||
+		!strings.Contains(string(raw), "pci capture") ||
+		!strings.Contains(string(raw), "employment-law") {
+		t.Fatalf("conflict response did not name both rules: %s", raw)
+	}
+	if rows, _, _ := f.ledger.List(context.Background(), sessions.Query{}); len(rows) != 0 {
+		t.Fatalf("policy conflict left %d session rows", len(rows))
+	}
+	events := auditLog.Snapshot()
+	if len(events) == 0 {
+		t.Fatal("no audit event for policy conflict")
+	}
+	last := events[len(events)-1]
+	if last.Kind != plugin.AuditAPIError || last.Code != "policy_conflict" ||
+		!strings.Contains(last.Reason, "pci capture") ||
+		!strings.Contains(last.Reason, "employment-law") {
+		t.Fatalf("audit event = %+v", last)
+	}
+}
+
+func TestBareOnBehalfOfIsRefused(t *testing.T) {
+	f := newAuthzFixture(t, &stubAuthz{allow: true})
+	resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
+		map[string]string{
+			"Authorization":         "Bearer " + token,
+			apisrv.HeaderOnBehalfOf: "phuc@example.com",
+		})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "delegation_missing_assertion") {
+		t.Fatalf("body %s", raw)
+	}
+	if rows, _, _ := f.ledger.List(context.Background(), sessions.Query{}); len(rows) != 0 {
+		t.Fatalf("bare On-Behalf-Of left %d session rows", len(rows))
+	}
+}
+
+func TestDelegationUnsupportedIsExplicit(t *testing.T) {
+	f := newAuthzFixture(t, &stubAuthz{allow: true})
+	resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
+		map[string]string{
+			"Authorization":            "Bearer " + token,
+			apisrv.HeaderOnBehalfToken: "signed-assertion",
+		})
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("status %d, want 501: %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "delegation_unsupported") {
+		t.Fatalf("body %s", raw)
+	}
+}
+
+func TestDelegatedSessionIsAttributedToTheHumanAndOpenedByTheService(t *testing.T) {
+	authn := &delegatingAuth{
+		http: map[string]*plugin.Principal{
+			"svc-token": {ID: "svc-crm"},
+		},
+		delegated: map[string]*plugin.Principal{
+			"svc-crm|assert-phuc": {ID: "phuc@example.com", Groups: []string{"oncall"}},
+		},
+		err: map[string]error{},
+	}
+	f := newDelegationFixture(t, authn, &stubAuthz{allow: true})
+	resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
+		map[string]string{
+			"Authorization":            "Bearer svc-token",
+			apisrv.HeaderOnBehalfOf:    "phuc@example.com",
+			apisrv.HeaderOnBehalfToken: "assert-phuc",
+		})
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized ||
+		resp.StatusCode == http.StatusBadRequest {
+		t.Fatalf("delegation was refused: status %d body %s", resp.StatusCode, raw)
+	}
+	rows, _, err := f.ledger.List(context.Background(), sessions.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, body %s", len(rows), raw)
+	}
+	row := rows[0]
+	if row.Principal != "phuc@example.com" || row.OpenedBy != "svc-crm" || row.Unattended {
+		t.Fatalf("row attribution = principal %q opened_by %q unattended %v",
+			row.Principal, row.OpenedBy, row.Unattended)
+	}
+}
+
+func TestDelegatedSubjectHeaderMustMatchTheAssertion(t *testing.T) {
+	authn := &delegatingAuth{
+		http: map[string]*plugin.Principal{"svc-token": {ID: "svc-crm"}},
+		delegated: map[string]*plugin.Principal{
+			"svc-crm|assert-phuc": {ID: "phuc@example.com"},
+		},
+		err: map[string]error{},
+	}
+	f := newDelegationFixture(t, authn, &stubAuthz{allow: true})
+	resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
+		map[string]string{
+			"Authorization":            "Bearer svc-token",
+			apisrv.HeaderOnBehalfOf:    "somebody-else@example.com",
+			apisrv.HeaderOnBehalfToken: "assert-phuc",
+		})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "delegation_subject_mismatch") {
+		t.Fatalf("body %s", raw)
+	}
+}
+
+func TestInvalidDelegatedAssertionIsDistinct(t *testing.T) {
+	authn := &delegatingAuth{
+		http:      map[string]*plugin.Principal{"svc-token": {ID: "svc-crm"}},
+		delegated: map[string]*plugin.Principal{},
+		err:       map[string]error{"expired": errors.New("expired assertion")},
+	}
+	f := newDelegationFixture(t, authn, &stubAuthz{allow: true})
+	resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions",
+		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
+		map[string]string{
+			"Authorization":            "Bearer svc-token",
+			apisrv.HeaderOnBehalfToken: "expired",
+		})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401: %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "delegation_invalid") {
+		t.Fatalf("body %s", raw)
+	}
+}
+
+func TestUnattendedSessionsAreQueryableSeparately(t *testing.T) {
+	f := newFixture(t, 0)
+	human := f.seed(t, "sess_human", "treadmill-4821", "phuc@example.com")
+	robot := f.seed(t, "sess_robot", "bike-7", "svc-crm")
+	robot.Unattended = true
+	if err := f.ledger.Update(context.Background(), human.ID, func(row *sessions.Session) error {
+		row.Unattended = false
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ledger.Update(context.Background(), robot.ID, func(row *sessions.Session) error {
+		row.Unattended = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, raw := f.do(t, "GET", apisrv.Prefix+"/sessions?unattended=true", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Sessions []apisrvTestSession `json:"sessions"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sessions) != 1 || out.Sessions[0].ID != "sess_robot" || !out.Sessions[0].Unattended {
+		t.Fatalf("sessions = %+v", out.Sessions)
+	}
+}
+
+func TestUnattendedSessionRequiresExplicitAPIGate(t *testing.T) {
+	authn := &delegatingAuth{
+		http: map[string]*plugin.Principal{
+			"svc-token": {ID: "svc-crm", Unattended: true},
+		},
+		delegated: map[string]*plugin.Principal{},
+		err:       map[string]error{},
+	}
+	body := `{"device_id":"treadmill-4821","reason":"scheduled diagnostic"}`
+
+	t.Run("refused by default", func(t *testing.T) {
+		f := newDelegationFixtureWithOptions(t, authn, &stubAuthz{allow: true}, false)
+		resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions", body,
+			map[string]string{"Authorization": "Bearer svc-token"})
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("status %d, want 403: %s", resp.StatusCode, raw)
+		}
+		if !strings.Contains(string(raw), "unattended_not_allowed") {
+			t.Fatalf("body %s", raw)
+		}
+	})
+
+	t.Run("tagged when allowed", func(t *testing.T) {
+		f := newDelegationFixtureWithOptions(t, authn, &stubAuthz{allow: true}, true)
+		resp, raw := f.postJSONWithHeaders(t, "/api/v1/sessions", body,
+			map[string]string{"Authorization": "Bearer svc-token"})
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized ||
+			resp.StatusCode == http.StatusBadRequest {
+			t.Fatalf("unattended session was refused: status %d body %s", resp.StatusCode, raw)
+		}
+		rows, _, err := f.ledger.List(context.Background(), sessions.Query{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Principal != "svc-crm" || !rows[0].Unattended {
+			t.Fatalf("rows = %+v", rows)
+		}
+	})
+}
+
+type apisrvTestSession struct {
+	ID         string `json:"id"`
+	Unattended bool   `json:"unattended"`
 }
 
 // TestWatchingIsItsOwnGrant: a grant to open sessions is not a grant to read other

@@ -18,6 +18,7 @@ package sessionrun
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -46,14 +47,18 @@ type Runner struct {
 	// Authz re-checks live sessions and closes the ones that lose their grant. Nil
 	// means no supervision, which is what a deployment with no authorizer gets.
 	Authz *authz.Supervisor
+	// Audit receives lifecycle events. Nil disables audit emission.
+	Audit plugin.AuditSink
 }
 
 // Params is one session's particulars.
 type Params struct {
-	SessionID string
-	DeviceID  string
-	Profile   string
-	Principal string
+	SessionID  string
+	DeviceID   string
+	Profile    string
+	Principal  string
+	OpenedBy   string
+	Unattended bool
 
 	// Grantee is the full principal, for re-checks.
 	//
@@ -88,6 +93,10 @@ type Params struct {
 	// can reach, holding the device's only slot until the idle timer fired, which is
 	// worse than closing it.
 	Reattachable bool
+
+	// RecordInput is resolved before a session is invited, when the full principal
+	// and device attributes are still available.
+	RecordInput bool
 }
 
 // Outcome is what happened, including whether it was recorded — which the caller
@@ -113,10 +122,10 @@ func (r *Runner) Prepare(ctx context.Context, p Params) (plugin.RecordingWriter,
 		rw, err = r.Recorder.Open(ctx, &plugin.SessionMeta{
 			SessionID: p.SessionID, DeviceID: p.DeviceID, Profile: p.Profile,
 			Mode: "gateway", Principal: p.Principal,
+			OpenedBy: p.OpenedBy, Unattended: p.Unattended,
 			Term: term(p.PTY), Cols: cols(p.PTY), Rows: rows(p.PTY),
-			StartedAt: startedAt,
-			// Resolved from policy in E4.S9. Off until then, and the manifest says so.
-			RecordInput: false,
+			StartedAt:   startedAt,
+			RecordInput: p.RecordInput,
 		})
 		if err != nil {
 			return nil, false, startedAt, err
@@ -127,6 +136,11 @@ func (r *Runner) Prepare(ctx context.Context, p Params) (plugin.RecordingWriter,
 			return nil
 		})
 	}
+	r.audit(ctx, plugin.AuditEvent{
+		Kind: plugin.AuditSessionOpened, SessionID: p.SessionID, DeviceID: p.DeviceID,
+		Principal: p.Principal, OpenedBy: p.OpenedBy, Surface: p.Surface,
+		Action: p.Profile,
+	})
 
 	_ = r.Sessions.Update(ctx, p.SessionID, func(row *sessions.Session) error {
 		row.State = sessions.StateAttached
@@ -312,18 +326,40 @@ func (r *Runner) Run(ctx context.Context, p Params, rw plugin.RecordingWriter,
 	log.Info("session closed", "reason", res.Reason, "exit", code,
 		"bytes_out", res.Stats.BytesOut, "dropped", res.Stats.BytesDropped,
 		"stalls", res.Stats.Stalls)
+	r.audit(final, plugin.AuditEvent{
+		Kind: plugin.AuditSessionClosed, SessionID: p.SessionID, DeviceID: p.DeviceID,
+		Principal: p.Principal, OpenedBy: p.OpenedBy, Surface: p.Surface,
+		Action: p.Profile, Reason: res.Reason,
+		Attrs: map[string]string{
+			"bytes_in":      strconv.FormatInt(res.Stats.BytesIn, 10),
+			"bytes_out":     strconv.FormatInt(res.Stats.BytesOut, 10),
+			"bytes_dropped": strconv.FormatInt(res.Stats.BytesDropped, 10),
+		},
+	})
 	return Outcome{Result: res, Recording: rw != nil, ExitCode: code}
 }
 
 // Reject marks a session that never opened, so "why did nobody get a shell on that
 // treadmill" has an answer that does not depend on the logs still existing.
 func (r *Runner) Reject(ctx context.Context, sessionID, reason string) {
+	var deviceID, principal string
 	_ = r.Sessions.Update(ctx, sessionID, func(row *sessions.Session) error {
+		deviceID, principal = row.DeviceID, row.Principal
 		row.State = sessions.StateRejected
 		row.CloseReason = reason
 		row.ClosedAt = time.Now()
 		return nil
 	})
+	r.audit(ctx, plugin.AuditEvent{
+		Kind: plugin.AuditSessionRejected, SessionID: sessionID, DeviceID: deviceID,
+		Principal: principal, Reason: reason,
+	})
+}
+
+func (r *Runner) audit(ctx context.Context, e plugin.AuditEvent) {
+	if r.Audit != nil {
+		r.Audit.Emit(ctx, e)
+	}
 }
 
 func (r *Runner) log() *slog.Logger {

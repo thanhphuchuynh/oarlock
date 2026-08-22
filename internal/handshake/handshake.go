@@ -188,6 +188,17 @@ func (g *Gateway) Accept(ctx context.Context, conn transport.Conn) (*Result, err
 
 	msg := SigningInput(nonceS, nonceC, hello.DeviceID, g.GatewayID)
 	var matched bool
+	var retired bool
+	for _, key := range dev.RetiredKeys {
+		if ed25519.Verify(key, msg, sig) {
+			retired = true
+			break
+		}
+	}
+	if retired {
+		g.reject(ctx, conn, c, log, hello.DeviceID, "retired key verifies the signature")
+		return nil, ErrAuthFailed
+	}
 	for _, key := range dev.Keys {
 		// Every registered key is tried, which is what makes rotation work: publish
 		// the new key alongside the old, let devices roll over, retire the old.

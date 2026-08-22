@@ -33,6 +33,24 @@ export interface Attach {
   expires_at: string;
 }
 
+export interface Agent {
+  device_id: string;
+  connected: boolean;
+}
+
+export interface Device {
+  id: string;
+  platform: "android" | "linux" | "container" | "other";
+  mode?: "persistent" | "dispatch" | "";
+  resolved_mode: "persistent" | "dispatch";
+  keys?: string[];
+  retired_keys?: string[];
+  allow_passthrough?: boolean;
+  tags?: Record<string, string>;
+  profiles?: string[];
+  connected: boolean;
+}
+
 /** ApiError carries the server's own condition, not a rephrasing of it. */
 export class ApiError extends Error {
   readonly code: string;
@@ -89,6 +107,26 @@ export class Client {
 
   sessions(): Promise<{ sessions: Session[] }> {
     return this.call("GET", "/api/v1/sessions?limit=50");
+  }
+
+  agents(): Promise<{ agents: Agent[] }> {
+    return this.call("GET", "/api/v1/agents");
+  }
+
+  devices(): Promise<{ devices: Device[] }> {
+    return this.call("GET", "/api/v1/devices?limit=100");
+  }
+
+  createDevice(device: Partial<Device>): Promise<Device> {
+    return this.call("POST", "/api/v1/devices", device);
+  }
+
+  deleteDevice(id: string): Promise<unknown> {
+    return this.call("DELETE", `/api/v1/devices/${encodeURIComponent(id)}`);
+  }
+
+  disconnectAgent(deviceID: string): Promise<unknown> {
+    return this.call("DELETE", `/api/v1/agents/${encodeURIComponent(deviceID)}`);
   }
 
   session(id: string): Promise<Session> {

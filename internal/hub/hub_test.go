@@ -230,6 +230,28 @@ func TestCancelWithdrawsAnInvitation(t *testing.T) {
 	}
 }
 
+func TestAdminStopStopsTheReferenceAgent(t *testing.T) {
+	f := newFixture(t, withBackoff(backoff.Policy{Base: 5 * time.Millisecond, Cap: 20 * time.Millisecond}))
+	waitFor(t, "channel up", func() bool { return f.hub.Connected(deviceID) })
+
+	if err := f.hub.Disconnect(context.Background(), deviceID, "admin_stop"); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-f.agentErr:
+		if err != nil {
+			t.Fatalf("agent returned %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent did not stop")
+	}
+	if got := f.dialer.dials.Load(); got != 1 {
+		t.Fatalf("agent redialed after admin stop: %d dials", got)
+	}
+	waitFor(t, "hub to deregister the channel", func() bool { return !f.hub.Connected(deviceID) })
+}
+
 func TestInviteWithoutAChannel(t *testing.T) {
 	h := hub.New(hub.Options{Log: quietLog()})
 	err := h.Invite(context.Background(), "nobody", frame.Invitation{SessionID: "s"})

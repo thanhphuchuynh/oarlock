@@ -5,10 +5,10 @@
 // Sessions: open, list, inspect, kill. `POST /api/v1/sessions` returns a single-use
 // attach ticket for `/ws/attach`, so it only exists now that endpoint does.
 //
-// Not here yet: idempotency keys (E7.S2), long-poll state awaiting (E7.S3), devices
-// and recordings (E5, E3.S6). `POST` also performs **no authorisation** beyond
-// authenticating the caller — `Authorizer` arrives in E4, and until then any
-// authenticated principal may open a session on any device the registry knows.
+// Not here yet: idempotency keys (E7.S2), long-poll state awaiting (E7.S3), and devices
+// (E5). `POST` authenticates the API caller, verifies delegated authority when an
+// On-Behalf-Of-Token is present, then authorises the effective human principal before a
+// device is woken.
 package apisrv
 
 import (
@@ -17,15 +17,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/oarlock/oarlock/internal/authz"
+	"github.com/oarlock/oarlock/internal/hub"
 	"github.com/oarlock/oarlock/internal/invite"
+	"github.com/oarlock/oarlock/internal/recordpolicy"
 	"github.com/oarlock/oarlock/internal/sessions"
 	"github.com/oarlock/oarlock/internal/ticket"
 	"github.com/oarlock/oarlock/pkg/condition"
@@ -40,14 +44,16 @@ const Prefix = "/api/v1"
 // Pagination and rate-limit headers. Documented here because SDK authors will guess
 // otherwise, and three SDKs guessing differently is three bugs.
 const (
-	HeaderCursor      = "Oarlock-Next-Cursor" // present when there is another page
-	HeaderRequestID   = "Oarlock-Request-Id"  // matches problem+json "instance"
-	HeaderRateLimit   = "Oarlock-RateLimit-Limit"
-	HeaderRateRemain  = "Oarlock-RateLimit-Remaining"
-	HeaderRateReset   = "Oarlock-RateLimit-Reset" // seconds until the window rolls
-	DefaultPageSize   = 100
-	MaxPageSize       = 500
-	DefaultRatePerMin = 120
+	HeaderCursor        = "Oarlock-Next-Cursor" // present when there is another page
+	HeaderRequestID     = "Oarlock-Request-Id"  // matches problem+json "instance"
+	HeaderRateLimit     = "Oarlock-RateLimit-Limit"
+	HeaderRateRemain    = "Oarlock-RateLimit-Remaining"
+	HeaderRateReset     = "Oarlock-RateLimit-Reset" // seconds until the window rolls
+	HeaderOnBehalfOf    = "On-Behalf-Of"
+	HeaderOnBehalfToken = "On-Behalf-Of-Token"
+	DefaultPageSize     = 100
+	MaxPageSize         = 500
+	DefaultRatePerMin   = 120
 )
 
 // Options configure the API.
@@ -60,12 +66,19 @@ type Options struct {
 
 	// Registry and Inviter are needed for POST /sessions. Leave them nil to serve
 	// only the read surface — which is what an API-only replica would want.
-	Registry plugin.DeviceRegistry
-	Inviter  Inviter
+	Registry      plugin.DeviceRegistry
+	RegistryAdmin plugin.DeviceRegistryAdmin
+	Inviter       Inviter
+	// Agents lists and disconnects live agent control channels on this node.
+	Agents AgentControls
 	// Replays serves recordings to the console. Nil disables the endpoint, which is
 	// what an API replica with no access to the recording store should do rather than
 	// answering 500 for every replay.
 	Replays Replays
+	// RecordInput resolves whether a session recording captures keystrokes.
+	RecordInput recordpolicy.RecordInput
+	// Audit receives API and session-control events. Nil disables audit emission.
+	Audit plugin.AuditSink
 
 	// AttachURL is the operator endpoint on **this** node. Returned to the caller so
 	// the browser reaches the replica holding the device rather than whichever one a
@@ -74,8 +87,11 @@ type Options struct {
 
 	// RatePerMinute is the per-principal request budget. Zero means the default.
 	RatePerMinute int
-	Now           func() time.Time
-	Log           *slog.Logger
+	// AllowUnattended permits a service principal marked Unattended to open a session
+	// without a delegated human subject.
+	AllowUnattended bool
+	Now             func() time.Time
+	Log             *slog.Logger
 }
 
 // Server serves /api/v1.
@@ -120,9 +136,22 @@ func New(o Options) (*Server, error) {
 	if o.Registry != nil && o.Inviter != nil {
 		s.mux.HandleFunc("POST "+Prefix+"/sessions", s.wrap(s.openSession))
 	}
+	if o.Registry != nil {
+		s.mux.HandleFunc("GET "+Prefix+"/devices", s.wrap(s.listDevices))
+		s.mux.HandleFunc("GET "+Prefix+"/devices/{id}", s.wrap(s.getDevice))
+	}
+	if o.RegistryAdmin != nil {
+		s.mux.HandleFunc("POST "+Prefix+"/devices", s.wrap(s.createDevice))
+		s.mux.HandleFunc("PUT "+Prefix+"/devices/{id}", s.wrap(s.updateDevice))
+		s.mux.HandleFunc("DELETE "+Prefix+"/devices/{id}", s.wrap(s.deleteDevice))
+	}
 	if o.Inviter != nil {
 		s.mux.HandleFunc("POST "+Prefix+"/sessions/{id}/attach", s.wrap(s.renewAttach))
 		s.mux.HandleFunc("POST "+Prefix+"/sessions/{id}/observe", s.wrap(s.observeSession))
+	}
+	if o.Agents != nil {
+		s.mux.HandleFunc("GET "+Prefix+"/agents", s.wrap(s.listAgents))
+		s.mux.HandleFunc("DELETE "+Prefix+"/agents/{id}", s.wrap(s.disconnectAgent))
 	}
 	if o.Replays != nil {
 		s.mux.HandleFunc("GET "+Prefix+"/recordings/{id}", s.wrap(s.getRecording))
@@ -170,6 +199,13 @@ func (s *Server) problem(w http.ResponseWriter, r *http.Request, status int,
 	// Logged at the same id, so "quote the instance" actually leads somewhere.
 	s.log.Warn("api error", "request", id, "code", code, "status", status,
 		"detail", detail, "path", r.URL.Path)
+	if s.o.Audit != nil {
+		s.o.Audit.Emit(r.Context(), plugin.AuditEvent{
+			Kind: plugin.AuditAPIError, Code: code, Reason: detail,
+			Outcome: strconv.Itoa(status), Retryable: retryable,
+			Attrs: map[string]string{"request": id, "path": r.URL.Path},
+		})
+	}
 }
 
 type ctxKey struct{}
@@ -227,8 +263,60 @@ func (s *Server) wrap(h handler) http.HandlerFunc {
 				"Authentication failed", "", false)
 			return
 		}
+		principal = s.delegatedPrincipal(w, r, principal)
+		if principal == nil {
+			return
+		}
 		h(w, r, principal)
 	}
+}
+
+func (s *Server) delegatedPrincipal(w http.ResponseWriter, r *http.Request,
+	service *plugin.Principal) *plugin.Principal {
+	name := strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf))
+	assertion := strings.TrimSpace(r.Header.Get(HeaderOnBehalfToken))
+	if name != "" && assertion == "" {
+		s.problem(w, r, http.StatusBadRequest, "delegation_missing_assertion",
+			"On-Behalf-Of is not proof",
+			"send On-Behalf-Of-Token; a bare subject header is refused", false)
+		return nil
+	}
+	if assertion == "" {
+		if service.Unattended && !s.o.AllowUnattended {
+			s.problem(w, r, http.StatusForbidden, "unattended_not_allowed",
+				"Unattended service sessions are not enabled",
+				"send a delegated human assertion, or enable api.allow_unattended", false)
+			return nil
+		}
+		return service
+	}
+	subject, err := s.o.Authenticator.AuthDelegated(r.Context(), service, assertion)
+	if err != nil || subject == nil {
+		if errors.Is(err, plugin.ErrUnsupported) {
+			s.problem(w, r, http.StatusNotImplemented, "delegation_unsupported",
+				"This gateway's authenticator cannot verify delegated assertions",
+				"configure an authenticator that implements AuthDelegated", false)
+			return nil
+		}
+		s.problem(w, r, http.StatusUnauthorized, "delegation_invalid",
+			"Delegated assertion was rejected", "", false)
+		return nil
+	}
+	if subject.ID == "" {
+		s.problem(w, r, http.StatusUnauthorized, "delegation_invalid",
+			"Delegated assertion was rejected", "the assertion did not name a subject", false)
+		return nil
+	}
+	if name != "" && name != subject.ID {
+		s.problem(w, r, http.StatusBadRequest, "delegation_subject_mismatch",
+			"On-Behalf-Of does not match the assertion",
+			"the header is only for logs; the token is authoritative", false)
+		return nil
+	}
+	out := *subject
+	out.OpenedBy = service.ID
+	out.Unattended = false
+	return &out
 }
 
 func clientIP(r *http.Request) string {
@@ -268,7 +356,218 @@ type Inviter interface {
 	Cancel(ctx context.Context, sessionID, reason string)
 }
 
+// AgentControls is the administrative surface for live control channels.
+type AgentControls interface {
+	Devices() []string
+	Disconnect(ctx context.Context, deviceID, reason string) error
+}
+
 // ── handlers ────────────────────────────────────────────────────────────────────
+
+type agentJSON struct {
+	DeviceID  string `json:"device_id"`
+	Connected bool   `json:"connected"`
+}
+
+type agentsResponse struct {
+	Agents []agentJSON `json:"agents"`
+}
+
+type deviceJSON struct {
+	ID               string            `json:"id"`
+	Platform         string            `json:"platform"`
+	Mode             string            `json:"mode,omitempty"`
+	ResolvedMode     string            `json:"resolved_mode"`
+	Keys             []string          `json:"keys,omitempty"`
+	RetiredKeys      []string          `json:"retired_keys,omitempty"`
+	AllowPassthrough bool              `json:"allow_passthrough,omitempty"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	Profiles         []string          `json:"profiles,omitempty"`
+	Connected        bool              `json:"connected"`
+}
+
+type devicesResponse struct {
+	Devices    []deviceJSON `json:"devices"`
+	NextCursor string       `json:"next_cursor,omitempty"`
+}
+
+func (s *Server) renderDevice(d *plugin.Device) deviceJSON {
+	out := deviceJSON{
+		ID: d.ID, Platform: string(d.Platform), Mode: string(d.Mode),
+		ResolvedMode: string(d.ResolvedMode()), AllowPassthrough: d.AllowPassthrough,
+		Tags: d.Tags, Profiles: d.Profiles,
+	}
+	for _, k := range d.Keys {
+		out.Keys = append(out.Keys, plugin.EncodeDeviceKey(k))
+	}
+	for _, k := range d.RetiredKeys {
+		out.RetiredKeys = append(out.RetiredKeys, plugin.EncodeDeviceKey(k))
+	}
+	if s.o.Agents != nil {
+		for _, id := range s.o.Agents.Devices() {
+			if id == d.ID {
+				out.Connected = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (s *Server) listDevices(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	q := plugin.DeviceQuery{
+		After:    r.URL.Query().Get("cursor"),
+		Platform: plugin.Platform(r.URL.Query().Get("platform")),
+		Mode:     plugin.Mode(r.URL.Query().Get("mode")),
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			s.problem(w, r, http.StatusBadRequest, "invalid_argument",
+				"limit must be a positive integer", "got "+v, false)
+			return
+		}
+		if n > MaxPageSize {
+			n = MaxPageSize
+		}
+		q.Limit = n
+	}
+	devs, next, err := s.o.Registry.List(r.Context(), q)
+	if err != nil {
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not list devices", err.Error(), true)
+		return
+	}
+	out := devicesResponse{Devices: make([]deviceJSON, 0, len(devs)), NextCursor: next}
+	for _, d := range devs {
+		out.Devices = append(out.Devices, s.renderDevice(d))
+	}
+	if next != "" {
+		w.Header().Set(HeaderCursor, next)
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) getDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	d, err := s.o.Registry.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, plugin.ErrNoDevice) {
+			s.problem(w, r, http.StatusNotFound, "not_found", "No such device", "", false)
+			return
+		}
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not read device", err.Error(), true)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, s.renderDevice(d))
+}
+
+func (s *Server) createDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	d, err := decodeDevice(r)
+	if err != nil {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid device", err.Error(), false)
+		return
+	}
+	if err := s.o.RegistryAdmin.Create(r.Context(), d); err != nil {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid device", err.Error(), false)
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, s.renderDevice(d))
+}
+
+func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	d, err := decodeDevice(r)
+	if err != nil {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid device", err.Error(), false)
+		return
+	}
+	if d.ID == "" {
+		d.ID = r.PathValue("id")
+	}
+	if d.ID != r.PathValue("id") {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument",
+			"Device id mismatch", "path id and body id differ", false)
+		return
+	}
+	if err := s.o.RegistryAdmin.Update(r.Context(), d); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, plugin.ErrNoDevice) {
+			status = http.StatusNotFound
+		}
+		s.problem(w, r, status, "invalid_argument", "Could not update device", err.Error(), false)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, s.renderDevice(d))
+}
+
+func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	id := r.PathValue("id")
+	if err := s.o.RegistryAdmin.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, plugin.ErrNoDevice) {
+			s.problem(w, r, http.StatusNotFound, "not_found", "No such device", "", false)
+			return
+		}
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not delete device", err.Error(), true)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+}
+
+func decodeDevice(r *http.Request) (*plugin.Device, error) {
+	var in deviceJSON
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return nil, err
+	}
+	d := &plugin.Device{
+		ID: in.ID, Platform: plugin.Platform(in.Platform), Mode: plugin.Mode(in.Mode),
+		AllowPassthrough: in.AllowPassthrough, Tags: in.Tags, Profiles: in.Profiles,
+	}
+	for i, k := range in.Keys {
+		pub, err := plugin.ParseDeviceKey(k)
+		if err != nil {
+			return nil, fmt.Errorf("keys[%d]: %w", i, err)
+		}
+		d.Keys = append(d.Keys, pub)
+	}
+	for i, k := range in.RetiredKeys {
+		pub, err := plugin.ParseDeviceKey(k)
+		if err != nil {
+			return nil, fmt.Errorf("retired_keys[%d]: %w", i, err)
+		}
+		d.RetiredKeys = append(d.RetiredKeys, pub)
+	}
+	return d, nil
+}
+
+func (s *Server) listAgents(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	devices := s.o.Agents.Devices()
+	sort.Strings(devices)
+	out := agentsResponse{Agents: make([]agentJSON, 0, len(devices))}
+	for _, id := range devices {
+		out.Agents = append(out.Agents, agentJSON{DeviceID: id, Connected: true})
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) disconnectAgent(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	id := r.PathValue("id")
+	if err := s.o.Agents.Disconnect(r.Context(), id, "admin_stop"); err != nil {
+		if errors.Is(err, hub.ErrNotConnected) {
+			s.problem(w, r, http.StatusNotFound, "not_found", "No connected agent",
+				"there is no live control channel for "+id+" on this node", false)
+			return
+		}
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not disconnect the agent", err.Error(), true)
+		return
+	}
+	s.log.Info("agent disconnected by an administrator", "device", id, "by", p.ID,
+		"request", requestID(r))
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"device_id": id, "disconnected": true,
+	})
+}
 
 type sessionJSON struct {
 	ID             string  `json:"id"`
@@ -336,6 +635,20 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, _ *plugin.
 	}
 	if r.URL.Query().Get("live") == "true" {
 		q.Live = true
+	}
+	if v := r.URL.Query().Get("unattended"); v != "" {
+		switch v {
+		case "true":
+			b := true
+			q.Unattended = &b
+		case "false":
+			b := false
+			q.Unattended = &b
+		default:
+			s.problem(w, r, http.StatusBadRequest, "invalid_argument",
+				"unattended must be true or false", "got "+v, false)
+			return
+		}
 	}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -566,11 +879,18 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 		s.refuseByAuthz(w, r, v)
 		return
 	}
+	recordInput, err := s.o.RecordInput.Resolve(p, dev)
+	if err != nil {
+		s.problem(w, r, statusFor("policy_conflict"), "policy_conflict",
+			"record_input policy conflict", err.Error(), false)
+		return
+	}
 
 	sessionID := newSessionID()
 	row := &sessions.Session{
 		ID: sessionID, DeviceID: dev.ID, Profile: req.Profile,
-		Mode: string(dev.ResolvedMode()), Principal: p.ID, Reason: req.Reason,
+		Mode: string(dev.ResolvedMode()), Principal: p.ID, OpenedBy: p.OpenedBy,
+		Unattended: p.Unattended, RecordInput: recordInput, Reason: req.Reason,
 		State: sessions.StateWaking, RecordingState: sessions.NotRecorded,
 	}
 	if err := s.o.Sessions.Create(r.Context(), row); err != nil {
@@ -587,6 +907,8 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 
 	ireq := invite.Request{
 		SessionID: sessionID, Profile: req.Profile, Principal: p.ID,
+		OpenedBy: p.OpenedBy, Unattended: p.Unattended,
+		RecordInput:  recordInput,
 		AttachTicket: true,
 	}
 	if req.PTY != nil {
@@ -648,6 +970,7 @@ var statusExceptions = map[string]int{
 	"already_attached": http.StatusConflict,
 	"session_closed":   http.StatusConflict,
 	"wrong_node":       http.StatusConflict,
+	"policy_conflict":  http.StatusConflict,
 	"doorbell_failed":  http.StatusBadGateway,
 	"gateway_shutdown": http.StatusServiceUnavailable,
 }
@@ -733,10 +1056,13 @@ func (s *Server) renewAttach(w http.ResponseWriter, r *http.Request, p *plugin.P
 	}
 
 	token, expires, err := s.o.Inviter.MintAttach(r.Context(), ticket.Claims{
-		SessionID: row.ID,
-		DeviceID:  row.DeviceID,
-		Profile:   row.Profile,
-		Principal: p.ID,
+		SessionID:   row.ID,
+		DeviceID:    row.DeviceID,
+		Profile:     row.Profile,
+		Principal:   p.ID,
+		OpenedBy:    row.OpenedBy,
+		Unattended:  row.Unattended,
+		RecordInput: row.RecordInput,
 	}, 0)
 	if err != nil {
 		s.problem(w, r, http.StatusInternalServerError, "internal",
@@ -809,6 +1135,13 @@ func (s *Server) observeSession(w http.ResponseWriter, r *http.Request, p *plugi
 	s.log.Info("watch ticket issued",
 		"session", row.ID, "observer", p.ID, "watching", row.Principal,
 		"device", row.DeviceID, "request", requestID(r))
+	if s.o.Audit != nil {
+		s.o.Audit.Emit(r.Context(), plugin.AuditEvent{
+			Kind: plugin.AuditObserveIssued, SessionID: row.ID, DeviceID: row.DeviceID,
+			Principal: row.Principal, Observer: p.ID, Action: string(plugin.ActionObserve),
+			Attrs: map[string]string{"request": requestID(r)},
+		})
+	}
 
 	s.writeJSON(w, http.StatusCreated, attachJSON{
 		Ticket:    token,

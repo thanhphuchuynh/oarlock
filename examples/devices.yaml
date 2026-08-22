@@ -23,8 +23,9 @@ devices:
     keys:
       # Either the raw base64 of the 32-byte Ed25519 key, or the form ssh-keygen
       # produces. A list, so rotation is: publish the new key, let devices roll
-      # over, retire the old.
+      # over, then move the old one to retired_keys so it cannot authenticate again.
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB6+Nvxc0k7yHqCJqmVvHTf3O7Fh0kwWQZM6xLXKZG7Y treadmill-4821"
+    retired_keys: []
     tags:
       # Tags do double duty: Authorizer selectors and record_input policy selectors
       # both match on them, so jurisdiction and compliance scope ride the mechanism

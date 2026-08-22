@@ -37,9 +37,14 @@ spec that drifts from the code is worse than no spec, because people trust it.
 | `GET` | `/api/v1/sessions/{id}` | One session, including live byte counts. |
 | `DELETE` | `/api/v1/sessions/{id}` | Kill it. `close_reason` becomes `admin_kill`. |
 | `POST` | `/api/v1/sessions/{id}/attach` | Mint a fresh attach ticket — for a reconnecting browser, or a second viewer. |
+| `GET` | `/api/v1/agents` | Connected `oarlock-agent` control channels on this gateway node. |
+| `DELETE` | `/api/v1/agents/{device_id}` | Stop one connected reference agent. It exits instead of reconnecting. |
 | `POST` | `/api/v1/devices/{id}/exec` | Run one allow-listed command, wait, return stdout, stderr and exit code. No terminal, no attach, no ticket. Creates its own session row. |
 | `GET` | `/api/v1/devices` | What the gateway knows. Connection state, mode, capabilities. |
 | `GET` | `/api/v1/devices/{id}` | One device. |
+| `POST` | `/api/v1/devices` | Add one device when the registry backend is writable, such as SQLite. |
+| `PUT` | `/api/v1/devices/{id}` | Replace one device definition when the registry backend is writable. |
+| `DELETE` | `/api/v1/devices/{id}` | Delete one device when the registry backend is writable. Existing session rows stay in the ledger. |
 | `GET` | `/api/v1/recordings/{session_id}` | The asciicast, or a redirect to a signed URL. |
 | `GET` | `/api/v1/recordings/{session_id}/meta` | The sidecar: exit code, close reason, durations, byte counts. |
 | `POST` | `/api/v1/sessions/{id}/attach` | A fresh attach ticket for a session that is already open. |
@@ -190,6 +195,30 @@ sessions are tagged (§3.1).
   separately, so both are visible and neither is lost.
 - The audit event carries both, always.
 
+The API enforces that split before any handler sees the request:
+
+| request shape | result |
+|---|---|
+| `On-Behalf-Of` without `On-Behalf-Of-Token` | `400 delegation_missing_assertion` |
+| `On-Behalf-Of-Token` on an authenticator with no `AuthDelegated` | `501 delegation_unsupported` |
+| assertion rejected, expired, replayed or outside `may_act_for` | `401 delegation_invalid` |
+| `On-Behalf-Of` value disagrees with the assertion subject | `400 delegation_subject_mismatch` |
+| valid assertion | session `principal` is the human; `opened_by` is the service |
+
+For the service-signed fallback, configure the gateway with an assertion audience, a
+signing secret, and the narrowest allow-list that works:
+
+```yaml
+api:
+  delegation_audience: oarlock-api
+  delegation_secret: 32-bytes-or-more-of-secret-material
+  delegation_max_ttl: 60s
+  may_act_for:
+    svc-crm:
+      - phuc@example.com
+      - "group:oncall-*"
+```
+
 **Why this is not optional.** A fleet of sessions attributed to `svc-crm` is an audit trail
 nobody can use: the recording shows someone typing `rm -rf`, and the only name attached is
 a robot's. The whole value of terminating SSH at the gateway is knowing who did it.
@@ -202,6 +231,9 @@ its own right, and the session is tagged `unattended: true` so it can be exclude
 "who touched this device" queries. Robots and people should never be summed into one
 number, and an unattended session is the only case where a service account's own grants
 are what authorise a session.
+
+Session listing accepts `?unattended=true` or `?unattended=false` so dashboards can keep
+scheduled diagnostics out of human-access reports.
 
 ## 4. Server SDKs
 

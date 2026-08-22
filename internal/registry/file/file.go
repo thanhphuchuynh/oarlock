@@ -29,6 +29,7 @@ type entry struct {
 	Platform         string            `yaml:"platform"`
 	Mode             string            `yaml:"mode"`
 	Keys             []string          `yaml:"keys"`
+	RetiredKeys      []string          `yaml:"retired_keys"`
 	AllowPassthrough bool              `yaml:"allow_passthrough"`
 	Tags             map[string]string `yaml:"tags"`
 	Profiles         []string          `yaml:"profiles"`
@@ -143,6 +144,23 @@ func (e entry) toDevice() (*plugin.Device, []string) {
 			continue
 		}
 		dev.Keys = append(dev.Keys, pub)
+	}
+	for j, k := range e.RetiredKeys {
+		pub, err := plugin.ParseDeviceKey(k)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("retired_keys[%d]: %v", j, err))
+			continue
+		}
+		dev.RetiredKeys = append(dev.RetiredKeys, pub)
+	}
+	for i, active := range dev.Keys {
+		for j, retired := range dev.RetiredKeys {
+			if active.Equal(retired) {
+				problems = append(problems, fmt.Sprintf(
+					"keys[%d] is also retired_keys[%d]; publish a new key before retiring the old one",
+					i, j))
+			}
+		}
 	}
 
 	// A persistent-mode device authenticates its control channel with a key. A

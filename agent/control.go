@@ -89,6 +89,9 @@ type Config struct {
 // DefaultWriteTimeout bounds writes to the control channel.
 const DefaultWriteTimeout = 10 * time.Second
 
+// ErrStoppedByGateway means the gateway asked this agent to stop rather than reconnect.
+var ErrStoppedByGateway = errors.New("agent: stopped by gateway")
+
 // Control is a control channel with a reconnect loop.
 type Control struct {
 	cfg   Config
@@ -176,6 +179,9 @@ func (c *Control) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if err != nil {
+			if errors.Is(err, ErrStoppedByGateway) {
+				return nil
+			}
 			c.log.Warn("control channel ended", "error", err, "attempt", sleeper.Attempt())
 		}
 		if wait <= 0 {
@@ -312,6 +318,9 @@ func (c *Control) serve(ctx context.Context, conn transport.Conn) (time.Duration
 			_ = frame.Unmarshal(f, &g)
 			d := time.Duration(g.ReconnectAfterMS) * time.Millisecond
 			c.log.Info("gateway is going away", "reason", g.Reason, "reconnect_in", d)
+			if g.Reason == "admin_stop" || g.Reason == "admin_disconnect" {
+				return 0, ErrStoppedByGateway
+			}
 			// The gateway's delay wins over local backoff: during a drain it is the
 			// only party that can see the whole fleet and spread it.
 			return d, nil

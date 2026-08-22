@@ -164,8 +164,18 @@ devices:
     platform: linux
     keys:
       - "<what -generate-key printed>"
+    retired_keys: []  # move old keys here after rotation
     profiles: [shell]
 ```
+
+For a real deployment, generate `ssh.host_key` once and distribute the same private key to
+every gateway replica through your secret store. Use `ssh.generate_host_key` only for this
+local demo.
+
+Input capture is controlled separately from output recording. `policy.record_input`
+matches operator attributes/groups and device tags; if two matching rules disagree, the
+gateway refuses the session with `policy_conflict` instead of guessing which obligation to
+violate.
 
 **3. Check, then start.**
 

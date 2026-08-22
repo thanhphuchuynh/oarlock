@@ -58,6 +58,7 @@ type Session struct {
 
 	State          State
 	RecordingState RecordingState
+	RecordInput    bool
 	CloseReason    string
 	ExitCode       *int
 
@@ -102,12 +103,13 @@ var (
 
 // Query filters a List.
 type Query struct {
-	DeviceID  string
-	Principal string
-	State     State
-	Live      bool // only sessions still holding a device
-	Limit     int
-	After     string
+	DeviceID   string
+	Principal  string
+	State      State
+	Live       bool // only sessions still holding a device
+	Unattended *bool
+	Limit      int
+	After      string
 }
 
 // Store is the ledger.
@@ -265,6 +267,9 @@ func (m *Memory) List(_ context.Context, q Query) ([]*Session, string, error) {
 			continue
 		}
 		if q.Live && !s.Live() {
+			continue
+		}
+		if q.Unattended != nil && s.Unattended != *q.Unattended {
 			continue
 		}
 		cp := *s

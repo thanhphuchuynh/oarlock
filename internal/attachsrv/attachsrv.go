@@ -136,14 +136,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer att.Done()
 
 	params := sessionrun.Params{
-		SessionID: claims.SessionID,
-		DeviceID:  claims.DeviceID,
-		Profile:   claims.Profile,
-		Principal: claims.Principal,
-		Surface:   "browser",
-		Device:    att.Conn,
-		Operator:  conn,
-		PTY:       open.PTY,
+		SessionID:   claims.SessionID,
+		DeviceID:    claims.DeviceID,
+		Profile:     claims.Profile,
+		Principal:   claims.Principal,
+		OpenedBy:    claims.OpenedBy,
+		Unattended:  claims.Unattended,
+		RecordInput: claims.RecordInput,
+		Surface:     "browser",
+		Device:      att.Conn,
+		Operator:    conn,
+		PTY:         open.PTY,
 		// A browser can come back. Operators lose wifi constantly, and a shell that
 		// dies with it is a shell nobody trusts with a long command.
 		Reattachable: true,

@@ -185,7 +185,8 @@ func TestNoCodeIsEmittedThatHasNoScreen(t *testing.T) {
 	// real finding, so a new entry should be obviously not a code.
 	notCodes := map[string]bool{
 		"bytes_out": true, "bytes_in": true, "key_type": true,
-		"skipped_for_safety": true, "dropped_bytes": true, "session_id": true,
+		"skipped_for_safety": true, "dropped_bytes": true, "bytes_dropped": true,
+		"session_id":     true,
 		"scrollback_len": true, "max_frame": true, "ping_interval": true,
 		"dropped_input": true, "read_only": true,
 	}

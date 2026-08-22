@@ -391,21 +391,21 @@ spec calls this the product's defining interaction.
   browser · `FR15`
 - **E4.S2** SSH-CA authenticator, promoted to recommended default; `authorized_keys` warns at
   boot that it does not scale · `FR15`
-- **E4.S3** Webhook authorizer with TTL cache and SSE `Watch` · `FR17`
+- **E4.S3** Webhook authorizer with TTL cache and SSE `Watch` · `FR17` — ✅ **done**
 - **E4.S4** **The three-outcome contract**: deny closes `revoked`; error refuses new sessions
   and grants live ones `authz.grace` re-checks before `authz_unavailable`. Fault injection
   proves zero sessions closed in a 60 s outage · `FR18, NFR13, SC5`
 - **E4.S5** Mid-session re-check loop, sub-second `Watch` closure, `admin_kill` · `FR16, FR17, FR19, SC4`
 - **E4.S6** **Delegated authority**: `AuthDelegated`, subject-token and service-signed
   assertion shapes, `may_act_for` allow-list, bare `On-Behalf-Of` refused, unattended sessions
-  tagged · `FR20, FR21`
+  tagged · `FR20, FR21` — ✅ **done**
 - **E4.S7** Device key rotation and revocation; a reset device returning with a new key under
-  an existing id is refused until re-registered · `FR22`
-- **E4.S8** Shared SSH host key across replicas, with a documented rotation procedure · `FR23`
+  an existing id is refused until re-registered · `FR22` — ✅ **done**
+- **E4.S8** Shared SSH host key across replicas, with a documented rotation procedure · `FR23` — ✅ **done**
 - **E4.S9** `record_input` selector policy over operator attributes and device tags, and
-  `policy_conflict` refusal · `FR27, FR44`
-- **E4.S10** `AuditSink` event set and anomaly counters · `FR31`
-- **E4.S11** MQTT dispatcher adapter — the mode shipped in E1.S4; this is the broker · `FR2`
+  `policy_conflict` refusal · `FR27, FR44` — ✅ **done**
+- **E4.S10** `AuditSink` event set and anomaly counters · `FR31` — ✅ **done**
+- **E4.S11** MQTT dispatcher adapter — the mode shipped in E1.S4; this is the broker · `FR2` — ✅ **done**
 
 ## Epic 5 — The rest of the protocol, and passthrough (M4)
 
