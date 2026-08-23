@@ -32,7 +32,10 @@ test("an ERROR renders its own condition and nothing else", async ({ page }) => 
 
   const f = await page.evaluate(() => window.harness.failure());
   expect(f?.condition).toBe("not_authorized");
-  expect(f?.headline).toBe("You don’t have shell access to this device.");
+  // Deliberately action-agnostic: this one condition answers shell, observe, replay,
+  // sql:read and the administrative actions, so naming shell here made four screens say
+  // something untrue. The specifics arrive in the gateway's own message below.
+  expect(f?.headline).toBe("You don’t have access to do that here.");
   expect(f?.next).toContain("Ask whoever manages access");
   // The gateway's own message is present but secondary — it is for humans and logs, and
   // the protocol says it is never parsed, so it cannot be the sentence somebody reads to

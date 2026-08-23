@@ -227,7 +227,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	}
 
 	dev, err := s.o.Registry.Get(ctx, deviceID)
-	if err != nil {
+	if err != nil || dev.Disabled {
 		// Deliberately the same message whether the device is unknown or the caller
 		// may not see it: an operator with a valid key must not be able to enumerate
 		// the fleet by trying usernames.

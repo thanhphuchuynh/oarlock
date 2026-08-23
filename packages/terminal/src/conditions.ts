@@ -201,7 +201,7 @@ export const conditions: readonly Condition[] = [
     audience: "operator",
     fault: "principal",
     retryable: false,
-    headline: "You don’t have shell access to this device.",
+    headline: "You don’t have access to do that here.",
     nextAction: "Ask whoever manages access for this fleet.",
   },
   {

@@ -132,7 +132,7 @@ func (d *Devices) UnmarshalYAML(n *yaml.Node) error {
 
 // Authz configures the authorisation backend.
 type Authz struct {
-	// Kind is "rules", "webhook", or "none" to run without authorisation. The boot gate
+	// Kind is "rules", "sqlite", "webhook", or "none" to run without authorisation. The boot gate
 	// refuses "none" in production.
 	Kind string `yaml:"kind"`
 	// Path is the rules file, for kind: rules.
@@ -157,6 +157,22 @@ type Authz struct {
 	Grace *int `yaml:"grace"`
 	// RecheckInterval is how often a live session's grant is re-checked.
 	RecheckInterval time.Duration `yaml:"recheck_interval"`
+	// Admins are principal ids allowed the administrative actions — editing device
+	// records, editing the policy, ending somebody else's session — regardless of what
+	// the backend answers.
+	//
+	// This is the break-glass, and it exists because the policy store is edited through
+	// an API the policy store authorises: on an empty store nobody could write the
+	// first permission, and deleting the last `admin:permissions` grant would lock the
+	// room. Whoever owns this file can always get back in.
+	//
+	// It grants `admin:*` and nothing else. A config administrator may repair the
+	// policy; they cannot open a shell, watch a session or query the database until
+	// they write themselves a grant — which is a visible row and an audit line, unlike
+	// a line in a config file nobody re-reads.
+	//
+	// Exact principal ids. Patterns are not accepted here on purpose.
+	Admins []string `yaml:"admins"`
 }
 
 const defaultWebhookCacheTTL = 5 * time.Second
@@ -435,6 +451,10 @@ func (c *Config) Validate() error {
 		if c.Authz.Path == "" {
 			add("authorizer.path is required for kind: rules")
 		}
+	case "sqlite":
+		if c.Store.Kind != "sqlite" {
+			add("authorizer.kind sqlite requires store.kind sqlite")
+		}
 	case "webhook":
 		if c.Authz.URL == "" {
 			add("authorizer.url is required for kind: webhook")
@@ -456,7 +476,7 @@ func (c *Config) Validate() error {
 		// division: the config file describes what was asked for, and the gate decides
 		// whether this environment may have it.
 	default:
-		add("authorizer.kind %q is not known (rules, webhook, none)", c.Authz.Kind)
+		add("authorizer.kind %q is not known (rules, sqlite, webhook, none)", c.Authz.Kind)
 	}
 	if c.Authz.Grace != nil && *c.Authz.Grace < 0 {
 		add("authorizer.grace is negative, which has no meaning. Zero is strict " +
@@ -465,6 +485,19 @@ func (c *Config) Validate() error {
 	}
 	if c.Authz.RecheckInterval < 0 {
 		add("authorizer.recheck_interval is negative")
+	}
+	for i, admin := range c.Authz.Admins {
+		switch {
+		case strings.TrimSpace(admin) == "":
+			add("authorizer.admins[%d] is empty", i)
+		case strings.ContainsAny(admin, "*?["):
+			// A pattern here would be a break-glass for a whole domain rather than a
+			// person, and the field is the one place in the config that outranks the
+			// policy store. Grants take patterns; this does not.
+			add("authorizer.admins[%d] (%q) looks like a pattern. This field takes exact "+
+				"principal ids: write a permission with actions: [\"admin:permissions\"] "+
+				"if you want a rule", i, admin)
+		}
 	}
 	switch c.Dispatch.Kind {
 	case "none":

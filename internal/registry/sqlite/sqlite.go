@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS oarlock_devices (
   id                TEXT PRIMARY KEY,
   platform          TEXT NOT NULL,
   mode              TEXT NOT NULL DEFAULT '',
+  disabled          INTEGER NOT NULL DEFAULT 0,
   allow_passthrough INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -111,7 +112,43 @@ func Open(path string) (*Registry, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("sqlite registry: applying schema: %w", err)
 	}
+	if err := ensureColumn(db, "oarlock_devices", "disabled",
+		`ALTER TABLE oarlock_devices ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("sqlite registry: migrating disabled state: %w", err)
+	}
 	return &Registry{db: db}, nil
+}
+
+func ensureColumn(db *sql.DB, table, column, alter string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	_, err = db.Exec(alter)
+	return err
 }
 
 // Close closes the underlying database.
@@ -153,7 +190,7 @@ func (r *Registry) list(ctx context.Context, q plugin.DeviceQuery, exact string)
 	}
 	args = append(args, limit+1)
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, platform, mode, allow_passthrough
+		SELECT id, platform, mode, disabled, allow_passthrough
 		FROM oarlock_devices
 		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY id
@@ -167,12 +204,13 @@ func (r *Registry) list(ctx context.Context, q plugin.DeviceQuery, exact string)
 	for rows.Next() {
 		d := &plugin.Device{}
 		var platform, mode string
-		var allow int
-		if err := rows.Scan(&d.ID, &platform, &mode, &allow); err != nil {
+		var disabled, allow int
+		if err := rows.Scan(&d.ID, &platform, &mode, &disabled, &allow); err != nil {
 			return nil, "", err
 		}
 		d.Platform = plugin.Platform(platform)
 		d.Mode = plugin.Mode(mode)
+		d.Disabled = disabled != 0
 		d.AllowPassthrough = allow != 0
 		base = append(base, d)
 	}
@@ -279,11 +317,16 @@ func (r *Registry) Create(ctx context.Context, d *plugin.Device) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO oarlock_devices (id, platform, mode, allow_passthrough)
-		VALUES (?, ?, ?, ?)`,
-		d.ID, string(d.Platform), string(d.Mode), boolToInt(d.AllowPassthrough)); err != nil {
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO oarlock_devices (id, platform, mode, disabled, allow_passthrough)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		d.ID, string(d.Platform), string(d.Mode), boolToInt(d.Disabled), boolToInt(d.AllowPassthrough))
+	if err != nil {
 		return fmt.Errorf("sqlite registry: create device: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: %q", plugin.ErrDeviceExists, d.ID)
 	}
 	if err := writeChildren(ctx, tx, d); err != nil {
 		return err
@@ -302,9 +345,9 @@ func (r *Registry) Update(ctx context.Context, d *plugin.Device) error {
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.ExecContext(ctx, `
 		UPDATE oarlock_devices
-		SET platform = ?, mode = ?, allow_passthrough = ?, updated_at = CURRENT_TIMESTAMP
+		SET platform = ?, mode = ?, disabled = ?, allow_passthrough = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`,
-		string(d.Platform), string(d.Mode), boolToInt(d.AllowPassthrough), d.ID)
+		string(d.Platform), string(d.Mode), boolToInt(d.Disabled), boolToInt(d.AllowPassthrough), d.ID)
 	if err != nil {
 		return fmt.Errorf("sqlite registry: update device: %w", err)
 	}
@@ -409,8 +452,8 @@ func validate(d *plugin.Device) error {
 		}
 	}
 	for i, p := range d.Profiles {
-		if strings.TrimSpace(p) == "" {
-			problems = append(problems, fmt.Sprintf("profiles[%d] cannot be blank", i))
+		if !plugin.ValidProfile(p) {
+			problems = append(problems, fmt.Sprintf("profiles[%d] %q is not valid", i, p))
 		}
 	}
 	if len(problems) > 0 {

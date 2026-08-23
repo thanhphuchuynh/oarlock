@@ -35,16 +35,25 @@ spec that drifts from the code is worse than no spec, because people trust it.
 | `POST` | `/api/v1/sessions` | Open a session. Returns the session and a single-use attach ticket. |
 | `GET` | `/api/v1/sessions` | List. Filter by `device_id`, `principal`, `state`, `live`. Cursor-paginated: the next cursor is in the body *and* in `Oarlock-Next-Cursor`, so a caller can page without parsing. |
 | `GET` | `/api/v1/sessions/{id}` | One session, including live byte counts. |
-| `DELETE` | `/api/v1/sessions/{id}` | Kill it. `close_reason` becomes `admin_kill`. |
+| `DELETE` | `/api/v1/sessions/{id}` | Kill it. `close_reason` becomes `admin_kill`. Your own session needs nothing; somebody else's needs `admin:kill` on its device. |
 | `POST` | `/api/v1/sessions/{id}/attach` | Mint a fresh attach ticket — for a reconnecting browser, or a second viewer. |
 | `GET` | `/api/v1/agents` | Connected `oarlock-agent` control channels on this gateway node. |
-| `DELETE` | `/api/v1/agents/{device_id}` | Stop one connected reference agent. It exits instead of reconnecting. |
+| `DELETE` | `/api/v1/agents/{device_id}` | Stop one connected reference agent. It exits instead of reconnecting. Requires `admin:kill` on the device. |
 | `POST` | `/api/v1/devices/{id}/exec` | Run one allow-listed command, wait, return stdout, stderr and exit code. No terminal, no attach, no ticket. Creates its own session row. |
 | `GET` | `/api/v1/devices` | What the gateway knows. Connection state, mode, capabilities. |
 | `GET` | `/api/v1/devices/{id}` | One device. |
+| `GET` | `/api/v1/devices/{id}/access` | Which policy rules are written about this device, denials first, evaluated by the gateway's own matcher. Requires `admin:permissions` on `gateway`. Also returns `admin_actions`, so a caller can tell "who can reach this" from "who can administer it" without keeping its own copy of the vocabulary. |
 | `POST` | `/api/v1/devices` | Add one device when the registry backend is writable, such as SQLite. |
 | `PUT` | `/api/v1/devices/{id}` | Replace one device definition when the registry backend is writable. |
 | `DELETE` | `/api/v1/devices/{id}` | Delete one device when the registry backend is writable. Existing session rows stay in the ledger. |
+| `GET` | `/api/v1/permissions` | List database-backed authorization permissions. Available with `authorizer.kind: sqlite`. |
+| `GET` | `/api/v1/permissions/{id}` | Read one permission. |
+| `POST` | `/api/v1/permissions` | Create an allow or deny permission. |
+| `PUT` | `/api/v1/permissions/{id}` | Replace a permission; changes affect subsequent authorization checks. |
+| `DELETE` | `/api/v1/permissions/{id}` | Delete a permission. Live sessions are rechecked on the configured interval. |
+| `GET` | `/api/v1/ssh` | Public SSH connection metadata, gateway host key/fingerprint, and a ready `known_hosts` entry. Never returns an operator private key. |
+| `GET` | `/api/v1/sql/schema` | List the operational tables and columns exposed to SQL Explorer. Requires `sql:read` on the synthetic `gateway` device. |
+| `POST` | `/api/v1/sql/query` | Run one bounded `SELECT` or `WITH` query against a curated read-only snapshot. Requires `sql:read` on `gateway`. |
 | `GET` | `/api/v1/recordings/{session_id}` | The asciicast, or a redirect to a signed URL. |
 | `GET` | `/api/v1/recordings/{session_id}/meta` | The sidecar: exit code, close reason, durations, byte counts. |
 | `POST` | `/api/v1/sessions/{id}/attach` | A fresh attach ticket for a session that is already open. |

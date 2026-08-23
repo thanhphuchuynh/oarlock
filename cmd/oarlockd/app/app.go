@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -66,12 +67,14 @@ import (
 	"github.com/oarlock/oarlock/internal/sessions"
 	"github.com/oarlock/oarlock/internal/sessions/sqlitestore"
 	"github.com/oarlock/oarlock/internal/sessionsrv"
+	"github.com/oarlock/oarlock/internal/sqlexplore"
 	"github.com/oarlock/oarlock/internal/sshsrv"
 	"github.com/oarlock/oarlock/internal/ticket"
 	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/plugin"
 	"github.com/oarlock/oarlock/pkg/transport/websocket"
 	"github.com/oarlock/oarlock/plugins/authz/rules"
+	authzsqlite "github.com/oarlock/oarlock/plugins/authz/sqlite"
 	authzwebhook "github.com/oarlock/oarlock/plugins/authz/webhook"
 	dispatchexec "github.com/oarlock/oarlock/plugins/dispatch/exec"
 	dispatchmqtt "github.com/oarlock/oarlock/plugins/dispatch/mqtt"
@@ -159,6 +162,7 @@ type Gateway struct {
 	Log      *slog.Logger
 
 	ledger     *sqlitestore.Store
+	sql        *sqlexplore.SQLite
 	live       *sessions.Registry
 	hub        *hub.Hub
 	inviter    *invite.Inviter
@@ -208,6 +212,13 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	}
 	g.ledger = ledger
 	g.live = sessions.NewRegistry()
+	if cfg.Store.Kind == "sqlite" && dbPath != ":memory:" {
+		explorer, err := sqlexplore.Open(dbPath)
+		if err != nil {
+			return nil, err
+		}
+		g.sql = explorer
+	}
 
 	// ── the recorder ──
 	var recorder plugin.Recorder
@@ -235,6 +246,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 
 	// ── authorisation ──
 	var backend plugin.Authorizer
+	var permissionAdmin plugin.PermissionAdmin
 	switch cfg.Authz.Kind {
 	case "rules":
 		ra, err := rules.Open(cfg.Authz.Path, log)
@@ -242,6 +254,12 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 			return nil, err
 		}
 		backend, g.authorizer = ra, ra
+	case "sqlite":
+		sa, err := authzsqlite.Open(cfg.Store.Path, nil)
+		if err != nil {
+			return nil, err
+		}
+		backend, permissionAdmin, g.authorizer = sa, sa, sa
 	case "webhook":
 		wa, err := authzwebhook.New(cfg.Authz.URL, cfg.Authz.WatchURL, cfg.Authz.Token,
 			cfg.Authz.Timeout, cfg.Authz.CacheTTL)
@@ -254,9 +272,19 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		// evaluating the gateway is not forced to write a rules file before their first
 		// shell — authentication still applies.
 		log.Warn("running with no authorizer: every authenticated operator may open a " +
-			"session on any device in the registry")
+			"session on any device in the registry, change the device registry and the " +
+			"policy store, and query the operational database")
 	}
-	checker := &authz.Checker{Backend: backend, Grace: cfg.Authz.Grace, Log: log}
+	if len(cfg.Authz.Admins) > 0 {
+		// Said out loud at every boot. A standing administrative grant that lives in a
+		// file rather than in the policy store is the kind of thing that gets added for
+		// an afternoon and found two years later.
+		log.Info("config-declared administrators may change devices, policy and live "+
+			"sessions; they may not open a session without a grant of their own",
+			"admins", strings.Join(cfg.Authz.Admins, ","))
+	}
+	checker := &authz.Checker{Backend: backend, Grace: cfg.Authz.Grace,
+		Admins: cfg.Authz.Admins, Log: log}
 	g.supervisor = &authz.Supervisor{
 		Checker: checker, Live: g.live,
 		Interval: cfg.Authz.RecheckInterval, Log: log,
@@ -290,6 +318,14 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		}
 		authnKind += "+delegated"
 	}
+	hostKey, generated, err := loadOrGenerateHostKey(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	sshInfo, err := sshConnection(cfg, hostKey)
+	if err != nil {
+		return nil, err
+	}
 
 	runner := &sessionrun.Runner{
 		Sessions: ledger, Live: g.live, Recorder: recorder,
@@ -301,7 +337,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	api, err := apisrv.New(apisrv.Options{
 		Sessions: ledger, Live: g.live, Authenticator: authn, Authz: checker,
 		Registry: reg, RegistryAdmin: registryAdmin(reg), Inviter: g.inviter,
-		Agents: g.hub, Replays: replays,
+		Permissions: permissionAdmin,
+		SSH:         sshInfo,
+		Agents:      g.hub, Replays: replays, SQL: g.sql,
 		RecordInput:     cfg.Policy.RecordInput,
 		Audit:           g.audit,
 		AttachURL:       strings.TrimRight(cfg.URL, "/") + "/ws/attach",
@@ -366,10 +404,6 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	g.httpMux = mux
 
 	// ── the SSH front door ──
-	hostKey, generated, err := loadOrGenerateHostKey(cfg, log)
-	if err != nil {
-		return nil, err
-	}
 	ssh, err := sshsrv.New(sshsrv.Options{
 		Addr: cfg.Listen.SSH, Authenticator: authn, Authz: checker,
 		AuthzSupervisor: g.supervisor, Registry: reg, Inviter: g.inviter,
@@ -410,6 +444,30 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	}
 	_ = recStoreDetail
 	return g, nil
+}
+
+func sshConnection(cfg *config.Config, signer xssh.Signer) (*apisrv.SSHConnection, error) {
+	host, port, err := net.SplitHostPort(cfg.Listen.SSH)
+	if err != nil {
+		return nil, fmt.Errorf("oarlockd: parsing SSH listen address: %w", err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		advertised, err := url.Parse(cfg.URL)
+		if err != nil || advertised.Hostname() == "" {
+			return nil, errors.New("oarlockd: cannot derive the SSH hostname from url")
+		}
+		host = advertised.Hostname()
+	}
+	public := strings.TrimSpace(string(xssh.MarshalAuthorizedKey(signer.PublicKey())))
+	knownHost := host
+	if port != "22" || strings.Contains(host, ":") {
+		knownHost = net.JoinHostPort(host, port)
+	}
+	return &apisrv.SSHConnection{
+		Host: host, Port: port, HostKey: public,
+		KnownHosts:  knownHost + " " + public,
+		Fingerprint: xssh.FingerprintSHA256(signer.PublicKey()),
+	}, nil
 }
 
 func buildDispatcher(cfg *config.Config) (plugin.Dispatcher, error) {
@@ -469,6 +527,14 @@ func registryAdmin(reg plugin.DeviceRegistry) plugin.DeviceRegistryAdmin {
 func (g *Gateway) Serve(ctx context.Context) error {
 	if err := g.Listen(); err != nil {
 		return err
+	}
+	// Owning both listeners means this process owns the local SQLite ledger. Rows left
+	// live by a crash have no corresponding in-memory handle and would otherwise hold
+	// device concurrency slots forever.
+	if n, err := g.ledger.FinishLive(ctx, "gateway_shutdown"); err != nil {
+		return fmt.Errorf("oarlockd: recovering sessions: %w", err)
+	} else if n > 0 {
+		g.Log.Warn("closed sessions left live by a previous gateway", "sessions", n)
 	}
 	g.Log.Info("oarlockd is listening",
 		"ssh", g.sshListener.Addr().String(),
@@ -563,6 +629,9 @@ func (g *Gateway) Addrs() (ssh, http string) {
 
 // Close releases everything Build acquired.
 func (g *Gateway) Close() {
+	if g.sql != nil {
+		_ = g.sql.Close()
+	}
 	if g.registry != nil {
 		_ = g.registry.Close()
 	}

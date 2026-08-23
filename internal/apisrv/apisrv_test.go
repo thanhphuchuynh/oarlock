@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -25,10 +26,12 @@ import (
 	"github.com/oarlock/oarlock/internal/recordpolicy"
 	regsqlite "github.com/oarlock/oarlock/internal/registry/sqlite"
 	"github.com/oarlock/oarlock/internal/sessions"
+	"github.com/oarlock/oarlock/internal/sqlexplore"
 	"github.com/oarlock/oarlock/internal/ticket"
 	"github.com/oarlock/oarlock/pkg/condition"
 	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/plugin"
+	authzsqlite "github.com/oarlock/oarlock/plugins/authz/sqlite"
 )
 
 const token = "test-token-long-enough-to-pass"
@@ -58,6 +61,10 @@ func newFixture(t *testing.T, ratePerMin int) *fixture {
 	api, err := apisrv.New(apisrv.Options{
 		Sessions: f.ledger, Live: f.live, Authenticator: authn,
 		Agents: f.agents, RatePerMinute: ratePerMin, Log: quiet(),
+		SSH: &apisrv.SSHConnection{
+			Host: "127.0.0.1", Port: "2222", HostKey: "ssh-ed25519 AAAAtest",
+			KnownHosts: "[127.0.0.1]:2222 ssh-ed25519 AAAAtest", Fingerprint: "SHA256:test",
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +72,127 @@ func newFixture(t *testing.T, ratePerMin int) *fixture {
 	f.srv = httptest.NewServer(api)
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+func TestSSHConnectionReturnsOnlyPublicMaterial(t *testing.T) {
+	f := newFixture(t, 0)
+	resp, body := f.do(t, http.MethodGet, apisrv.Prefix+"/ssh", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["host"] != "127.0.0.1" || got["port"] != "2222" || got["principal"] != "phuc@example.com" {
+		t.Fatalf("SSH connection = %+v", got)
+	}
+	if !strings.Contains(got["known_hosts"].(string), "ssh-ed25519") || got["fingerprint"] != "SHA256:test" {
+		t.Fatalf("public host material = %+v", got)
+	}
+	for _, forbidden := range []string{"private_key", "identity", "passphrase"} {
+		if _, exists := got[forbidden]; exists {
+			t.Fatalf("response exposed %s", forbidden)
+		}
+	}
+}
+
+type sqlStub struct{}
+
+func (sqlStub) Schema(context.Context) ([]sqlexplore.Table, error) {
+	return []sqlexplore.Table{{Name: "sessions", Columns: []sqlexplore.Column{{Name: "id", Type: "TEXT"}}}}, nil
+}
+
+func (sqlStub) Query(_ context.Context, query string, _ int) (sqlexplore.Result, error) {
+	if strings.Contains(query, "tokens") {
+		return sqlexplore.Result{}, sqlexplore.ErrInvalidQuery
+	}
+	return sqlexplore.Result{Columns: []string{"id"}, Rows: [][]any{{"ses_1"}}}, nil
+}
+
+type sqlAuthorizer struct{ allow bool }
+
+func (a sqlAuthorizer) Authorize(_ context.Context, _ *plugin.Principal, dev *plugin.Device, action plugin.Action) (plugin.Decision, error) {
+	return plugin.Decision{Allow: a.allow && dev.ID == "gateway" && action == plugin.ActionSQLRead}, nil
+}
+
+func (sqlAuthorizer) Watch(context.Context) (<-chan plugin.RevocationEvent, error) {
+	return nil, plugin.ErrUnsupported
+}
+
+type auditCapture struct{ events []plugin.AuditEvent }
+
+func (a *auditCapture) Emit(_ context.Context, event plugin.AuditEvent) {
+	a.events = append(a.events, event)
+}
+
+func newSQLHandler(t *testing.T, allow bool, capture *auditCapture) http.Handler {
+	t.Helper()
+	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api, err := apisrv.New(apisrv.Options{
+		Sessions: sessions.NewMemory(sessions.Limits{}, nil), Authenticator: authn,
+		Authz: &authz.Checker{Backend: sqlAuthorizer{allow: allow}, Log: quiet()},
+		SQL:   sqlStub{}, Audit: capture, Log: quiet(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api
+}
+
+func TestSQLQueryIsAuthorizedBoundedAndAudited(t *testing.T) {
+	capture := &auditCapture{}
+	handler := newSQLHandler(t, true, capture)
+	req := httptest.NewRequest(http.MethodPost, apisrv.Prefix+"/sql/query",
+		strings.NewReader(`{"query":"SELECT id FROM sessions","limit":10}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("audit events = %d", len(capture.events))
+	}
+	event := capture.events[0]
+	if event.Kind != plugin.AuditSQLQuery || event.Action != "sql:read" || event.Outcome != "ok" {
+		t.Fatalf("audit event = %#v", event)
+	}
+	if event.Attrs["query_sha256"] == "" || strings.Contains(event.Attrs["query_sha256"], "SELECT") {
+		t.Fatalf("unsafe query audit attributes = %#v", event.Attrs)
+	}
+}
+
+func TestSQLQueryDenialIsAudited(t *testing.T) {
+	capture := &auditCapture{}
+	handler := newSQLHandler(t, false, capture)
+	req := httptest.NewRequest(http.MethodPost, apisrv.Prefix+"/sql/query",
+		strings.NewReader(`{"query":"SELECT id FROM sessions"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if len(capture.events) != 2 || capture.events[0].Kind != plugin.AuditSQLQuery || capture.events[0].Outcome != "denied" {
+		t.Fatalf("audit events = %#v", capture.events)
+	}
+}
+
+func TestSQLQueryRejectsHiddenData(t *testing.T) {
+	capture := &auditCapture{}
+	handler := newSQLHandler(t, true, capture)
+	req := httptest.NewRequest(http.MethodPost, apisrv.Prefix+"/sql/query",
+		strings.NewReader(`{"query":"SELECT token_hash FROM tokens"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
 }
 
 type agentControls struct {
@@ -82,10 +210,11 @@ func (a *agentControls) Disconnect(_ context.Context, deviceID, reason string) e
 	if a.err != nil {
 		return a.err
 	}
-	for _, id := range a.devices {
+	for i, id := range a.devices {
 		if id == deviceID {
 			a.killed.Store(deviceID)
 			a.reason.Store(reason)
+			a.devices = append(a.devices[:i], a.devices[i+1:]...)
 			return nil
 		}
 	}
@@ -139,10 +268,14 @@ func newDeviceFixture(t *testing.T) *fixture {
 		live:   sessions.NewRegistry(),
 		agents: &agentControls{devices: []string{"treadmill-4821"}},
 	}
+	inv := &invite.Inviter{
+		Tickets: ticket.NewMemory(time.Now), NodeURL: "wss://gw/ws/session",
+		AttachURL: "wss://gw/ws/attach", Log: quiet(),
+	}
 	api, err := apisrv.New(apisrv.Options{
 		Sessions: f.ledger, Live: f.live, Authenticator: authn,
 		Registry: reg, RegistryAdmin: reg,
-		Agents: f.agents, Log: quiet(),
+		Agents: f.agents, Inviter: inv, AttachURL: "wss://gw/ws/attach", Log: quiet(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +284,36 @@ func newDeviceFixture(t *testing.T) *fixture {
 	t.Cleanup(func() {
 		f.srv.Close()
 		_ = reg.Close()
+	})
+	return f
+}
+
+func newPermissionFixture(t *testing.T) *fixture {
+	t.Helper()
+	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	permissions, err := authzsqlite.Open(filepath.Join(t.TempDir(), "oarlock.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixture{
+		ledger: sessions.NewMemory(sessions.Limits{}, nil),
+		live:   sessions.NewRegistry(),
+		agents: &agentControls{},
+	}
+	api, err := apisrv.New(apisrv.Options{
+		Sessions: f.ledger, Live: f.live, Authenticator: authn,
+		Permissions: permissions, Log: quiet(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv = httptest.NewServer(api)
+	t.Cleanup(func() {
+		f.srv.Close()
+		_ = permissions.Close()
 	})
 	return f
 }
@@ -464,6 +627,47 @@ func TestDeviceRegistryAdminAPI(t *testing.T) {
 	if created["connected"] != true || created["resolved_mode"] != "dispatch" {
 		t.Fatalf("created device = %+v", created)
 	}
+	if created["enabled"] != true {
+		t.Fatalf("new device was not enabled: %+v", created)
+	}
+
+	resp, body = f.putJSON(t, apisrv.Prefix+"/devices/treadmill-4821", `{
+		"id":"treadmill-4821",
+		"platform":"android",
+		"mode":"dispatch",
+		"enabled":false,
+		"profiles":["shell"]
+	}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("disable status %d: %s", resp.StatusCode, body)
+	}
+	var disabled map[string]any
+	if err := json.Unmarshal(body, &disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled["enabled"] != false || disabled["connected"] != false {
+		t.Fatalf("disabled device = %+v", disabled)
+	}
+	if got, _ := f.agents.killed.Load().(string); got != "treadmill-4821" {
+		t.Fatalf("disabled device did not stop agent: %q", got)
+	}
+	if got, _ := f.agents.reason.Load().(string); got != "admin_stop" {
+		t.Fatalf("agent stop reason = %q", got)
+	}
+
+	resp, body = f.postJSON(t, apisrv.Prefix+"/sessions", `{
+		"device_id":"treadmill-4821",
+		"profile":"shell",
+		"reason":"lifecycle test"
+	}`)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("disabled device open status %d, want 404: %s", resp.StatusCode, body)
+	}
+
+	resp, body = f.postJSON(t, apisrv.Prefix+"/devices", create)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate status %d, want 409: %s", resp.StatusCode, body)
+	}
 
 	resp, body = f.do(t, "GET", apisrv.Prefix+"/devices?mode=dispatch", token)
 	if resp.StatusCode != http.StatusOK {
@@ -491,6 +695,54 @@ func TestDeviceRegistryAdminAPI(t *testing.T) {
 	resp, body = f.do(t, "GET", apisrv.Prefix+"/devices/treadmill-4821", token)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status %d, want 404: %s", resp.StatusCode, body)
+	}
+}
+
+func TestPermissionAdminAPI(t *testing.T) {
+	f := newPermissionFixture(t)
+	create := `{
+		"id":"support-shell","name":"Support shell","principals":["phuc@example.com"],
+		"devices":["samsung-*"],"actions":["shell","exec"],"effect":"allow",
+		"max_duration":"15m","enabled":true
+	}`
+	resp, body := f.postJSON(t, apisrv.Prefix+"/permissions", create)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status %d: %s", resp.StatusCode, body)
+	}
+	var created map[string]any
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created["effect"] != "allow" || created["max_duration"] != "15m0s" || created["enabled"] != true {
+		t.Fatalf("created permission = %+v", created)
+	}
+
+	resp, body = f.do(t, http.MethodGet, apisrv.Prefix+"/permissions", token)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "support-shell") {
+		t.Fatalf("list status %d: %s", resp.StatusCode, body)
+	}
+
+	resp, body = f.putJSON(t, apisrv.Prefix+"/permissions/support-shell", `{
+		"id":"support-shell","name":"Support shell","principals":["phuc@example.com"],
+		"devices":["samsung-*"],"actions":["shell"],"effect":"deny",
+		"reason":"maintenance","enabled":false
+	}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update status %d: %s", resp.StatusCode, body)
+	}
+	var updated map[string]any
+	_ = json.Unmarshal(body, &updated)
+	if updated["effect"] != "deny" || updated["enabled"] != false {
+		t.Fatalf("updated permission = %+v", updated)
+	}
+
+	resp, body = f.do(t, http.MethodDelete, apisrv.Prefix+"/permissions/support-shell", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status %d: %s", resp.StatusCode, body)
+	}
+	resp, _ = f.do(t, http.MethodGet, apisrv.Prefix+"/permissions/support-shell", token)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get deleted status %d", resp.StatusCode)
 	}
 }
 
@@ -1045,6 +1297,26 @@ func (policyAuth) AuthDelegated(context.Context, *plugin.Principal, string) (*pl
 func (f *fixture) postJSON(t *testing.T, path, body string) (*http.Response, []byte) {
 	t.Helper()
 	return f.postJSONWithHeaders(t, path, body, map[string]string{"Authorization": "Bearer " + token})
+}
+
+func (f *fixture) putJSON(t *testing.T, path, body string) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, f.srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := f.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, raw
 }
 
 func (f *fixture) postJSONWithHeaders(t *testing.T, path, body string, headers map[string]string) (*http.Response, []byte) {

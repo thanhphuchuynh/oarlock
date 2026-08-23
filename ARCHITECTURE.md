@@ -407,9 +407,36 @@ Two things this buys that a bare fail-closed does not:
 setting where a session is more dangerous than an outage.
 
 **Actions** are coarse on purpose: `shell`, `exec`, `file:read`, `file:write`, `tcp`,
-`passthrough`, `replay`, `observe`. `exec` does not imply `shell` and `passthrough` implies
-nothing — a grant that lets someone open an unrecorded session is not a grant you want
-inherited.
+`passthrough`, `replay`, `observe`, `sql:read`, and the three administrative ones —
+`admin:devices`, `admin:permissions`, `admin:kill`. `exec` does not imply `shell` and
+`passthrough` implies nothing — a grant that lets someone open an unrecorded session is not
+a grant you want inherited.
+
+**The administrative actions exist because authentication is not authorisation.** A bearer
+token proves who is calling; it says nothing about whether they may rewrite the policy that
+decides what they may do. Without a gate on the admin surface, every token holder is a
+super-administrator and every other action here is advisory — anyone refused `shell` can
+grant themselves `shell`, and under `authorizer.kind: sqlite` the store that answers the
+question is the store the API writes to. So:
+
+- `admin:devices` is checked against the device being changed, against its **stored**
+  record, so that a tag-scoped grant or deny means what it says. `admin:kill` likewise. A
+  fleet lead can hold `admin:devices` on `treadmill-*` and nothing else.
+- `admin:permissions` is checked against the synthetic `gateway` device, because a
+  permission is not device-scoped. Reading the policy needs it too: a list of who may reach
+  what is a map of whom to go after.
+- Ending your own session is not administration. `admin:kill` governs ending somebody
+  else's, which is an intervention in their work.
+
+**The break-glass.** The policy store is edited through an API the policy store authorises,
+so an empty store has nobody who may write the first rule, and deleting the last
+`admin:permissions` grant would lock the room. `authorizer.admins` in the config file names
+principals allowed the administrative actions regardless of the backend's answer — logged at
+boot and on every use. It grants `admin:*` and nothing else: a config administrator can
+repair the policy, but to open a shell they must write themselves a grant, which is a
+visible row and an audit line rather than a line in a file nobody re-reads. Because the
+admin and session actions are disjoint sets, deny-beats-allow survives intact for
+everything an operator actually does on a device.
 
 `observe` is attaching read-only to a session somebody else is driving. It is deliberately
 its own action and deliberately not implied by `shell`: watching a colleague work is a
@@ -736,7 +763,7 @@ plugins/authz/rules/     the default authorizer: a YAML rules file
 plugins/dispatch/        the doorbells: exec and webhook
 packages/terminal/       @oarlock/terminal — the embeddable browser terminal
 packages/react/          @oarlock/react — thin wrappers over it
-web/                     the reference console, built into the daemon's binary
+web/                     the admin console, built into the daemon's binary
 tokens/                  the single source for every colour in the product
 tests/                   the front end's unit, component and console suites
 docs/                    these documents

@@ -406,6 +406,23 @@ spec calls this the product's defining interaction.
   `policy_conflict` refusal · `FR27, FR44` — ✅ **done**
 - **E4.S10** `AuditSink` event set and anomaly counters · `FR31` — ✅ **done**
 - **E4.S11** MQTT dispatcher adapter — the mode shipped in E1.S4; this is the broker · `FR2` — ✅ **done**
+- **E4.S12** **Authorisation on the admin surface** · `FR17, FR19` — ✅ **done**. *Added
+  2026-08-23, found by review rather than planning.* The device and permission CRUD
+  endpoints, agent stop and session kill authenticated the caller and then discarded the
+  principal. Under `authorizer.kind: sqlite` — where the store that answers authorisation
+  questions is the store the admin API writes to — that made every other action in the set
+  advisory: a token refused `sql:read` could `POST` itself a wildcard allow and ask again.
+  Confirmed by walking that path before fixing it. Three new actions (`admin:devices`,
+  `admin:permissions`, `admin:kill`), device-scoped against the **stored** record so a
+  tag-scoped deny reaches the admin surface; reading the policy is gated with the writes;
+  ending your own session needs nothing. `authorizer.admins` is the break-glass for the
+  empty-store bootstrap and grants `admin:*` only, so deny-beats-allow survives for every
+  session action. Every request emits `admin.change`, refusals included, and a policy write
+  records what it granted rather than just its id.
+
+  **The plan missed this**, and the reason is worth keeping: every story in this epic asked
+  "may this operator do this to this device" and none asked "may this operator change the
+  answer". A closed action set is only closed if the thing that edits it is inside it.
 
 ## Epic 5 — The rest of the protocol, and passthrough (M4)
 

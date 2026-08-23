@@ -53,6 +53,21 @@ authorizer:
   # which is the right setting where a session is more dangerous than an outage.
   # grace: 3
   recheck_interval: 30s
+  # Break-glass administrators, by exact principal id.
+  #
+  # The policy store is edited through an API the policy store authorises, so on an
+  # empty store nobody may write the first rule, and deleting the last
+  # `admin:permissions` grant would lock the room. Whoever owns this file can always
+  # get back in.
+  #
+  # It grants `admin:devices`, `admin:permissions` and `admin:kill` — and nothing else.
+  # A config administrator can repair the policy; they cannot open a shell, watch a
+  # session or query the database until they write themselves a grant, which is a
+  # visible row and an audit line rather than a line in a file nobody re-reads.
+  #
+  # Exact ids only. A pattern here is refused at boot.
+  admins:
+    - phuc@example.com
 
 # Optional. Required only for dispatch-mode devices that are not already connected over
 # a persistent control channel.

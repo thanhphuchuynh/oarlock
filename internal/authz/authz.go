@@ -109,7 +109,46 @@ type Checker struct {
 	//
 	// Nil means DefaultGrace.
 	Grace *int
-	Log   *slog.Logger
+
+	// Admins are principal ids the gateway's own config file declares as
+	// administrators. They are allowed the administrative actions — and nothing else.
+	//
+	// # Why this exists
+	//
+	// The policy store is edited through the API, and the API is authorised by the
+	// policy store. On an empty store nobody can write the first permission, and a
+	// store whose last `admin:permissions` grant is deleted is a locked room. One of
+	// the two has to be able to break the cycle, and it should be whoever owns the
+	// config file rather than whoever holds a token.
+	//
+	// # Why it is narrow
+	//
+	// It grants `admin:*` only. A config administrator may repair the policy; they may
+	// not open a shell, watch a session or read the database without writing themselves
+	// a grant first — and that grant is a row in the Permissions tab and a line in the
+	// audit trail, which is the difference between an administrator and a back door.
+	//
+	// Deny still wins. Nothing here overrides a `deny` rule on a session action,
+	// because the admin actions and the session actions are disjoint sets.
+	//
+	// Exact principal ids, not patterns: `*@example.com` in this field would be a
+	// footgun with the blast radius of the whole fleet.
+	Admins []string
+
+	Log *slog.Logger
+}
+
+// administrator reports whether the config file declares this principal an administrator.
+func (c *Checker) administrator(p *plugin.Principal) bool {
+	if c == nil || p == nil {
+		return false
+	}
+	for _, id := range c.Admins {
+		if id != "" && id == p.ID {
+			return true
+		}
+	}
+	return false
 }
 
 // GraceOf is a convenience for building a Checker with an explicit window.
@@ -142,6 +181,14 @@ func (c *Checker) log() *slog.Logger {
 func (c *Checker) AtOpen(ctx context.Context, p *plugin.Principal, dev *plugin.Device,
 	act plugin.Action) Result {
 	if c == nil || c.Backend == nil {
+		return Result{Outcome: Allowed}
+	}
+	if act.Administrative() && c.administrator(p) {
+		// The config file's break-glass. Logged every time, because an administrative
+		// change made on the strength of a config entry rather than a policy grant is
+		// exactly the one an auditor will want to find.
+		c.log().Info("allowed by a config-declared administrator",
+			"principal", p.ID, "device", dev.ID, "action", act)
 		return Result{Outcome: Allowed}
 	}
 	d, err := c.Backend.Authorize(ctx, p, dev, act)

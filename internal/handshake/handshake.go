@@ -181,7 +181,7 @@ func (g *Gateway) Accept(ctx context.Context, conn transport.Conn) (*Result, err
 		return nil, ErrAuthFailed
 	}
 
-	if lookupErr != nil {
+	if lookupErr != nil || dev.Disabled {
 		g.reject(ctx, conn, c, log, hello.DeviceID, "unknown device")
 		return nil, ErrAuthFailed
 	}

@@ -22,7 +22,55 @@ const (
 	ActionReplay Action = "replay"
 	// ActionObserve is watching somebody else's live session read-only.
 	ActionObserve Action = "observe"
+	// ActionSQLRead is querying the gateway's curated operational SQL view.
+	ActionSQLRead Action = "sql:read"
+
+	// The administrative actions. These govern changing the gateway's own
+	// configuration rather than using a device, and they exist because
+	// authentication is not authorisation: a bearer token that proves who you are
+	// says nothing about whether you may rewrite the policy that decides what you
+	// may do. Without them, every token holder is a super-administrator and every
+	// other action in this set is advisory — anyone refused `shell` could grant
+	// themselves `shell`.
+
+	// ActionAdminDevices is changing a device's registry record: creating it,
+	// editing it, disabling it, deleting it. Checked against the device being
+	// changed, so a grant can be scoped to part of a fleet.
+	ActionAdminDevices Action = "admin:devices"
+	// ActionAdminPermissions is reading or changing the authorisation policy
+	// itself. Checked against the gateway rather than a device, because a
+	// permission is not device-scoped — and reading the policy is administrative
+	// too: it names exactly which principal to go after.
+	ActionAdminPermissions Action = "admin:permissions"
+	// ActionAdminKill is ending somebody else's live session, or dropping a
+	// device's control channel. Checked against the device the session is on.
+	ActionAdminKill Action = "admin:kill"
 )
+
+// AdministrativeActions is the administrative subset of the action set.
+//
+// Exported because a caller displaying policy needs to tell "can open a shell on this
+// device" apart from "can change this device's record", and the alternative is every such
+// caller keeping its own list of which is which — including the browser console, one
+// network hop from this one.
+func AdministrativeActions() []Action {
+	return []Action{ActionAdminDevices, ActionAdminPermissions, ActionAdminKill}
+}
+
+// Administrative reports whether an action governs the gateway's own configuration
+// rather than the use of a device.
+//
+// The distinction earns its keep in one place: a break-glass administrator declared in
+// the gateway's config file is allowed these and *only* these (see the gateway's
+// `authorizer.admins`). Whoever owns the config file can always repair the policy, and
+// still cannot open a shell without writing a grant that everybody can see.
+func (a Action) Administrative() bool {
+	switch a {
+	case ActionAdminDevices, ActionAdminPermissions, ActionAdminKill:
+		return true
+	}
+	return false
+}
 
 // GrantLimits are per-grant overrides an Authorizer may return.
 //

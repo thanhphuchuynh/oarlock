@@ -88,7 +88,7 @@ external service — and nothing forces the defaults on you at scale.
 | Interface | Default | Also shipped |
 |---|---|---|
 | `Authenticator` | `authorized_keys` file | OIDC device flow, SSH certificate CA, static token |
-| `Authorizer` | allow-listed `principal → device` rules in YAML | HTTP webhook (with revocation stream) |
+| `Authorizer` | allow-listed `principal → device` rules in YAML | SQLite permissions with an admin UI, HTTP webhook (with revocation stream) |
 | `Recorder` | asciicast v3 on local disk | S3 / GCS streaming, `none` |
 | `SessionStore` | in-memory | SQLite, Postgres |
 | `Dispatcher` | n/a (`persistent` mode) | MQTT, HTTP webhook, `exec` |
@@ -108,7 +108,15 @@ This is the feature that justifies terminating SSH at the gateway, so it gets mo
    made again. A `no` closes the session with reason `revoked`.
 3. **`Authorizer.Watch()`** streams revocations as they happen, so a webhook backend can
    kill a live shell in under a second instead of waiting for the next re-check.
-4. **`DELETE /api/sessions/{id}`** kills one session immediately (`admin_kill`).
+4. **`DELETE /api/sessions/{id}`** kills one session immediately (`admin_kill`). Your own
+   session needs no grant; somebody else's needs `admin:kill` on its device.
+
+The same `Authorizer` gates the admin surface, which is the part that is easy to forget:
+`admin:devices`, `admin:permissions` and `admin:kill` are actions like any other, because a
+token that proves who you are must not thereby let you rewrite the policy that decides what
+you may do. `authorizer.admins` in the config file is the break-glass for an empty policy
+store, and it grants those three and nothing else — see
+[docs/plugins.md § 3.1.1](docs/plugins.md).
 
 There is no key on the device to un-deploy and no offline device that keeps honouring a
 departed employee's credential — because the device never held one.
@@ -330,10 +338,16 @@ against a real PTY, session recording with a hash chain and a signed manifest, r
 with scrollback, read-only observation, the control API, the browser attach endpoint, the
 authorisation contract with its grace window, and the embeddable terminal component.
 
-Missing: the reference console (`/ui` — the component exists, nothing serves a page that
-mounts it), OIDC and SSH-CA authenticators, the webhook authorizer, delegated authority,
-device key rotation, and the `record_input` policy. No releases and no API stability: the
-protocol in `docs/protocol.md` is `v0` and will change without ceremony until it is
+Since then: the admin console at `/ui`, the webhook authorizer with its revocation
+stream, the MQTT dispatcher, delegated authority, device key rotation and retirement, the
+`record_input` policy, the SQLite device registry and authorizer with an admin UI, and the
+authorisation gate on that admin surface.
+
+Missing: the OIDC and SSH-CA authenticators, so operator identity is still an
+`authorized_keys` file or a static token — and static tokens refuse to start outside `dev`.
+Epics 5 to 8 (the rest of the profiles, passthrough, multi-replica operation, the generated
+SDKs and the supply-chain work) are planned and unbuilt. No releases and no API stability:
+the protocol in `docs/protocol.md` is `v0` and will change without ceremony until it is
 tagged.
 
 ## Licence

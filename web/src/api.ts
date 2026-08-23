@@ -41,6 +41,7 @@ export interface Agent {
 export interface Device {
   id: string;
   platform: "android" | "linux" | "container" | "other";
+  enabled: boolean;
   mode?: "persistent" | "dispatch" | "";
   resolved_mode: "persistent" | "dispatch";
   keys?: string[];
@@ -49,6 +50,58 @@ export interface Device {
   tags?: Record<string, string>;
   profiles?: string[];
   connected: boolean;
+}
+
+export interface Permission {
+  id: string;
+  name: string;
+  principals: string[];
+  devices: string[];
+  tags: Record<string, string>;
+  actions: string[];
+  effect: "allow" | "deny";
+  reason: string;
+  priority: number;
+  enabled: boolean;
+  max_duration?: string;
+  idle?: string;
+  ttl?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Who can reach one device, and the vocabulary needed to read the answer. */
+export interface DeviceAccess {
+  device_id: string;
+  rules: Permission[];
+  /** Which actions are administrative, named by the gateway rather than guessed here. */
+  admin_actions: string[];
+}
+
+export interface SSHInfo {
+  host: string;
+  port: string;
+  principal: string;
+  host_key: string;
+  known_hosts: string;
+  fingerprint: string;
+}
+
+export interface SQLColumn {
+  name: string;
+  type: string;
+}
+
+export interface SQLTable {
+  name: string;
+  columns: SQLColumn[];
+}
+
+export interface SQLResult {
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+  duration_ms: number;
 }
 
 /** ApiError carries the server's own condition, not a rephrasing of it. */
@@ -121,12 +174,49 @@ export class Client {
     return this.call("POST", "/api/v1/devices", device);
   }
 
+  updateDevice(id: string, device: Partial<Device>): Promise<Device> {
+    return this.call("PUT", `/api/v1/devices/${encodeURIComponent(id)}`, device);
+  }
+
   deleteDevice(id: string): Promise<unknown> {
     return this.call("DELETE", `/api/v1/devices/${encodeURIComponent(id)}`);
   }
 
+  /** Who can reach one device, evaluated by the gateway's own matcher. */
+  deviceAccess(id: string): Promise<DeviceAccess> {
+    return this.call("GET", `/api/v1/devices/${encodeURIComponent(id)}/access`);
+  }
+
+  permissions(): Promise<{ permissions: Permission[] }> {
+    return this.call("GET", "/api/v1/permissions");
+  }
+
+  createPermission(permission: Partial<Permission>): Promise<Permission> {
+    return this.call("POST", "/api/v1/permissions", permission);
+  }
+
+  updatePermission(id: string, permission: Partial<Permission>): Promise<Permission> {
+    return this.call("PUT", `/api/v1/permissions/${encodeURIComponent(id)}`, permission);
+  }
+
+  deletePermission(id: string): Promise<unknown> {
+    return this.call("DELETE", `/api/v1/permissions/${encodeURIComponent(id)}`);
+  }
+
+  sshInfo(): Promise<SSHInfo> {
+    return this.call("GET", "/api/v1/ssh");
+  }
+
   disconnectAgent(deviceID: string): Promise<unknown> {
     return this.call("DELETE", `/api/v1/agents/${encodeURIComponent(deviceID)}`);
+  }
+
+  sqlSchema(): Promise<{ tables: SQLTable[] }> {
+    return this.call("GET", "/api/v1/sql/schema");
+  }
+
+  sqlQuery(query: string, limit = 200): Promise<SQLResult> {
+    return this.call("POST", "/api/v1/sql/query", { query, limit });
   }
 
   session(id: string): Promise<Session> {

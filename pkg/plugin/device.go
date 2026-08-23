@@ -20,7 +20,8 @@ import (
 
 // Errors a DeviceRegistry returns.
 var (
-	ErrNoDevice = errors.New("plugin: no such device")
+	ErrNoDevice     = errors.New("plugin: no such device")
+	ErrDeviceExists = errors.New("plugin: device already exists")
 	// ErrUnsupported is the honest answer for an optional capability a backend does
 	// not have. It is never a security failure: the gateway falls back to whatever
 	// the interface documents.
@@ -52,8 +53,14 @@ const (
 // filesystem path and an SSH username — because a device id ends up in all four.
 var deviceIDRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
+var profileRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
 // ValidDeviceID reports whether id is acceptable.
 func ValidDeviceID(id string) bool { return deviceIDRe.MatchString(id) }
+
+// ValidProfile reports whether a profile is safe to carry through logs, policy,
+// and protocol messages. Integrations may define profiles beyond the built-ins.
+func ValidProfile(profile string) bool { return profileRe.MatchString(profile) }
 
 // Device is what the gateway knows about a device. It is read-only: Oarlock does
 // not enroll devices, name them, or own their lifecycle — it reads from whatever
@@ -61,6 +68,10 @@ func ValidDeviceID(id string) bool { return deviceIDRe.MatchString(id) }
 type Device struct {
 	ID       string
 	Platform Platform
+
+	// Disabled revokes the device without deleting its registry record or history.
+	// The zero value is enabled so existing registry files remain compatible.
+	Disabled bool
 
 	// Mode overrides the platform default. Empty means resolve from Platform.
 	Mode Mode

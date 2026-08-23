@@ -14,6 +14,7 @@ package apisrv
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/oarlock/oarlock/internal/invite"
 	"github.com/oarlock/oarlock/internal/recordpolicy"
 	"github.com/oarlock/oarlock/internal/sessions"
+	"github.com/oarlock/oarlock/internal/sqlexplore"
 	"github.com/oarlock/oarlock/internal/ticket"
 	"github.com/oarlock/oarlock/pkg/condition"
 	"github.com/oarlock/oarlock/pkg/frame"
@@ -68,6 +70,8 @@ type Options struct {
 	// only the read surface — which is what an API-only replica would want.
 	Registry      plugin.DeviceRegistry
 	RegistryAdmin plugin.DeviceRegistryAdmin
+	Permissions   plugin.PermissionAdmin
+	SSH           *SSHConnection
 	Inviter       Inviter
 	// Agents lists and disconnects live agent control channels on this node.
 	Agents AgentControls
@@ -75,6 +79,8 @@ type Options struct {
 	// what an API replica with no access to the recording store should do rather than
 	// answering 500 for every replay.
 	Replays Replays
+	// SQL exposes the curated read-only operational database. Nil disables it.
+	SQL SQLExplorer
 	// RecordInput resolves whether a session recording captures keystrokes.
 	RecordInput recordpolicy.RecordInput
 	// Audit receives API and session-control events. Nil disables audit emission.
@@ -145,6 +151,19 @@ func New(o Options) (*Server, error) {
 		s.mux.HandleFunc("PUT "+Prefix+"/devices/{id}", s.wrap(s.updateDevice))
 		s.mux.HandleFunc("DELETE "+Prefix+"/devices/{id}", s.wrap(s.deleteDevice))
 	}
+	if o.Permissions != nil {
+		s.mux.HandleFunc("GET "+Prefix+"/permissions", s.wrap(s.listPermissions))
+		s.mux.HandleFunc("GET "+Prefix+"/permissions/{id}", s.wrap(s.getPermission))
+		s.mux.HandleFunc("POST "+Prefix+"/permissions", s.wrap(s.createPermission))
+		s.mux.HandleFunc("PUT "+Prefix+"/permissions/{id}", s.wrap(s.updatePermission))
+		s.mux.HandleFunc("DELETE "+Prefix+"/permissions/{id}", s.wrap(s.deletePermission))
+	}
+	if o.Permissions != nil && o.Registry != nil {
+		s.mux.HandleFunc("GET "+Prefix+"/devices/{id}/access", s.wrap(s.deviceAccess))
+	}
+	if o.SSH != nil {
+		s.mux.HandleFunc("GET "+Prefix+"/ssh", s.wrap(s.sshConnection))
+	}
 	if o.Inviter != nil {
 		s.mux.HandleFunc("POST "+Prefix+"/sessions/{id}/attach", s.wrap(s.renewAttach))
 		s.mux.HandleFunc("POST "+Prefix+"/sessions/{id}/observe", s.wrap(s.observeSession))
@@ -156,10 +175,40 @@ func New(o Options) (*Server, error) {
 	if o.Replays != nil {
 		s.mux.HandleFunc("GET "+Prefix+"/recordings/{id}", s.wrap(s.getRecording))
 	}
+	if o.SQL != nil {
+		s.mux.HandleFunc("GET "+Prefix+"/sql/schema", s.wrap(s.sqlSchema))
+		s.mux.HandleFunc("POST "+Prefix+"/sql/query", s.wrap(s.sqlQuery))
+	}
 	s.mux.HandleFunc("GET "+Prefix+"/sessions", s.wrap(s.listSessions))
 	s.mux.HandleFunc("GET "+Prefix+"/sessions/{id}", s.wrap(s.getSession))
 	s.mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", s.wrap(s.killSession))
 	return s, nil
+}
+
+// SSHConnection is public connection material safe to return to authenticated operators.
+type SSHConnection struct {
+	Host        string
+	Port        string
+	HostKey     string
+	KnownHosts  string
+	Fingerprint string
+}
+
+type sshConnectionJSON struct {
+	Host        string `json:"host"`
+	Port        string `json:"port"`
+	Principal   string `json:"principal"`
+	HostKey     string `json:"host_key"`
+	KnownHosts  string `json:"known_hosts"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+func (s *Server) sshConnection(w http.ResponseWriter, r *http.Request, principal *plugin.Principal) {
+	s.writeJSON(w, http.StatusOK, sshConnectionJSON{
+		Host: s.o.SSH.Host, Port: s.o.SSH.Port, Principal: principal.ID,
+		HostKey: s.o.SSH.HostKey, KnownHosts: s.o.SSH.KnownHosts,
+		Fingerprint: s.o.SSH.Fingerprint,
+	})
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
@@ -211,7 +260,11 @@ func (s *Server) problem(w http.ResponseWriter, r *http.Request, status int,
 type ctxKey struct{}
 
 func requestID(r *http.Request) string {
-	if v, ok := r.Context().Value(ctxKey{}).(string); ok {
+	return requestIDFromContext(r.Context())
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKey{}).(string); ok {
 		return v
 	}
 	return "req_unknown"
@@ -362,6 +415,167 @@ type AgentControls interface {
 	Disconnect(ctx context.Context, deviceID, reason string) error
 }
 
+// SQLExplorer is the bounded SQL surface used by the admin console.
+type SQLExplorer interface {
+	Schema(context.Context) ([]sqlexplore.Table, error)
+	Query(context.Context, string, int) (sqlexplore.Result, error)
+}
+
+// gatewayDevice stands in for the gateway itself, for the actions that are about the
+// gateway rather than about a device: reading the operational database, and reading or
+// writing the policy. It is a real device id in a grant — `devices: ["gateway"]` — so
+// these actions are written the same way as every other one.
+var gatewayDevice = &plugin.Device{ID: "gateway", Platform: plugin.PlatformOther}
+
+// authorizeAdmin gates one administrative request, and audits the refusal.
+//
+// Every administrative handler goes through here. That is the point: the hole this closes
+// was not a missing check in one place, it was a whole surface where the principal was
+// accepted at the door and then thrown away, so that a token which could be refused
+// `sql:read` could grant itself `sql:read`.
+func (s *Server) authorizeAdmin(w http.ResponseWriter, r *http.Request, p *plugin.Principal,
+	dev *plugin.Device, act plugin.Action) bool {
+	v := s.o.Authz.AtOpen(r.Context(), p, dev, act)
+	if v.Allow() {
+		return true
+	}
+	s.auditAdmin(r.Context(), p, dev.ID, act, "denied", v.Code)
+	s.refuseByAuthz(w, r, v)
+	return false
+}
+
+// adminDevice is the device an administrative request is checked against.
+//
+// The existing registry record, when there is one, because its tags are what a tag-scoped
+// grant or deny is written against — and the submitted body is the caller's to choose. On
+// create there is nothing to look up yet, so the submitted record is all there is; a
+// caller who may create devices can therefore create one whose tags a deny rule would
+// have matched. Scope `admin:devices` accordingly.
+func (s *Server) adminDevice(ctx context.Context, id string, fallback *plugin.Device) *plugin.Device {
+	if s.o.Registry != nil && id != "" {
+		if d, err := s.o.Registry.Get(ctx, id); err == nil {
+			return d
+		}
+	}
+	if fallback != nil {
+		return fallback
+	}
+	return &plugin.Device{ID: id}
+}
+
+// auditPermission records what a policy change actually granted.
+//
+// The id alone is not an audit trail: "perm_9f2c created" tells a reviewer nothing, and
+// the row it names may since have been edited or deleted. What the change said at the
+// moment it was made is the thing worth keeping.
+func (s *Server) auditPermission(ctx context.Context, p *plugin.Principal,
+	permission *plugin.Permission, outcome string) {
+	if s.o.Audit == nil {
+		return
+	}
+	effect := "allow"
+	if permission.Deny {
+		effect = "deny"
+	}
+	s.o.Audit.Emit(ctx, plugin.AuditEvent{
+		Kind: plugin.AuditAdminChange, DeviceID: gatewayDevice.ID, Principal: p.ID,
+		Surface: "api", Action: string(plugin.ActionAdminPermissions), Outcome: outcome,
+		Attrs: map[string]string{
+			"request":    requestIDFromContext(ctx),
+			"permission": permission.ID,
+			"effect":     effect,
+			"grants":     strings.Join(permission.Actions, ","),
+			"principals": strings.Join(permission.Principals, ","),
+			"devices":    strings.Join(permission.Devices, ","),
+			"enabled":    strconv.FormatBool(permission.Enabled),
+		},
+	})
+}
+
+func (s *Server) auditAdmin(ctx context.Context, p *plugin.Principal, deviceID string,
+	act plugin.Action, outcome, code string) {
+	if s.o.Audit == nil {
+		return
+	}
+	s.o.Audit.Emit(ctx, plugin.AuditEvent{
+		Kind: plugin.AuditAdminChange, DeviceID: deviceID, Principal: p.ID,
+		Surface: "api", Action: string(act), Outcome: outcome, Code: code,
+		Attrs: map[string]string{"request": requestIDFromContext(ctx)},
+	})
+}
+
+func (s *Server) sqlSchema(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if v := s.o.Authz.AtOpen(r.Context(), p, gatewayDevice, plugin.ActionSQLRead); !v.Allow() {
+		s.refuseByAuthz(w, r, v)
+		return
+	}
+	tables, err := s.o.SQL.Schema(r.Context())
+	if err != nil {
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not inspect the operational database", err.Error(), true)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"tables": tables})
+}
+
+type sqlQueryRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+func (s *Server) sqlQuery(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if v := s.o.Authz.AtOpen(r.Context(), p, gatewayDevice, plugin.ActionSQLRead); !v.Allow() {
+		s.auditSQL(r.Context(), p, "denied", "", 0, false)
+		s.refuseByAuthz(w, r, v)
+		return
+	}
+	var request sqlQueryRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, sqlexplore.MaxQuerySize+1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		s.auditSQL(r.Context(), p, "invalid", "", 0, false)
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument",
+			"The SQL request is invalid", err.Error(), false)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	result, err := s.o.SQL.Query(ctx, request.Query, request.Limit)
+	if err != nil {
+		outcome := "error"
+		status, code, title := http.StatusBadRequest, "invalid_argument", "The query is not allowed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome, status, code, title = "timeout", http.StatusGatewayTimeout, "query_timeout", "The query took too long"
+		} else if !errors.Is(err, sqlexplore.ErrInvalidQuery) {
+			outcome, status, code, title = "error", http.StatusInternalServerError, "internal", "The query could not run"
+		}
+		s.auditSQL(r.Context(), p, outcome, request.Query, 0, false)
+		s.problem(w, r, status, code, title, err.Error(), status >= 500)
+		return
+	}
+	s.auditSQL(r.Context(), p, "ok", request.Query, len(result.Rows), result.Truncated)
+	s.writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) auditSQL(ctx context.Context, p *plugin.Principal, outcome, query string, rows int, truncated bool) {
+	if s.o.Audit == nil {
+		return
+	}
+	digest := ""
+	if query != "" {
+		digest = fmt.Sprintf("%x", sha256.Sum256([]byte(query)))
+	}
+	s.o.Audit.Emit(ctx, plugin.AuditEvent{
+		Kind: plugin.AuditSQLQuery, DeviceID: gatewayDevice.ID, Principal: p.ID,
+		Surface: "api", Action: string(plugin.ActionSQLRead), Outcome: outcome,
+		Attrs: map[string]string{
+			"request": requestIDFromContext(ctx), "query_sha256": digest,
+			"rows": strconv.Itoa(rows), "truncated": strconv.FormatBool(truncated),
+		},
+	})
+}
+
 // ── handlers ────────────────────────────────────────────────────────────────────
 
 type agentJSON struct {
@@ -376,6 +590,7 @@ type agentsResponse struct {
 type deviceJSON struct {
 	ID               string            `json:"id"`
 	Platform         string            `json:"platform"`
+	Enabled          *bool             `json:"enabled,omitempty"`
 	Mode             string            `json:"mode,omitempty"`
 	ResolvedMode     string            `json:"resolved_mode"`
 	Keys             []string          `json:"keys,omitempty"`
@@ -392,8 +607,10 @@ type devicesResponse struct {
 }
 
 func (s *Server) renderDevice(d *plugin.Device) deviceJSON {
+	enabled := !d.Disabled
 	out := deviceJSON{
 		ID: d.ID, Platform: string(d.Platform), Mode: string(d.Mode),
+		Enabled:      &enabled,
 		ResolvedMode: string(d.ResolvedMode()), AllowPassthrough: d.AllowPassthrough,
 		Tags: d.Tags, Profiles: d.Profiles,
 	}
@@ -462,20 +679,28 @@ func (s *Server) getDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Pri
 	s.writeJSON(w, http.StatusOK, s.renderDevice(d))
 }
 
-func (s *Server) createDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+func (s *Server) createDevice(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
 	d, err := decodeDevice(r)
 	if err != nil {
 		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid device", err.Error(), false)
 		return
 	}
+	if !s.authorizeAdmin(w, r, p, d, plugin.ActionAdminDevices) {
+		return
+	}
 	if err := s.o.RegistryAdmin.Create(r.Context(), d); err != nil {
+		if errors.Is(err, plugin.ErrDeviceExists) {
+			s.problem(w, r, http.StatusConflict, "already_exists", "Device already exists", err.Error(), false)
+			return
+		}
 		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid device", err.Error(), false)
 		return
 	}
+	s.auditAdmin(r.Context(), p, d.ID, plugin.ActionAdminDevices, "created", "")
 	s.writeJSON(w, http.StatusCreated, s.renderDevice(d))
 }
 
-func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
 	d, err := decodeDevice(r)
 	if err != nil {
 		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid device", err.Error(), false)
@@ -489,6 +714,9 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, _ *plugin.
 			"Device id mismatch", "path id and body id differ", false)
 		return
 	}
+	if !s.authorizeAdmin(w, r, p, s.adminDevice(r.Context(), d.ID, d), plugin.ActionAdminDevices) {
+		return
+	}
 	if err := s.o.RegistryAdmin.Update(r.Context(), d); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, plugin.ErrNoDevice) {
@@ -497,11 +725,18 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, _ *plugin.
 		s.problem(w, r, status, "invalid_argument", "Could not update device", err.Error(), false)
 		return
 	}
+	if d.Disabled && s.o.Agents != nil {
+		_ = s.o.Agents.Disconnect(r.Context(), d.ID, "admin_stop")
+	}
+	s.auditAdmin(r.Context(), p, d.ID, plugin.ActionAdminDevices, "updated", "")
 	s.writeJSON(w, http.StatusOK, s.renderDevice(d))
 }
 
-func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
 	id := r.PathValue("id")
+	if !s.authorizeAdmin(w, r, p, s.adminDevice(r.Context(), id, nil), plugin.ActionAdminDevices) {
+		return
+	}
 	if err := s.o.RegistryAdmin.Delete(r.Context(), id); err != nil {
 		if errors.Is(err, plugin.ErrNoDevice) {
 			s.problem(w, r, http.StatusNotFound, "not_found", "No such device", "", false)
@@ -511,6 +746,7 @@ func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request, _ *plugin.
 			"Could not delete device", err.Error(), true)
 		return
 	}
+	s.auditAdmin(r.Context(), p, id, plugin.ActionAdminDevices, "deleted", "")
 	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
 }
 
@@ -522,6 +758,9 @@ func decodeDevice(r *http.Request) (*plugin.Device, error) {
 	d := &plugin.Device{
 		ID: in.ID, Platform: plugin.Platform(in.Platform), Mode: plugin.Mode(in.Mode),
 		AllowPassthrough: in.AllowPassthrough, Tags: in.Tags, Profiles: in.Profiles,
+	}
+	if in.Enabled != nil {
+		d.Disabled = !*in.Enabled
 	}
 	for i, k := range in.Keys {
 		pub, err := plugin.ParseDeviceKey(k)
@@ -540,6 +779,279 @@ func decodeDevice(r *http.Request) (*plugin.Device, error) {
 	return d, nil
 }
 
+type permissionJSON struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Principals  []string          `json:"principals"`
+	Devices     []string          `json:"devices"`
+	Tags        map[string]string `json:"tags"`
+	Actions     []string          `json:"actions"`
+	Effect      string            `json:"effect"`
+	Reason      string            `json:"reason"`
+	Priority    int               `json:"priority"`
+	Enabled     bool              `json:"enabled"`
+	MaxDuration string            `json:"max_duration,omitempty"`
+	Idle        string            `json:"idle,omitempty"`
+	TTL         string            `json:"ttl,omitempty"`
+	CreatedAt   string            `json:"created_at,omitempty"`
+	UpdatedAt   string            `json:"updated_at,omitempty"`
+}
+
+type permissionInput struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Principals  []string          `json:"principals"`
+	Devices     []string          `json:"devices"`
+	Tags        map[string]string `json:"tags"`
+	Actions     []string          `json:"actions"`
+	Effect      string            `json:"effect"`
+	Reason      string            `json:"reason"`
+	Priority    int               `json:"priority"`
+	Enabled     *bool             `json:"enabled"`
+	MaxDuration string            `json:"max_duration"`
+	Idle        string            `json:"idle"`
+	TTL         string            `json:"ttl"`
+}
+
+func renderPermission(permission *plugin.Permission) permissionJSON {
+	effect := "allow"
+	if permission.Deny {
+		effect = "deny"
+	}
+	out := permissionJSON{
+		ID: permission.ID, Name: permission.Name,
+		Principals: append([]string{}, permission.Principals...),
+		Devices:    append([]string{}, permission.Devices...),
+		Tags:       permission.Tags, Actions: append([]string{}, permission.Actions...),
+		Effect: effect, Reason: permission.Reason, Priority: permission.Priority,
+		Enabled: permission.Enabled,
+	}
+	if out.Tags == nil {
+		out.Tags = map[string]string{}
+	}
+	if permission.MaxDuration > 0 {
+		out.MaxDuration = permission.MaxDuration.String()
+	}
+	if permission.Idle > 0 {
+		out.Idle = permission.Idle.String()
+	}
+	if permission.TTL > 0 {
+		out.TTL = permission.TTL.String()
+	}
+	if !permission.CreatedAt.IsZero() {
+		out.CreatedAt = permission.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !permission.UpdatedAt.IsZero() {
+		out.UpdatedAt = permission.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return out
+}
+
+func decodePermission(r *http.Request) (*plugin.Permission, error) {
+	var input permissionInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		return nil, err
+	}
+	enabled := true
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	permission := &plugin.Permission{
+		ID: input.ID, Name: input.Name, Principals: input.Principals, Devices: input.Devices,
+		Tags: input.Tags, Actions: input.Actions, Deny: input.Effect == "deny",
+		Reason: input.Reason, Priority: input.Priority, Enabled: enabled,
+	}
+	if input.Effect != "" && input.Effect != "allow" && input.Effect != "deny" {
+		return nil, errors.New(`effect must be "allow" or "deny"`)
+	}
+	for name, value := range map[string]string{
+		"max_duration": input.MaxDuration, "idle": input.Idle, "ttl": input.TTL,
+	} {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		switch name {
+		case "max_duration":
+			permission.MaxDuration = duration
+		case "idle":
+			permission.Idle = duration
+		case "ttl":
+			permission.TTL = duration
+		}
+	}
+	return permission, nil
+}
+
+func newPermissionID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "perm_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "perm_" + hex.EncodeToString(b)
+}
+
+func (s *Server) listPermissions(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	permissions, err := s.o.Permissions.ListPermissions(r.Context())
+	if err != nil {
+		s.problem(w, r, http.StatusInternalServerError, "internal", "Could not list permissions", err.Error(), true)
+		return
+	}
+	out := make([]permissionJSON, 0, len(permissions))
+	for _, permission := range permissions {
+		out = append(out, renderPermission(permission))
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"permissions": out})
+}
+
+func (s *Server) getPermission(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	permission, err := s.o.Permissions.GetPermission(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, plugin.ErrNoPermission) {
+			s.problem(w, r, http.StatusNotFound, "not_found", "No such permission", "", false)
+			return
+		}
+		s.problem(w, r, http.StatusInternalServerError, "internal", "Could not read permission", err.Error(), true)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, renderPermission(permission))
+}
+
+func (s *Server) createPermission(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	permission, err := decodePermission(r)
+	if err != nil {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid permission", err.Error(), false)
+		return
+	}
+	if permission.ID == "" {
+		permission.ID = newPermissionID()
+	}
+	if err := s.o.Permissions.CreatePermission(r.Context(), permission); err != nil {
+		if errors.Is(err, plugin.ErrPermissionExists) {
+			s.problem(w, r, http.StatusConflict, "already_exists", "Permission already exists", err.Error(), false)
+			return
+		}
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid permission", err.Error(), false)
+		return
+	}
+	s.auditPermission(r.Context(), p, permission, "created")
+	s.writeJSON(w, http.StatusCreated, renderPermission(permission))
+}
+
+func (s *Server) updatePermission(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	permission, err := decodePermission(r)
+	if err != nil {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Invalid permission", err.Error(), false)
+		return
+	}
+	if permission.ID == "" {
+		permission.ID = r.PathValue("id")
+	}
+	if permission.ID != r.PathValue("id") {
+		s.problem(w, r, http.StatusBadRequest, "invalid_argument", "Permission id mismatch", "path id and body id differ", false)
+		return
+	}
+	if err := s.o.Permissions.UpdatePermission(r.Context(), permission); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, plugin.ErrNoPermission) {
+			status = http.StatusNotFound
+		}
+		s.problem(w, r, status, "invalid_argument", "Could not update permission", err.Error(), false)
+		return
+	}
+	s.auditPermission(r.Context(), p, permission, "updated")
+	s.writeJSON(w, http.StatusOK, renderPermission(permission))
+}
+
+func (s *Server) deletePermission(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.o.Permissions.DeletePermission(r.Context(), id); err != nil {
+		if errors.Is(err, plugin.ErrNoPermission) {
+			s.problem(w, r, http.StatusNotFound, "not_found", "No such permission", "", false)
+			return
+		}
+		s.problem(w, r, http.StatusInternalServerError, "internal", "Could not delete permission", err.Error(), true)
+		return
+	}
+	s.auditAdmin(r.Context(), p, gatewayDevice.ID, plugin.ActionAdminPermissions, "deleted",
+		"")
+	s.writeJSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+}
+
+// deviceAccess answers "who can reach this device", which is the question the fleet view
+// asks and a flat rule list cannot.
+//
+// Evaluated on the server with plugin.Permission's own matcher, not in the browser: a
+// second implementation of glob-and-tag matching one network hop from the real one would
+// drift, and a console that says somebody cannot reach a device they can is worse than no
+// console. Deny rules come first because they outrank every allow, and a list ordered by
+// anything else reads top-to-bottom like a precedence order it does not have.
+func (s *Server) deviceAccess(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	dev, err := s.o.Registry.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, plugin.ErrNoDevice) {
+			s.problem(w, r, http.StatusNotFound, "device_unknown", "No such device", "", false)
+			return
+		}
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not read device", err.Error(), true)
+		return
+	}
+	permissions, err := s.o.Permissions.ListPermissions(r.Context())
+	if err != nil {
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not read the policy", err.Error(), true)
+		return
+	}
+	denies := make([]permissionJSON, 0, 4)
+	allows := make([]permissionJSON, 0, len(permissions))
+	for _, permission := range permissions {
+		if !permission.AppliesTo(dev) {
+			continue
+		}
+		if permission.Deny {
+			denies = append(denies, renderPermission(permission))
+			continue
+		}
+		allows = append(allows, renderPermission(permission))
+	}
+	// The administrative vocabulary travels with the answer. A reader has to separate
+	// "can open a shell on this" from "can change this device's record" — they are very
+	// different sentences about a person — and the alternative is the console keeping its
+	// own copy of which actions are which, which is the same drift this endpoint exists
+	// to avoid.
+	admin := make([]string, 0, 3)
+	for _, action := range plugin.AdministrativeActions() {
+		admin = append(admin, string(action))
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"device_id":     dev.ID,
+		"rules":         append(denies, allows...),
+		"admin_actions": admin,
+	})
+}
+
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
 	devices := s.o.Agents.Devices()
 	sort.Strings(devices)
@@ -552,6 +1064,9 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request, _ *plugin.Pr
 
 func (s *Server) disconnectAgent(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
 	id := r.PathValue("id")
+	if !s.authorizeAdmin(w, r, p, s.adminDevice(r.Context(), id, nil), plugin.ActionAdminKill) {
+		return
+	}
 	if err := s.o.Agents.Disconnect(r.Context(), id, "admin_stop"); err != nil {
 		if errors.Is(err, hub.ErrNotConnected) {
 			s.problem(w, r, http.StatusNotFound, "not_found", "No connected agent",
@@ -564,6 +1079,7 @@ func (s *Server) disconnectAgent(w http.ResponseWriter, r *http.Request, p *plug
 	}
 	s.log.Info("agent disconnected by an administrator", "device", id, "by", p.ID,
 		"request", requestID(r))
+	s.auditAdmin(r.Context(), p, id, plugin.ActionAdminKill, "disconnected", "")
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"device_id": id, "disconnected": true,
 	})
@@ -714,6 +1230,15 @@ func (s *Server) killSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 		return
 	}
 
+	// Ending your own session is not administration. Anything else is: closing somebody
+	// else's shell is an intervention in their work, and it needs the grant that says so.
+	if row.Principal != p.ID {
+		if !s.authorizeAdmin(w, r, p, s.adminDevice(r.Context(), row.DeviceID, nil),
+			plugin.ActionAdminKill) {
+			return
+		}
+	}
+
 	if row.Live() {
 		if err := s.o.Live.Kill(r.Context(), id, "admin_kill"); err != nil {
 			// Live in the ledger but not on this node: it is running on another
@@ -727,6 +1252,7 @@ func (s *Server) killSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 		}
 		s.log.Info("session killed by an administrator",
 			"session", id, "by", p.ID, "request", requestID(r))
+		s.auditAdmin(r.Context(), p, row.DeviceID, plugin.ActionAdminKill, "killed", "")
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"id": id, "killed": row.Live(), "state": string(row.State),
@@ -858,7 +1384,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 	}
 
 	dev, err := s.o.Registry.Get(r.Context(), req.DeviceID)
-	if err != nil {
+	if err != nil || dev.Disabled {
 		// `device_unknown` rather than a generic `not_found`: the console renders a
 		// screen per condition, and the specific one tells an operator to check the
 		// device id while the generic one told them their application was broken.

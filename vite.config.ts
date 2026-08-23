@@ -24,8 +24,29 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwind()],
     // Relative, so the bundle works wherever the gateway mounts it.
     base: "./",
-    build: { outDir: "dist", emptyOutDir: true },
-    server: { fs: { allow: [".."] }, port: 5179, strictPort: true },
+    build: {
+      outDir: "dist",
+      emptyOutDir: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("/node_modules/react") || id.includes("/node_modules/react-dom")) {
+              return "react-vendor";
+            }
+            if (id.includes("/node_modules/@xterm/")) return "xterm";
+          },
+        },
+      },
+    },
+    server: {
+      fs: { allow: [".."] },
+      port: 5179,
+      strictPort: true,
+      proxy: {
+        "/api": "http://127.0.0.1:8443",
+        "/ws": { target: "ws://127.0.0.1:8443", ws: true },
+      },
+    },
     resolve: { preserveSymlinks: false },
   };
 });

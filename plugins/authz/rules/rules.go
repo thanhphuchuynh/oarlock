@@ -317,6 +317,8 @@ func matchAction(actions []string, act plugin.Action) bool {
 var allActions = []plugin.Action{
 	plugin.ActionShell, plugin.ActionExec, plugin.ActionFileRead, plugin.ActionFileWrite,
 	plugin.ActionTCP, plugin.ActionPassthrough, plugin.ActionReplay, plugin.ActionObserve,
+	plugin.ActionSQLRead,
+	plugin.ActionAdminDevices, plugin.ActionAdminPermissions, plugin.ActionAdminKill,
 }
 
 func knownAction(s string) bool {

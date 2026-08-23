@@ -80,6 +80,28 @@ authorizer:
 	}
 }
 
+func TestSQLiteAuthorizerUsesOperationalStore(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+env: dev
+url: ws://127.0.0.1:8443
+store:
+  kind: sqlite
+  path: ./operations.db
+devices:
+  kind: sqlite
+ssh:
+  host_key: hostkey
+authorizer:
+  kind: sqlite
+`), "test.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Authz.Kind != "sqlite" || cfg.Store.Path != "./operations.db" {
+		t.Fatalf("config = %+v / %+v", cfg.Authz, cfg.Store)
+	}
+}
+
 func TestAuditConfigDefaultsAndValidation(t *testing.T) {
 	cfg, err := config.Parse([]byte(`
 env: dev
@@ -371,5 +393,47 @@ recorder:
 	}
 	if !strings.Contains(err.Error(), "recordpolicy") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestAdminsAreExactPrincipalIds. `authorizer.admins` is the one field in the file that
+// outranks the policy store, so a pattern there would be a break-glass for a whole
+// domain. Grants take patterns; this does not.
+func TestAdminsAreExactPrincipalIds(t *testing.T) {
+	base := `
+env: dev
+url: ws://127.0.0.1:8443
+devices: devices.yaml
+ssh:
+  host_key: hostkey
+recorder:
+  dir: recordings
+  signing_key: recording.key
+authorizer:
+  kind: none
+`
+	c, err := config.Parse([]byte(base+"  admins:\n    - root@example.com\n"), "test.yaml")
+	if err != nil {
+		t.Fatalf("an exact id was refused: %v", err)
+	}
+	if len(c.Authz.Admins) != 1 || c.Authz.Admins[0] != "root@example.com" {
+		t.Fatalf("admins = %#v", c.Authz.Admins)
+	}
+
+	for _, tc := range []struct{ name, value, want string }{
+		{"a glob", `"*@example.com"`, "looks like a pattern"},
+		{"a single-character wildcard", `"root?@example.com"`, "looks like a pattern"},
+		{"a character class", `"root[12]@example.com"`, "looks like a pattern"},
+		{"an empty entry", `""`, "is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Parse([]byte(base+"  admins:\n    - "+tc.value+"\n"), "test.yaml")
+			if err == nil {
+				t.Fatalf("%s was accepted", tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }

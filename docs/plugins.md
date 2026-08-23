@@ -223,9 +223,103 @@ naming neither a principal nor a device, which is the explicit way to state it.
 | built-in | notes |
 |---|---|
 | `rules` (default) | `principal → device selector → actions` in YAML, reloaded on file change. Selectors match on device id, tags, or glob; a `deny: true` rule beats every allow. **Never returns an error** — its source of truth is a file already in memory, so there is no outage in which it starts denying people, and a file that fails to reload leaves the previous rules in place. |
+| `sqlite` | Durable permissions in the operational database, managed through `/api/v1/permissions` and the admin UI. Supports principal/device globs, exact device tags, actions, deny precedence and grant limits. A database failure is reported as `authz_unavailable`, never as a denial. |
 | `webhook` | `POST` per decision with a short cache TTL, plus an SSE endpoint for `Watch`. The escape hatch for anything: Casdoor, OPA, a permission table in your own database. |
 
-### 3.1 The `rules` file
+### 3.1 SQLite permissions
+
+```yaml
+store:
+  kind: sqlite
+  path: ./oarlock.db
+
+authorizer:
+  kind: sqlite
+  recheck_interval: 30s
+```
+
+The backend creates `oarlock_permissions` on first boot. Permission selectors and actions
+are stored as JSON columns so one permission is replaced atomically; public policy data is
+also available in the curated SQL Explorer snapshot. Private operator and device keys are
+not stored in this table.
+
+**`Watch` is unsupported here**, so revocation lands on the re-check interval rather than
+within the second. ADR-029 makes the interval the guarantee and `Watch` the optimisation,
+so this is a supported configuration — but a permission disabled in the admin UI does not
+close a live session immediately. Kill the session if you need it gone now.
+
+### 3.1.1 Administering the policy
+
+The admin API is authorised by the policy it edits, which needs saying out loud because the
+first version of it was not. Three actions govern the surface:
+
+| action | checked against | governs |
+|---|---|---|
+| `admin:devices` | the device being changed, as **stored** | `POST`/`PUT`/`DELETE /api/v1/devices` |
+| `admin:permissions` | the synthetic `gateway` device | all of `/api/v1/permissions`, reads included |
+| `admin:kill` | the session's or agent's device | `DELETE /api/v1/sessions/{id}` for somebody else's session, `DELETE /api/v1/agents/{id}` |
+
+```yaml
+# A fleet lead who runs the treadmills and cannot touch policy.
+- principals: ["lead@example.com"]
+  devices: ["treadmill-*"]
+  actions: ["admin:devices", "admin:kill"]
+
+# Access management, which is a different job.
+- principals: ["security@example.com"]
+  devices: ["gateway"]
+  actions: ["admin:permissions"]
+```
+
+`GET /api/v1/devices/{id}/access` answers the other direction — which rules are written
+about one device, denials first. It exists because a flat rule list cannot answer "who can
+reach this thing": that needs glob-and-tag matching, and the one place it must not be
+re-implemented is a browser one hop from the backend that owns it. `plugin.Permission`'s
+`AppliesTo`, `MatchesPrincipal` and `Grants` are the shared predicates, so the admin view
+and the decision cannot disagree about what a rule means.
+
+Notes worth having before you write these:
+
+- **Reading the policy needs `admin:permissions`.** A list of who may reach what is a map
+  of whom to phish, so `GET` is gated with the writes.
+- **`admin:devices` is checked against the stored record**, so a `tags:` deny reaches the
+  admin surface. On *create* there is no stored record yet, so a caller who may create
+  devices can create one whose tags a deny would have matched. Scope create-capable grants
+  accordingly.
+- **Ending your own session needs nothing.** `admin:kill` is about ending somebody else's.
+- **Neither implies the other, and neither implies a session.** `admin:devices` on `*` does
+  not get you a shell.
+
+### 3.1.2 `authorizer.admins`: the break-glass
+
+```yaml
+authorizer:
+  kind: sqlite
+  admins:
+    - root@example.com
+```
+
+An empty policy store has nobody who may write the first rule, and deleting the last
+`admin:permissions` grant locks the room. This field names principals — exact ids, patterns
+are refused at boot — who are allowed the administrative actions regardless of what the
+backend answers, so whoever owns the config file can always get back in. It is logged at
+boot and on every use.
+
+**It grants `admin:*` and nothing else.** A config administrator may repair the policy; to
+open a shell, watch a session or query the database they must write themselves a grant,
+which is a visible row and an audit line rather than a line in a file nobody re-reads.
+
+**It does outrank a deny on the administrative actions.** That is deliberate: anyone who
+can edit this file can also edit the rules file, repoint the database or restart with a
+different backend, so a deny row cannot meaningfully constrain them, and pretending
+otherwise would only cost the recovery the field exists for. It does not reach a session
+action, so `deny`-beats-`allow` holds for everything an operator does on a device.
+
+Every administrative request emits `admin.change`, refusals included, and a policy write
+records what the rule granted — principals, devices, actions, effect — rather than just its
+id, because the row it names may since have been edited away.
+
+### 3.2 The `rules` file
 
 ```yaml
 rules:
@@ -268,7 +362,7 @@ rules:
   to every operator it hit.
 - **Unknown keys are refused.** A typo in a key name must not silently mean "default".
 
-### 3.2 The `webhook` authorizer
+### 3.3 The `webhook` authorizer
 
 Use `webhook` when the source of truth lives somewhere else: OPA, Casdoor, an internal
 permission table, or a service that already understands on-call state.
@@ -561,6 +655,7 @@ type DeviceRegistry interface {
 type Device struct {
     ID               string
     Platform         Platform             // android | linux | container | other
+    Disabled         bool                 // revoke access without deleting history
     Mode             Mode                 // persistent | dispatch | "" = resolve from Platform
     Keys             []ed25519.PublicKey  // control-channel identity; a list, so keys rotate
     RetiredKeys      []ed25519.PublicKey  // old identities that must no longer authenticate
@@ -607,6 +702,11 @@ fleet. A backend may also implement `DeviceRegistryAdmin` to create, update and 
 devices through the admin API/UI. The default `file` backend remains a YAML list, which is
 enough for a lab and intentionally not rewritten by the gateway; the built-in `sqlite`
 backend stores editable devices in the operational DB with `oarlock_` table prefixes.
+
+Disabling a device is an operational revocation: the gateway stops its connected agent,
+rejects new control-channel handshakes, and refuses new SSH or browser sessions. The registry
+row and all existing session history remain available. Re-enabling allows the device to
+authenticate and reconnect again.
 
 ```yaml
 store:
@@ -733,7 +833,7 @@ node dying does not strand its devices; TTL defaults to 3× the renew interval.
 | `memory` (default) | single node. `Lookup` always returns self. |
 | `redis` | `SET NX PX` claim, `EXPIRE` renew. |
 
-## 10. `AuditSink` — the events
+## 10.1 `AuditSink` — the event set
 
 ```go
 type AuditSink interface {

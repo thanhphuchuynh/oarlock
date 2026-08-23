@@ -171,9 +171,14 @@ var set = []Condition{
 
 	// ── authorisation ────────────────────────────────────────────────────────────
 	{
+		// Not "shell access": this one condition answers every action in the set —
+		// opening a shell, watching somebody's session, reading a recording, querying
+		// the database, changing the policy. Naming shell here made four of those
+		// screens say something that was not true, and the specifics arrive anyway in
+		// the detail line, which carries whoever-wrote-the-rule's own sentence.
 		ID: "not_authorized", Kind: Error, Audience: Operator,
 		Fault:      FaultPrincipal,
-		Headline:   "You don’t have shell access to this device.",
+		Headline:   "You don’t have access to do that here.",
 		NextAction: "Ask whoever manages access for this fleet.",
 	},
 	{

@@ -27,6 +27,7 @@ type doc struct {
 type entry struct {
 	ID               string            `yaml:"id"`
 	Platform         string            `yaml:"platform"`
+	Disabled         bool              `yaml:"disabled"`
 	Mode             string            `yaml:"mode"`
 	Keys             []string          `yaml:"keys"`
 	RetiredKeys      []string          `yaml:"retired_keys"`
@@ -134,6 +135,7 @@ func (e entry) toDevice() (*plugin.Device, []string) {
 
 	dev := &plugin.Device{
 		ID: e.ID, Platform: platform, Mode: mode,
+		Disabled:         e.Disabled,
 		AllowPassthrough: e.AllowPassthrough,
 		Tags:             e.Tags, Profiles: e.Profiles,
 	}
@@ -169,6 +171,11 @@ func (e entry) toDevice() (*plugin.Device, []string) {
 	if len(dev.Keys) == 0 && dev.ResolvedMode() == plugin.ModePersistent {
 		problems = append(problems, "a persistent-mode device needs at least one key "+
 			"(set mode: dispatch if it is never expected to hold a control channel)")
+	}
+	for i, profile := range dev.Profiles {
+		if !plugin.ValidProfile(profile) {
+			problems = append(problems, fmt.Sprintf("profiles[%d] %q is not valid", i, profile))
+		}
 	}
 	if len(problems) > 0 {
 		return nil, problems

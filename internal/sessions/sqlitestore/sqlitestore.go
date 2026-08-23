@@ -275,6 +275,25 @@ func (s *Store) Finish(ctx context.Context, id string, r sessions.Result) error 
 	})
 }
 
+// FinishLive finalises sessions left live by a previous owner of this SQLite ledger.
+// Callers must establish exclusive gateway ownership before invoking it; otherwise a
+// second process that merely opened the database could close sessions still running.
+func (s *Store) FinishLive(ctx context.Context, reason string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET state = 'closed', close_reason = CASE WHEN close_reason = '' THEN ? ELSE close_reason END,
+		    closed_at = ?, live_device = NULL
+		WHERE `+liveState, reason, tsp(s.now()))
+	if err != nil {
+		return 0, fmt.Errorf("sqlitestore: finishing stale live sessions: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sqlitestore: counting stale live sessions: %w", err)
+	}
+	return n, nil
+}
+
 // Get returns one row.
 func (s *Store) Get(ctx context.Context, id string) (*sessions.Session, error) {
 	return scanOne(s.db.QueryRowContext(ctx, selectCols+` WHERE id = ?`, id))

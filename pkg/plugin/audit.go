@@ -14,6 +14,12 @@ const (
 	AuditSessionRejected AuditKind = "session.rejected"
 	AuditAPIError        AuditKind = "api.error"
 	AuditObserveIssued   AuditKind = "observe.issued"
+	AuditSQLQuery        AuditKind = "sql.query"
+	// AuditAdminChange is an administrative request: a device record written, a
+	// permission written, a session or control channel ended by an administrator.
+	// Emitted whether it was allowed or refused, because a refused attempt to rewrite
+	// the policy is the more interesting of the two.
+	AuditAdminChange AuditKind = "admin.change"
 )
 
 // AuditEvent is one line of the audit trail.

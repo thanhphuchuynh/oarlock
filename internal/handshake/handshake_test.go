@@ -196,6 +196,16 @@ func TestRetiredKeyNoLongerAuthenticates(t *testing.T) {
 	}
 }
 
+func TestDisabledDeviceNoLongerAuthenticates(t *testing.T) {
+	dev, priv := newDevice(t, "rower-disabled", plugin.PlatformLinux)
+	dev.Disabled = true
+	g := &handshake.Gateway{Registry: reg{map[string]*plugin.Device{dev.ID: dev}}, GatewayID: "gw-a"}
+	_, _, gerr, _ := run(t, g, &handshake.Agent{DeviceID: dev.ID, Signer: priv})
+	if !errors.Is(gerr, handshake.ErrAuthFailed) {
+		t.Fatalf("disabled device gateway error = %v, want ErrAuthFailed", gerr)
+	}
+}
+
 func TestResumeCarriesInvitations(t *testing.T) {
 	dev, priv := newDevice(t, "treadmill-1", plugin.PlatformLinux)
 	g := &handshake.Gateway{

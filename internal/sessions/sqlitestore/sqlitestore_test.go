@@ -217,6 +217,32 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestFinishLiveReleasesSlotsAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	s := open(t, sessions.Limits{PerDevice: 1, PerPrincipal: 5})
+	if err := s.Create(ctx, row("stale", "dev-1", "operator")); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.FinishLive(ctx, "gateway_shutdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("finished %d live sessions, want 1", n)
+	}
+	got, err := s.Get(ctx, "stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != sessions.StateClosed || got.CloseReason != "gateway_shutdown" || got.ClosedAt.IsZero() {
+		t.Fatalf("stale row was not finalised: %+v", got)
+	}
+	if err := s.Create(ctx, row("replacement", "dev-1", "operator")); err != nil {
+		t.Fatalf("stale row still holds the device slot: %v", err)
+	}
+}
+
 // TestEveryCloseReasonRoundTrips walks the closed set from ARCHITECTURE § 6. A reason
 // that cannot be stored is a reason the UI can never show.
 func TestEveryCloseReasonRoundTrips(t *testing.T) {
