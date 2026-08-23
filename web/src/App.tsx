@@ -1,12 +1,18 @@
-// The reference console.
+// The admin console.
 //
-// It is a demo and a reference implementation: an integrator embeds `<Terminal>` in their
-// own product and inherits none of this. What it has to demonstrate is the arrangement —
-// that the disclosure, the waits, the failure screens and the replay verdict all come from
-// the same places the component and the gateway already agree on, rather than being
-// re-stated here where they could drift.
+// It was written as a reference implementation — a demonstration of the arrangement — and
+// that is no longer what it is. It is how this fleet is administered, so it is built as
+// the product surface it turned out to be: devices, sessions, policy and the operational
+// database, each on its own page, organised around the object rather than around the API
+// endpoint that returns it.
+//
+// What it still owes the component it embeds: the disclosure, the waits, the failure
+// screens and the replay verdict all come from the places the component and the gateway
+// already agree on — pkg/condition, the generated conditions table, the gateway's own
+// verifier — rather than being re-stated here where they could drift. An integrator
+// embedding `<Terminal>` inherits none of this file, and should not have to.
 
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Terminal } from "@oarlock/react";
 
 // The replay player is loaded on demand. It carries its own terminal emulator, and most
@@ -18,8 +24,12 @@ const Player = lazy(async () => {
 });
 import { get as getCondition, type Condition } from "@oarlock/terminal/conditions";
 import type { Verdict } from "@oarlock/terminal";
-import { ApiError, Client, type Agent, type Attach, type Device, type Session } from "./api";
+import { ApiError, Client, type Attach, type Device, type Session } from "./api";
 import { SessionList } from "./SessionList";
+import { Fleet } from "./Fleet";
+import { Permissions } from "./Permissions";
+import { SSHAccess } from "./SSHAccess";
+import { SQLExplorer } from "./SQLExplorer";
 import { Waits, type Step } from "./Waits";
 
 type View =
@@ -30,6 +40,26 @@ type View =
   | { kind: "failed"; condition: Condition; detail: string; reference: string };
 
 const tokenKey = "oarlock.token";
+
+type AdminPage = "fleet" | "sessions" | "permissions" | "sql";
+
+const pages: { id: AdminPage; label: string; blurb: string }[] = [
+  { id: "fleet", label: "Fleet", blurb: "Devices, who can reach them, and what has been run on them." },
+  { id: "sessions", label: "Sessions", blurb: "Every session the gateway has brokered, and why." },
+  { id: "permissions", label: "Permissions", blurb: "Who may perform which actions on which devices." },
+  { id: "sql", label: "SQL Explorer", blurb: "Read-only access to operational SQLite data." },
+];
+
+function sameOriginSocketURL(advertised: string): string {
+  try {
+    const url = new URL(advertised);
+    url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    url.host = window.location.host;
+    return url.toString();
+  } catch {
+    return advertised;
+  }
+}
 
 export function App() {
   // The token lives in sessionStorage, not localStorage: a shared secret in a browser
@@ -42,26 +72,40 @@ export function App() {
 
   const [view, setView] = useState<View>({ kind: "list" });
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [device, setDevice] = useState("");
-  const [reason, setReason] = useState("");
   const [me, setMe] = useState("");
   const [listError, setListError] = useState<Condition | null>(null);
+  const [deviceDialog, setDeviceDialog] = useState<Device | "new" | null>(null);
+  // Opening by typed id is the secondary path: it is how you reach a device whose row is
+  // not in front of you, and how an unregistered id gets its own failure screen instead
+  // of being unreachable through the UI.
+  const [openByID, setOpenByID] = useState<{ device: string; reason: string } | null>(null);
+  const [adminPage, setAdminPage] = useState<AdminPage>("fleet");
 
-  const refresh = useCallback(async () => {
+  // What each poll asks for, and how often.
+  //
+  // Three lists on a four-second timer was 45 requests a minute doing nothing, against a
+  // default API budget of 120 — more than a third of an operator's allowance spent on an
+  // idle tab, and enough to start collecting 429s with a second tab open. Two changes.
+  //
+  // **Ask for what is on screen.** Permissions and SQL Explorer are not live views, so
+  // they poll nothing at all; the other two ask only for the lists they render.
+  //
+  // **Stop asking for `/agents`.** The gateway computes `device.connected` from exactly
+  // the list that endpoint returns, so fetching both was the same duplication the fleet
+  // page used to show: one fact, two sources, and a window where they disagree.
+  const refresh = useCallback(async (scope: AdminPage | "all" = "all") => {
     if (!token) return;
     try {
-      const [{ sessions }, { agents }, { devices }] = await Promise.all([
+      const wantsDevices = scope === "all" || scope === "fleet";
+      const [live, fleet] = await Promise.all([
         client.current.sessions(),
-        client.current.agents(),
-        client.current.devices(),
+        wantsDevices ? client.current.devices() : Promise.resolve(null),
       ]);
-      setSessions(sessions);
-      setAgents(agents);
-      setDevices(devices);
+      setSessions(live.sessions);
+      if (fleet) setDevices(fleet.devices);
       setListError(null);
-      if (sessions.length > 0 && !me) setMe(sessions[0]!.principal);
+      if (live.sessions.length > 0 && !me) setMe(live.sessions[0]!.principal);
     } catch (err) {
       setListError(err instanceof ApiError ? err.condition : getCondition("internal"));
     }
@@ -69,17 +113,33 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(() => void refresh(), 4000);
-    return () => clearInterval(t);
-  }, [refresh]);
+    // A page that renders neither list has nothing to poll for.
+    if (adminPage !== "fleet" && adminPage !== "sessions") return;
+    const t = setInterval(() => {
+      // A background tab polling a rate-limited API is pure waste.
+      if (document.hidden) return;
+      void refresh(adminPage);
+    }, 4000);
+    // A tab coming back to the front is behind by however long it was away, so it asks
+    // for everything once rather than waiting out the interval.
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refresh, adminPage]);
 
   function saveToken(t: string) {
     sessionStorage.setItem(tokenKey, t);
     setToken(t);
   }
 
-  async function openSession() {
+  async function openSession(device: string, reason: string) {
     if (!device) return;
+    setOpenByID(null);
 
     // The two named waits. The first is already true by the time this runs — the API
     // accepted the request, which means authorisation passed — so it starts done rather
@@ -124,10 +184,19 @@ export function App() {
       setView({
         kind: "opening",
         device,
-        reference: e?.reference,
+        // `exactOptionalPropertyTypes` is on, so an absent field is absent rather than
+        // present-and-undefined. That is the setting doing its job: "there is no
+        // reference" and "the reference is undefined" are the same thing to a reader and
+        // different things to a renderer.
+        ...(e?.reference ? { reference: e.reference } : {}),
         steps: steps.map((s) =>
           s.key === "wake"
-            ? { ...s, state: "failed" as const, failure: condition, detail: e?.detail }
+            ? {
+                ...s,
+                state: "failed" as const,
+                failure: condition,
+                ...(e?.detail ? { detail: e.detail } : {}),
+              }
             : s,
         ),
       });
@@ -191,33 +260,48 @@ export function App() {
     }
   }
 
-  async function disconnectAgent(agent: Agent) {
-    if (!confirm(`Stop ${agent.device_id}?\n\nThe agent exits on that device. ` +
+  async function disconnectAgent(deviceID: string) {
+    if (!confirm(`Stop ${deviceID}?\n\nThe agent exits on that device. ` +
       `Start oarlock-agent there again to reconnect it.`)) {
       return;
     }
     try {
-      await client.current.disconnectAgent(agent.device_id);
+      await client.current.disconnectAgent(deviceID);
       void refresh();
     } catch (err) {
       fail(err);
     }
   }
 
-  async function createDevice(input: DeviceForm) {
+  async function createDevice(input: DeviceForm): Promise<string | null> {
     try {
-      await client.current.createDevice({
-        id: input.id.trim(),
-        platform: input.platform,
-        mode: input.mode,
-        keys: splitList(input.keys),
-        tags: parseTags(input.tags),
-        profiles: splitList(input.profiles),
-      });
-      setDevice(input.id.trim());
-      void refresh();
+      await client.current.createDevice(devicePayload(input));
+      await refresh();
+      return null;
     } catch (err) {
-      fail(err);
+      return deviceOperationError(err);
+    }
+  }
+
+  async function updateDevice(input: DeviceForm): Promise<string | null> {
+    try {
+      await client.current.updateDevice(input.id, devicePayload(input));
+      await refresh();
+      return null;
+    } catch (err) {
+      return deviceOperationError(err);
+    }
+  }
+
+  async function toggleDevice(candidate: Device) {
+    const enabled = candidate.enabled !== false;
+    if (enabled && !confirm(`Disable ${candidate.id}?\n\nNew shells will be refused and a connected agent will be stopped. Session history remains available.`)) {
+      return;
+    }
+    const input = formFromDevice(candidate);
+    const error = await updateDevice({ ...input, enabled: !enabled });
+    if (error) {
+      fail(new Error(error));
     }
   }
 
@@ -270,112 +354,177 @@ export function App() {
     );
   }
 
+  const signOut = () => {
+    sessionStorage.removeItem(tokenKey);
+    setToken("");
+  };
+
+  function showAdmin(page: AdminPage) {
+    setView({ kind: "list" });
+    setAdminPage(page);
+  }
+
+  const current = pages.find((p) => p.id === adminPage)!;
+
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
-      <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-xl font-semibold">Oarlock</h1>
-        <div className="flex items-center gap-3 text-sm text-fg-muted">
-          {me && <span className="mono">{me}</span>}
-          <button
-            className="btn"
-            onClick={() => {
-              sessionStorage.removeItem(tokenKey);
-              setToken("");
-            }}
-          >
+    <div className="min-h-screen bg-bg lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)]">
+      <aside className="hidden border-r border-border bg-bg-raised lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:p-4">
+        <div className="flex items-center gap-2 px-2 py-2">
+          <span className="grid size-7 place-items-center rounded-md bg-fg text-xs font-bold text-fg-inverse">O</span>
+          <span className="text-base font-semibold">Oarlock</span>
+        </div>
+        <nav className="mt-5 grid gap-1 text-sm" aria-label="Admin navigation">
+          {pages.map((page) => (
+            <button
+              key={page.id}
+              className={`nav-item text-left ${adminPage === page.id ? "nav-item-active" : ""}`}
+              onClick={() => showAdmin(page.id)}
+            >
+              {page.label}
+            </button>
+          ))}
+        </nav>
+        <div className="mt-auto border-t border-border px-2 pt-4">
+          <p className="mono truncate text-xs text-fg-muted">{me || "operator"}</p>
+          <button className="mt-2 text-xs font-medium text-fg-muted hover:text-fg" onClick={signOut}>
             Sign out
           </button>
         </div>
-      </header>
+      </aside>
 
-      {view.kind === "list" && (
-        <>
-          <section className="flex flex-col gap-3 rounded-md border border-border bg-bg-raised p-4">
-            <h2 className="font-semibold">Open a shell</h2>
-            <div className="flex flex-wrap gap-3">
-              <input
-                className="field mono max-w-xs"
-                placeholder="device id"
-                value={device}
-                onChange={(e) => setDevice(e.target.value)}
-                data-testid="device"
-              />
-              <input
-                className="field max-w-md"
-                placeholder="why — a ticket number, a sentence"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                data-testid="reason"
-              />
-              <button
-                className="btn btn-primary"
-                onClick={() => void openSession()}
-                data-testid="open"
-              >
-                Shell
-              </button>
+      <main className="min-w-0">
+        <div className="border-b border-border bg-bg-raised lg:hidden">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-2 font-semibold">
+              <span className="grid size-7 place-items-center rounded-md bg-fg text-xs font-bold text-fg-inverse">O</span>
+              Oarlock
             </div>
-            <p className="text-xs text-fg-faint">
-              The reason costs you nothing and turns the session list from a log into an
-              explanation.
-            </p>
-          </section>
+            <button className="btn" onClick={signOut}>Sign out</button>
+          </div>
+          <nav className="flex gap-1 overflow-x-auto px-4 pb-3 text-sm" aria-label="Admin navigation">
+            {pages.map((page) => (
+              <button
+                key={page.id}
+                className={`nav-item whitespace-nowrap ${adminPage === page.id ? "nav-item-active" : ""}`}
+                onClick={() => showAdmin(page.id)}
+              >
+                {page.label}
+              </button>
+            ))}
+          </nav>
+        </div>
 
-          {listError && (
-            <p className="rounded-md border border-state-refused bg-bg-raised p-4">
-              <span className="font-semibold">{listError.headline}</span>{" "}
-              <span className="text-fg-muted">{listError.nextAction}</span>
-            </p>
+        <div className="mx-auto flex max-w-[90rem] flex-col gap-6 p-4 sm:p-6 lg:p-8">
+          {/* One header per page. The panels below used to repeat it, so every screen
+              said the same thing twice in two type sizes. */}
+          <header className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 className="text-xl font-semibold">
+                {view.kind === "list" ? current.label : "Oarlock"}
+              </h1>
+              {view.kind === "list" && (
+                <p className="mt-1 text-sm text-fg-muted">{current.blurb}</p>
+              )}
+            </div>
+            {view.kind === "list" && adminPage === "fleet" && (
+              <div className="flex gap-2">
+                <button
+                  className="btn"
+                  onClick={() => setOpenByID({ device: "", reason: "" })}
+                  data-testid="open-by-id"
+                >
+                  Open by id…
+                </button>
+                <button className="btn btn-primary" onClick={() => setDeviceDialog("new")}>
+                  Add device
+                </button>
+              </div>
+            )}
+          </header>
+
+          {view.kind === "list" && (
+            <>
+              {listError && (
+                <p className="rounded-md border border-state-refused/50 bg-bg-raised p-4" role="alert">
+                  <span className="font-semibold">{listError.headline}</span>{" "}
+                  <span className="text-fg-muted">{listError.nextAction}</span>
+                </p>
+              )}
+
+              {adminPage === "fleet" && (
+                <Fleet
+                  client={client.current}
+                  devices={devices}
+                  sessions={sessions}
+                  me={me}
+                  onOpen={(id, why) => void openSession(id, why)}
+                  onEdit={(candidate) => setDeviceDialog(candidate)}
+                  onToggle={(candidate) => void toggleDevice(candidate)}
+                  onDelete={(id) => void deleteDevice(id)}
+                  onStopAgent={(id) => void disconnectAgent(id)}
+                  onAttach={(session) => void attach(session)}
+                  onObserve={(session) => void observe(session)}
+                  onReplay={(session) => void replay(session)}
+                  onKill={(session) => void kill(session)}
+                />
+              )}
+
+              {adminPage === "sessions" && (
+                <section className="panel" id="sessions">
+                  <div className="panel-header">
+                    <p className="text-sm text-fg-muted">
+                      <span className="font-semibold text-fg">{sessions.length}</span> recorded
+                      {" · "}
+                      {sessions.filter((s) => s.live).length} live now
+                    </p>
+                  </div>
+                  <SessionList
+                    sessions={sessions}
+                    me={me}
+                    onAttach={(s) => void attach(s)}
+                    onObserve={(s) => void observe(s)}
+                    onReplay={(s) => void replay(s)}
+                    onKill={(s) => void kill(s)}
+                  />
+                </section>
+              )}
+
+              {adminPage === "permissions" && <Permissions client={client.current} />}
+              {adminPage === "sql" && <SQLExplorer client={client.current} />}
+
+              {deviceDialog && (
+                <DeviceDrawer
+                  {...(deviceDialog === "new" ? {} : { device: deviceDialog })}
+                  onClose={() => setDeviceDialog(null)}
+                  onSave={deviceDialog === "new" ? createDevice : updateDevice}
+                />
+              )}
+
+              {openByID && (
+                <OpenByIDDialog
+                  value={openByID}
+                  onChange={setOpenByID}
+                  onClose={() => setOpenByID(null)}
+                  onOpen={() => void openSession(openByID.device, openByID.reason)}
+                />
+              )}
+            </>
           )}
 
-          <section
-            className="flex flex-col gap-3 rounded-md border border-border bg-bg-raised p-4"
-            data-testid="admin-agents"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-3">
+          {view.kind === "opening" && (
+            <section className="flex flex-col gap-4" data-testid="waits">
+              <Waits steps={view.steps} {...(view.reference ? { reference: view.reference } : {})} />
               <div>
-                <h2 className="font-semibold">Admin</h2>
-                <p className="text-xs text-fg-muted">
-                  Connected agent control channels on this gateway node.
-                </p>
+                <button className="btn" onClick={() => setView({ kind: "list" })}>
+                  Back
+                </button>
               </div>
-              <span className="mono text-xs text-fg-faint">
-                {agents.length} connected
-              </span>
-            </div>
-            <AgentList agents={agents} onDisconnect={(a) => void disconnectAgent(a)} />
-            <DeviceCreateForm onCreate={(input) => void createDevice(input)} />
-            <DeviceList devices={devices} onDelete={(id) => void deleteDevice(id)} />
-          </section>
+            </section>
+          )}
 
-          <section className="flex flex-col gap-3">
-            <h2 className="font-semibold">Sessions</h2>
-            <SessionList
-              sessions={sessions}
-              me={me}
-              onAttach={(s) => void attach(s)}
-              onObserve={(s) => void observe(s)}
-              onReplay={(s) => void replay(s)}
-              onKill={(s) => void kill(s)}
-            />
-          </section>
-        </>
-      )}
-
-      {view.kind === "opening" && (
-        <section className="flex flex-col gap-4" data-testid="waits">
-          <Waits steps={view.steps} reference={view.reference} />
-          <div>
-            <button className="btn" onClick={() => setView({ kind: "list" })}>
-              Back
-            </button>
-          </div>
-        </section>
-      )}
-
-      {view.kind === "terminal" && (
-        <section className="flex flex-col gap-3" data-testid="terminal">
-          <div className="flex items-center justify-between gap-3">
+          {view.kind === "terminal" && (
+            <section className="flex flex-col gap-3" data-testid="terminal">
+              <div className="flex items-center justify-between gap-3">
             <span className="mono text-sm text-fg-muted">{view.session.id}</span>
             <button
               className="btn"
@@ -388,7 +537,7 @@ export function App() {
             </button>
           </div>
           <Terminal
-            url={view.attach.url}
+            url={sameOriginSocketURL(view.attach.url)}
             ticket={view.attach.ticket}
             device={view.session.device_id}
             principal={view.session.principal}
@@ -399,12 +548,12 @@ export function App() {
             onClosed={() => void refresh()}
             style={{ height: "70vh" }}
           />
-        </section>
-      )}
+            </section>
+          )}
 
-      {view.kind === "replay" && (
-        <section className="flex flex-col gap-3" data-testid="replay">
-          <div className="flex items-center justify-between gap-3">
+          {view.kind === "replay" && (
+            <section className="flex flex-col gap-3" data-testid="replay">
+              <div className="flex items-center justify-between gap-3">
             <span className="mono text-sm text-fg-muted">{view.session.id}</span>
             <button className="btn" onClick={() => setView({ kind: "list" })}>
               Back
@@ -420,11 +569,11 @@ export function App() {
               style={{ height: "70vh" }}
             />
           </Suspense>
-        </section>
-      )}
+            </section>
+          )}
 
-      {view.kind === "failed" && (
-        <section
+          {view.kind === "failed" && (
+            <section
           className="rounded-md border border-state-refused bg-bg-raised p-5"
           data-testid="failure"
           role="alert"
@@ -448,9 +597,11 @@ export function App() {
               Back
             </button>
           </div>
-        </section>
-      )}
-    </main>
+            </section>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
 
@@ -459,8 +610,11 @@ type DeviceForm = {
   platform: Device["platform"];
   mode: NonNullable<Device["mode"]>;
   keys: string;
+  retiredKeys: string;
   tags: string;
   profiles: string;
+  enabled: boolean;
+  allowPassthrough: boolean;
 };
 
 const emptyDeviceForm: DeviceForm = {
@@ -468,8 +622,11 @@ const emptyDeviceForm: DeviceForm = {
   platform: "android",
   mode: "dispatch",
   keys: "",
+  retiredKeys: "",
   tags: "",
   profiles: "shell",
+  enabled: true,
+  allowPassthrough: false,
 };
 
 function splitList(value: string): string[] {
@@ -487,169 +644,336 @@ function parseTags(value: string): Record<string, string> {
   return out;
 }
 
-function DeviceCreateForm({ onCreate }: { onCreate: (input: DeviceForm) => void }) {
-  const [form, setForm] = useState<DeviceForm>(emptyDeviceForm);
+function formatEditableTags(tags: Record<string, string> | undefined): string {
+  return Object.entries(tags ?? {}).map(([key, value]) => `${key}=${value}`).join(", ");
+}
+
+function formFromDevice(device: Device): DeviceForm {
+  return {
+    id: device.id,
+    platform: device.platform,
+    mode: device.mode ?? "",
+    keys: (device.keys ?? []).join(", "),
+    retiredKeys: (device.retired_keys ?? []).join(", "),
+    tags: formatEditableTags(device.tags),
+    profiles: (device.profiles ?? []).join(", "),
+    enabled: device.enabled !== false,
+    allowPassthrough: device.allow_passthrough === true,
+  };
+}
+
+function devicePayload(input: DeviceForm): Partial<Device> {
+  return {
+    id: input.id.trim(),
+    platform: input.platform,
+    mode: input.mode,
+    keys: splitList(input.keys),
+    retired_keys: splitList(input.retiredKeys),
+    tags: parseTags(input.tags),
+    profiles: splitList(input.profiles),
+    enabled: input.enabled,
+    allow_passthrough: input.allowPassthrough,
+  };
+}
+
+function deviceOperationError(error: unknown): string {
+  if (error instanceof ApiError) return error.detail || error.message;
+  return error instanceof Error ? error.message : String(error);
+}
+
+function DeviceFormEditor({
+  initial,
+  editing,
+  onSave,
+  onDone,
+}: {
+  initial: DeviceForm;
+  editing: boolean;
+  onSave: (input: DeviceForm) => Promise<string | null>;
+  onDone: () => void;
+}) {
+  const [form, setForm] = useState<DeviceForm>(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   return (
     <form
-      className="grid gap-3 border-t border-border pt-4 md:grid-cols-[minmax(12rem,1fr)_10rem_10rem_minmax(12rem,1fr)_minmax(10rem,1fr)_auto]"
-      onSubmit={(e) => {
+      className="grid gap-4"
+      onSubmit={async (e) => {
         e.preventDefault();
-        onCreate(form);
-        setForm(emptyDeviceForm);
+        setSaving(true);
+        setError("");
+        const saveError = await onSave(form);
+        setSaving(false);
+        if (!saveError) {
+          onDone();
+        } else {
+          setError(saveError);
+        }
       }}
     >
-      <input
-        className="field mono"
-        placeholder="device id"
-        value={form.id}
-        onChange={(e) => setForm({ ...form, id: e.target.value })}
-        required
-      />
-      <select
-        className="field"
-        value={form.platform}
-        onChange={(e) => setForm({ ...form, platform: e.target.value as Device["platform"] })}
-      >
-        <option value="android">Android</option>
-        <option value="linux">Linux</option>
-        <option value="container">Container</option>
-        <option value="other">Other</option>
-      </select>
-      <select
-        className="field"
-        value={form.mode}
-        onChange={(e) => setForm({ ...form, mode: e.target.value as DeviceForm["mode"] })}
-      >
-        <option value="dispatch">Dispatch</option>
-        <option value="persistent">Persistent</option>
-        <option value="">Default</option>
-      </select>
-      <input
-        className="field mono"
-        placeholder="public keys"
-        value={form.keys}
-        onChange={(e) => setForm({ ...form, keys: e.target.value })}
-      />
-      <input
-        className="field"
-        placeholder="tags"
-        value={form.tags}
-        onChange={(e) => setForm({ ...form, tags: e.target.value })}
-      />
-      <button className="btn btn-primary" type="submit">
-        Add
-      </button>
-      <input
-        className="field md:col-span-2"
-        placeholder="profiles"
-        value={form.profiles}
-        onChange={(e) => setForm({ ...form, profiles: e.target.value })}
-      />
+      <FieldLabel label="Device ID">
+        <input
+          className="field mono"
+          placeholder="treadmill-4821"
+          value={form.id}
+          onChange={(e) => setForm({ ...form, id: e.target.value })}
+          disabled={editing}
+          required
+        />
+      </FieldLabel>
+      <div className="grid grid-cols-2 gap-3">
+        <FieldLabel label="Platform">
+          <select
+            className="field"
+            value={form.platform}
+            onChange={(e) => setForm({ ...form, platform: e.target.value as Device["platform"] })}
+          >
+            <option value="android">Android</option>
+            <option value="linux">Linux</option>
+            <option value="container">Container</option>
+            <option value="other">Other</option>
+          </select>
+        </FieldLabel>
+        <FieldLabel label="Mode">
+          <select
+            className="field"
+            value={form.mode}
+            onChange={(e) => setForm({ ...form, mode: e.target.value as DeviceForm["mode"] })}
+          >
+            <option value="dispatch">Dispatch</option>
+            <option value="persistent">Persistent</option>
+            <option value="">Platform default</option>
+          </select>
+        </FieldLabel>
+      </div>
+      <FieldLabel label="Public keys">
+        <textarea
+          className="field mono"
+          placeholder="ssh-ed25519..."
+          rows={3}
+          value={form.keys}
+          onChange={(e) => setForm({ ...form, keys: e.target.value })}
+        />
+        <span className="text-xs text-fg-faint">Comma-separated authorized public keys.</span>
+      </FieldLabel>
+      <FieldLabel label="Retired keys">
+        <textarea
+          className="field mono"
+          placeholder="Keys that must no longer authenticate"
+          rows={2}
+          value={form.retiredKeys}
+          onChange={(e) => setForm({ ...form, retiredKeys: e.target.value })}
+        />
+      </FieldLabel>
+      <FieldLabel label="Profiles">
+        <input
+          className="field"
+          placeholder="shell"
+          value={form.profiles}
+          onChange={(e) => setForm({ ...form, profiles: e.target.value })}
+        />
+      </FieldLabel>
+      <FieldLabel label="Tags">
+        <input
+          className="field"
+          placeholder="fleet=qa"
+          value={form.tags}
+          onChange={(e) => setForm({ ...form, tags: e.target.value })}
+        />
+      </FieldLabel>
+      <label className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
+        <span>
+          <span className="block text-sm font-medium">Enabled</span>
+          <span className="block text-xs text-fg-muted">Allow agent authentication and new sessions.</span>
+        </span>
+        <input
+          type="checkbox"
+          className="mt-1 size-4 accent-current"
+          checked={form.enabled}
+          onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
+        />
+      </label>
+      <label className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
+        <span>
+          <span className="block text-sm font-medium">Allow passthrough</span>
+          <span className="block text-xs text-fg-muted">Permit explicitly unrecorded sessions for this device.</span>
+        </span>
+        <input
+          type="checkbox"
+          className="mt-1 size-4 accent-current"
+          checked={form.allowPassthrough}
+          onChange={(event) => setForm({ ...form, allowPassthrough: event.target.checked })}
+        />
+      </label>
+      {error && (
+        <p className="rounded-md border border-state-refused/50 p-3 text-sm text-state-refused" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="flex justify-end gap-2 border-t border-border pt-4">
+        <button className="btn" type="button" onClick={onDone}>Cancel</button>
+        <button className="btn btn-primary" type="submit" disabled={saving}>
+          {saving ? "Saving..." : editing ? "Save changes" : "Add device"}
+        </button>
+      </div>
     </form>
   );
 }
 
-function DeviceList({
-  devices,
-  onDelete,
+function DeviceDrawer({
+  device,
+  onClose,
+  onSave,
 }: {
-  devices: Device[];
-  onDelete: (id: string) => void;
+  device?: Device;
+  onClose: () => void;
+  onSave: (input: DeviceForm) => Promise<string | null>;
 }) {
-  if (devices.length === 0) {
-    return (
-      <p className="rounded-md border border-border bg-bg-raised p-4 text-fg-muted">
-        No devices are registered.
-      </p>
-    );
-  }
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
   return (
-    <div className="overflow-x-auto rounded-md border border-border bg-bg">
-      <table className="w-full border-collapse text-left">
-        <thead className="bg-bg-raised text-xs uppercase tracking-wider text-fg-faint">
-          <tr>
-            <th className="px-3 py-2 font-medium">Device</th>
-            <th className="px-3 py-2 font-medium">Platform</th>
-            <th className="px-3 py-2 font-medium">Mode</th>
-            <th className="px-3 py-2 font-medium">Keys</th>
-            <th className="px-3 py-2 font-medium">State</th>
-            <th className="px-3 py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {devices.map((device) => (
-            <tr className="border-t border-border align-middle" key={device.id}>
-              <td className="mono px-3 py-2">{device.id}</td>
-              <td className="px-3 py-2 capitalize">{device.platform}</td>
-              <td className="px-3 py-2">{device.resolved_mode}</td>
-              <td className="mono px-3 py-2 text-xs">{device.keys?.length ?? 0}</td>
-              <td className="px-3 py-2">
-                <span
-                  className={
-                    "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider " +
-                    (device.connected ? "text-state-recorded" : "text-fg-faint")
-                  }
-                >
-                  <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-                  {device.connected ? "Connected" : "Offline"}
-                </span>
-              </td>
-              <td className="px-3 py-2 text-right">
-                <button className="btn btn-danger" onClick={() => onDelete(device.id)}>
-                  Delete
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/35" role="presentation" onMouseDown={onClose}>
+      <section
+        className="h-full w-full max-w-md overflow-y-auto border-l border-border bg-bg-raised p-6 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="device-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h2 id="device-dialog-title" className="text-lg font-semibold">
+              {device ? "Edit device" : "Add device"}
+            </h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              {device ? `Update ${device.id} without losing its session history.` : "Register a target before its agent connects."}
+            </p>
+          </div>
+          <button className="icon-btn" onClick={onClose} aria-label="Close add device dialog" title="Close">
+            <span aria-hidden="true">x</span>
+          </button>
+        </div>
+        <DeviceFormEditor
+          initial={device ? formFromDevice(device) : emptyDeviceForm}
+          editing={Boolean(device)}
+          onSave={onSave}
+          onDone={onClose}
+        />
+      </section>
     </div>
   );
 }
 
-function AgentList({
-  agents,
-  onDisconnect,
+// Opening a shell on a device id you typed.
+//
+// The secondary path, on purpose: from the fleet list you pick a row and never retype an
+// id, which is where the old permanent form strip went. This is for the id you already
+// know and the row you cannot see — a fleet longer than a page, or an id that is not
+// registered at all, which is a journey worth keeping reachable because the gateway has a
+// screen for it.
+function OpenByIDDialog({
+  value,
+  onChange,
+  onClose,
+  onOpen,
 }: {
-  agents: Agent[];
-  onDisconnect: (agent: Agent) => void;
+  value: { device: string; reason: string };
+  onChange: (next: { device: string; reason: string }) => void;
+  onClose: () => void;
+  onOpen: () => void;
 }) {
-  if (agents.length === 0) {
-    return (
-      <p className="rounded-md border border-border bg-bg-raised p-4 text-fg-muted">
-        No agents are connected to this gateway node.
-      </p>
-    );
-  }
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
   return (
-    <div className="overflow-x-auto rounded-md border border-border bg-bg">
-      <table className="w-full border-collapse text-left">
-        <thead className="bg-bg-raised text-xs uppercase tracking-wider text-fg-faint">
-          <tr>
-            <th className="px-3 py-2 font-medium">Device</th>
-            <th className="px-3 py-2 font-medium">State</th>
-            <th className="px-3 py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {agents.map((agent) => (
-            <tr className="border-t border-border align-middle" key={agent.device_id}>
-              <td className="mono px-3 py-2">{agent.device_id}</td>
-              <td className="px-3 py-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-state-recorded">
-                  <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-                  Connected
-                </span>
-              </td>
-              <td className="px-3 py-2 text-right">
-                <button className="btn btn-danger" onClick={() => onDisconnect(agent)}>
-                  Stop
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-4 sm:items-center"
+      role="presentation"
+      onMouseDown={onClose}
+    >
+      <form
+        className="w-full max-w-md rounded-lg border border-border bg-bg-raised p-6 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="open-by-id-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onOpen();
+        }}
+      >
+        <h2 id="open-by-id-title" className="text-lg font-semibold">
+          Open by device id
+        </h2>
+        <p className="mt-1 text-sm text-fg-muted">
+          For a device that is not in front of you. The session is recorded and attributed
+          the same way either way.
+        </p>
+        <div className="mt-4 grid gap-3">
+          <FieldLabel label="Device id">
+            <input
+              className="field mono"
+              placeholder="treadmill-4821"
+              value={value.device}
+              onChange={(event) => onChange({ ...value, device: event.target.value })}
+              data-testid="open-by-id-device"
+              autoFocus
+            />
+          </FieldLabel>
+          <FieldLabel label="Reason">
+            <input
+              className="field"
+              placeholder="ticket or reason"
+              value={value.reason}
+              onChange={(event) => onChange({ ...value, reason: event.target.value })}
+              data-testid="open-by-id-reason"
+            />
+          </FieldLabel>
+        </div>
+        <div className="mt-5 flex justify-end gap-2 border-t border-border pt-4">
+          <button className="btn" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            type="submit"
+            disabled={!value.device.trim()}
+            data-testid="open-by-id-submit"
+          >
+            Open
+          </button>
+        </div>
+      </form>
     </div>
+  );
+}
+
+function FieldLabel({
+  label,
+  className = "",
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className={"flex flex-col gap-1 " + className}>
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }

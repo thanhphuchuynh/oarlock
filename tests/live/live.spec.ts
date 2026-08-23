@@ -12,12 +12,16 @@ test("the running demo's console opens a shell in the browser", async ({ page })
   await page.goto(`${base}/ui/`);
   await page.getByPlaceholder("token").fill(token);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Open a shell" })).toBeVisible();
+  await expect(page.getByTestId("fleet")).toBeVisible();
   console.log("SIGNED IN");
 
-  await page.getByTestId("device").fill("treadmill-4821");
-  await page.getByTestId("reason").fill("checking the console by hand");
-  await page.getByTestId("open").click();
+  // From the device's own row: the fleet page is organised around the device, so there is
+  // no id to retype.
+  const row = page.locator('[data-device="treadmill-4821"]');
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.locator("button.row-toggle").click();
+  await row.getByTestId("reason").fill("checking the console by hand");
+  await row.getByTestId("open").click();
 
   await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
   console.log("TERMINAL MOUNTED");

@@ -24,6 +24,16 @@
     line-height: 1.5;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+
   /* Machine values are monospaced everywhere, so they read as values rather than prose. */
   .mono {
     font-family: "JetBrains Mono", "SF Mono", ui-monospace, "Menlo", monospace;
@@ -33,8 +43,9 @@
 
 @layer components {
   .btn {
-    @apply rounded-md border border-border-strong bg-transparent px-3 py-1.5 text-sm
-      text-fg transition-colors hover:bg-bg-raised;
+    @apply inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border
+      border-border-strong bg-bg px-3 text-sm font-medium text-fg shadow-sm transition-colors
+      hover:bg-bg-raised disabled:pointer-events-none disabled:opacity-50;
   }
 
   .btn:focus-visible {
@@ -42,19 +53,62 @@
   }
 
   .btn-primary {
-    @apply border-state-recorded bg-state-recorded font-semibold text-fg-inverse
-      hover:opacity-90;
+    @apply border-fg bg-fg font-semibold text-fg-inverse hover:opacity-90;
   }
 
   /* Destructive actions state the consequence rather than asking a question, so the
      button says what happens and the confirmation says what it costs. */
+  /* The low-emphasis tier. Routine row actions are not decisions, and giving Edit the
+   * same weight as Delete made every table read as a wall of buttons. Referenced in
+   * Permissions before it existed, which is why every button there looked identical. */
+  .btn-quiet {
+    @apply border-transparent bg-transparent text-fg-muted shadow-none hover:bg-bg
+      hover:text-fg;
+  }
+
   .btn-danger {
-    @apply border-state-refused text-state-refused hover:bg-bg-raised;
+    @apply border-state-refused/40 text-state-refused hover:bg-bg-raised;
+  }
+
+  /* A row that opens. The whole summary is the control, so the hit area is the row and
+   * not a chevron somebody has to aim at. */
+  .row-toggle {
+    @apply flex w-full items-center gap-3 px-4 py-3 text-left transition-colors
+      hover:bg-bg focus-visible:outline-2 focus-visible:-outline-offset-2
+      focus-visible:outline-state-observed;
+  }
+
+  /* Section headings inside an expanded row: quieter than a panel header, because the
+   * row is already the thing you chose. */
+  .row-section-title {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-fg-faint;
   }
 
   .field {
-    @apply w-full rounded-md border border-border bg-bg-raised px-3 py-2 text-fg
-      placeholder:text-fg-faint;
+    @apply min-h-9 w-full rounded-md border border-border-strong bg-bg px-3 py-2 text-fg shadow-sm
+      placeholder:text-fg-faint focus-visible:outline-2 focus-visible:outline-offset-2
+      focus-visible:outline-state-observed;
+  }
+
+  .panel {
+    @apply overflow-hidden rounded-lg border border-border bg-bg-raised shadow-sm;
+  }
+
+  .panel-header {
+    @apply flex min-h-16 items-center justify-between gap-3 px-4 py-3;
+  }
+
+  .nav-item {
+    @apply rounded-md px-3 py-2 font-medium text-fg-muted transition-colors hover:bg-bg hover:text-fg;
+  }
+
+  .nav-item-active {
+    @apply bg-bg text-fg shadow-sm;
+  }
+
+  .icon-btn {
+    @apply grid size-9 shrink-0 place-items-center rounded-md border border-border bg-bg text-lg
+      text-fg-muted transition-colors hover:bg-bg-raised hover:text-fg;
   }
 
   .not-mono {

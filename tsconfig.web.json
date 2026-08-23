@@ -1,0 +1,17 @@
+{
+  // The console. Its own project because it is the only one that renders in a browser
+  // with the DOM libs and React's JSX runtime — and because it was, until this file
+  // existed, the only TypeScript in the repository that nothing typechecked. `npm run
+  // typecheck` referenced the two packages and the tests and quietly skipped web/src, so
+  // an undefined component was a runtime error nobody found until the page rendered.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "jsx": "react-jsx",
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist/web",
+    "types": []
+  },
+  "include": ["web/src/**/*.ts", "web/src/**/*.tsx"]
+}
