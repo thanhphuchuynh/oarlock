@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Oarlock Agent</string>
+    <string name="notification_channel">Oarlock control channel</string>
+    <string name="insecure_mode">Development: allow an unpinned connection</string>
+    <string name="status_format">%1$s  %2$s</string>
+    <string name="key_error">Key error: %1$s</string>
+</resources>
