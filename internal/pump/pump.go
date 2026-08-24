@@ -230,17 +230,23 @@ func (s *Session) Run(ctx context.Context) (Result, error) {
 	// and for `exec` it is the answer. It showed up as a one-in-many flake on a loaded
 	// machine, which is what a lost race looks like from the outside.
 	//
-	// Bounded rather than unbounded, so an operator socket that never drains cannot hold
-	// the session open. One coalescing window would do; five seconds is generous and
-	// still finite.
-	drainCtx, stopDrain := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	// No deadline, and that is deliberate after getting it wrong once: a
+	// context.WithTimeout here starts counting at pump *start*, not at Close, so a five
+	// second bound meant every session longer than five seconds stopped delivering
+	// output halfway through. The e2e suite caught it; a shorter test never would.
+	//
+	// It terminates without one. Run returns when the buffer is empty and Close has been
+	// called — and Close is always called, by the device reader on its way out, whatever
+	// ended the session. A dead operator socket ends it too, through the per-send write
+	// timeout. The buffer cannot grow after Close, so the drain is finite by
+	// construction rather than by clock.
+	drainCtx, stopDrain := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopDrain()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := out.Run(drainCtx); err != nil && !errors.Is(err, context.Canceled) &&
-			!errors.Is(err, context.DeadlineExceeded) {
+		if err := out.Run(drainCtx); err != nil && !errors.Is(err, context.Canceled) {
 			finish("transport_error", err)
 			cancel()
 		}

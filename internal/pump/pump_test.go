@@ -743,3 +743,52 @@ func TestBufferedOutputSurvivesTheSessionEnding(t *testing.T) {
 		}
 	}
 }
+
+// TestOutputKeepsFlowingOnALongSession.
+//
+// The regression for a fix that was worse than the bug. Draining on a context that the
+// session's end cannot cancel is right; giving that context a *deadline* is not, because
+// `context.WithTimeout` starts counting when the pump starts rather than when the drain
+// does. A five second bound therefore stopped output halfway through every session that
+// lasted longer than five seconds — which no short test noticed and the e2e suite did.
+//
+// Six seconds of real time, deliberately: a shorter one cannot distinguish the two.
+func TestOutputKeepsFlowingOnALongSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("this one has to spend real time to mean anything")
+	}
+	w := wire(t, "shell", pump.Limits{
+		Batch: 4096, Window: 10 * time.Millisecond,
+		HighWater: 1 << 16, LowWater: 1 << 12,
+	})
+
+	// Output at the start, and again after any plausible fixed drain budget has passed.
+	send(t, w.device, frame.Data([]byte("early")))
+	if got := readData(t, w.operator, 5*time.Second); got != "early" {
+		t.Fatalf("early output = %q", got)
+	}
+
+	time.Sleep(6 * time.Second)
+
+	send(t, w.device, frame.Data([]byte("late")))
+	if got := readData(t, w.operator, 5*time.Second); got != "late" {
+		t.Fatalf("late output = %q — the coalescer stopped delivering mid-session", got)
+	}
+}
+
+// readData waits for the next DATA frame, skipping the housekeeping ones.
+func readData(t *testing.T, c transport.Conn, within time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		f := recv(t, c)
+		if f.Type == frame.TypeData {
+			return string(f.Payload)
+		}
+		if f.Type == frame.TypeClose {
+			t.Fatalf("the session closed while waiting for output")
+		}
+	}
+	t.Fatal("no DATA frame arrived")
+	return ""
+}
