@@ -63,6 +63,11 @@ devices: ./devices.yaml
 #   subject_claim: email
 #   groups_claim: groups
 #
+#   # Setting this mounts the browser login at /auth/*, and the console shows a sign-in
+#   # button instead of asking for a pasted token. Must be the exact URL registered with
+#   # the provider, and https outside loopback.
+#   redirect_url: https://gw.example.com/auth/callback
+#
 #   # How long a cached signing key may be used. This is the upper bound on how long a key
 #   # the provider has *withdrawn* still verifies tokens.
 #   jwks_refresh: 5m

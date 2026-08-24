@@ -15,6 +15,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -165,6 +166,15 @@ type Auth struct {
 	JWKSRefresh time.Duration `yaml:"jwks_refresh"`
 	// DeviceTimeout is how long an SSH device-code login may sit unapproved.
 	DeviceTimeout time.Duration `yaml:"device_timeout"`
+
+	// RedirectURL is this gateway's browser callback, exactly as registered with the
+	// provider. Setting it turns on the browser login at /auth/*; leaving it empty means
+	// the console has no sign-in button and expects a pasted token.
+	//
+	// Not derived from the request's Host header: a provider matches this byte for byte,
+	// and letting a header choose it would let a proxy — or an attacker who can set one —
+	// choose where an authorization code is delivered.
+	RedirectURL string `yaml:"redirect_url"`
 }
 
 // Authz configures the authorisation backend.
@@ -541,6 +551,16 @@ func (c *Config) Validate() error {
 		}
 		if c.Auth.DeviceTimeout < 0 {
 			add("auth.device_timeout is negative")
+		}
+		if c.Auth.RedirectURL != "" {
+			u, err := url.Parse(c.Auth.RedirectURL)
+			switch {
+			case err != nil:
+				add("auth.redirect_url is not a URL: %v", err)
+			case u.Scheme != "https" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost":
+				add("auth.redirect_url must be https outside loopback: an authorization " +
+					"code delivered over http is a code anybody on the path can read")
+			}
 		}
 	default:
 		add("auth.kind %q is not known (oidc, or empty for authorized_keys and "+
