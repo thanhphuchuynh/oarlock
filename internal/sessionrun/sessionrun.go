@@ -99,6 +99,10 @@ type Params struct {
 	RecordInput bool
 }
 
+// NoExitStatus is reported when a session ended without the device sending one. It
+// matches ssh's own convention for a session that failed rather than a command that ran.
+const NoExitStatus = 255
+
 // Outcome is what happened, including whether it was recorded — which the caller
 // needs in order to tell the operator the truth.
 type Outcome struct {
@@ -286,7 +290,15 @@ func (r *Runner) Run(ctx context.Context, p Params, rw plugin.RecordingWriter,
 		log.Warn("session ended with an error", "error", err)
 	}
 
-	code := 0
+	// A session that ended without an EXIT frame did not run a command to completion —
+	// the device reported an error, the recorder failed, an administrator killed it, the
+	// gateway drained. Reporting 0 for that says "your command succeeded" to anything
+	// that checks a status, which for the exec profile is the whole audience.
+	//
+	// 255 because that is what `ssh` itself returns when the session fails rather than
+	// the command running, so automation already knows the number. A command's own
+	// status, when there is one, passes through untouched.
+	code := NoExitStatus
 	if res.ExitCode != nil {
 		code = *res.ExitCode
 	}

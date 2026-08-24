@@ -59,6 +59,12 @@ type Config struct {
 	// rather than after a round trip.
 	Shell ShellFunc
 
+	// Exec runs one allow-listed command. A hook for the same reason Shell is one, and
+	// nil on a build that has no business running commands — leave "exec" out of Caps
+	// too, and the gateway refuses such a session at open time rather than after a round
+	// trip.
+	Exec ExecFunc
+
 	// OnInvitation is called for every invitation, from a DIAL frame and from
 	// WELCOME.resume alike. It runs on its own goroutine: dialling a session must
 	// not stall the channel that delivers the next invitation.

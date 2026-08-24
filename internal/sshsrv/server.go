@@ -266,12 +266,24 @@ func (s *Server) handleSession(sess gssh.Session) {
 	}
 	log := s.log.With("principal", p.ID, "device", deviceID)
 
-	if len(sess.Command()) > 0 || sess.Subsystem() != "" {
-		// exec and sftp are E5. Refusing clearly beats half-running something.
-		fmt.Fprintln(sess.Stderr(), "oarlock: only interactive shells are supported yet")
+	if sess.Subsystem() != "" {
+		// sftp is E5.S4. Refusing clearly beats half-running something.
+		fmt.Fprintf(sess.Stderr(), "oarlock: the %s subsystem is not supported yet\r\n",
+			sess.Subsystem())
 		_ = sess.Exit(1)
 		return
 	}
+
+	// `ssh device` opens a shell; `ssh device some command` runs that one command under
+	// the exec profile. Two profiles down one handler, because everything between the
+	// authorisation check and the exit code is identical — and the places they differ are
+	// each worth a sentence rather than a second copy of two hundred lines.
+	profile, action := "shell", plugin.ActionShell
+	argv := sess.Command()
+	if len(argv) > 0 {
+		profile, action = "exec", plugin.ActionExec
+	}
+	log = log.With("profile", profile)
 
 	dev, err := s.o.Registry.Get(ctx, deviceID)
 	if err != nil || dev.Disabled {
@@ -296,7 +308,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 		captured = &capturedPty{req: req, win: win, ok: ok}
 	}
 	ptyReq, winCh, isPty := captured.req, captured.win, captured.ok
-	if !isPty {
+	if profile == "shell" && !isPty {
 		fmt.Fprintln(sess.Stderr(), "oarlock: this needs a terminal (try without -T)")
 		_ = sess.Exit(1)
 		return
@@ -308,7 +320,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// refused-at-open session is a 403 and not a row — while an *outage* refuses too,
 	// but says something different, because "you don't have access" and "we couldn't
 	// check" send somebody to entirely different places.
-	if verdict := s.o.Authz.AtOpen(ctx, p, dev, plugin.ActionShell); !verdict.Allow() {
+	if verdict := s.o.Authz.AtOpen(ctx, p, dev, action); !verdict.Allow() {
 		c, _ := condition.Lookup(verdict.Code)
 		text := c.Text()
 		if verdict.Reason != "" {
@@ -329,7 +341,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 		s.audit(ctx, plugin.AuditEvent{
 			Kind: plugin.AuditSessionRejected, DeviceID: dev.ID, Principal: p.ID,
 			Surface: "ssh", Code: "policy_conflict", Reason: err.Error(),
-			Action: string(plugin.ActionShell),
+			Action: string(action),
 		})
 		fmt.Fprintf(sess.Stderr(), "oarlock: record_input policy conflict: %s\r\n", err)
 		_ = sess.Exit(1)
@@ -342,7 +354,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// opens is still accounted for. A refusal with no row is a refusal nobody can
 	// query for later.
 	row := &sessions.Session{
-		ID: sessionID, DeviceID: dev.ID, Profile: "shell",
+		ID: sessionID, DeviceID: dev.ID, Profile: profile,
 		Mode: string(dev.ResolvedMode()), Principal: p.ID,
 		RecordInput: recordInput,
 		State:       sessions.StateWaking, RecordingState: sessions.NotRecorded,
@@ -360,17 +372,25 @@ func (s *Server) handleSession(sess gssh.Session) {
 		return
 	}
 
-	pending, err := s.o.Inviter.Invite(ctx, dev, invite.Request{
+	req := invite.Request{
 		SessionID:   sessionID,
-		Profile:     "shell",
+		Profile:     profile,
 		Principal:   p.ID,
 		RecordInput: recordInput,
-		PTY: &frame.PTY{
+	}
+	if profile == "exec" {
+		// The argv as the SSH client split it, never re-joined and re-split: a command
+		// that survives one round trip through a shell is a command with different
+		// quoting than the one somebody typed.
+		req.Exec = argv
+	} else {
+		req.PTY = &frame.PTY{
 			Cols: ptyReq.Window.Width,
 			Rows: ptyReq.Window.Height,
 			Term: ptyReq.Term,
-		},
-	})
+		}
+	}
+	pending, err := s.o.Inviter.Invite(ctx, dev, req)
 	if err != nil {
 		// The operator sees the sentence written for them, not a wire code.
 		var f *invite.Failure
@@ -389,7 +409,14 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// Progress only. Deliberately carries no security-relevant claim: this *is* in
 	// the window a truncation attack could reach, so nothing an operator needs to
 	// make a decision on may live here. The disclosure comes after pairing.
-	fmt.Fprintf(sess, "oarlock: waking %s…\r\n", dev.ID)
+	// Progress on stderr for exec: stdout there is the caller's data, and a "waking…"
+	// line prepended to the output of `ssh device cat /etc/version` corrupts whatever
+	// parses it. This is the same reason the disclosure moves for exec.
+	if profile == "exec" {
+		fmt.Fprintf(sess.Stderr(), "oarlock: waking %s…\r\n", dev.ID)
+	} else {
+		fmt.Fprintf(sess, "oarlock: waking %s…\r\n", dev.ID)
+	}
 	att, err := pending.Wait(ctx)
 	if err != nil {
 		s.o.Inviter.Cancel(ctx, sessionID, "operator_gave_up")
@@ -418,11 +445,13 @@ func (s *Server) handleSession(sess gssh.Session) {
 		Authz: s.o.AuthzSupervisor,
 	}
 	params := sessionrun.Params{
-		SessionID: sessionID, DeviceID: dev.ID, Profile: "shell", Principal: p.ID,
+		SessionID: sessionID, DeviceID: dev.ID, Profile: profile, Principal: p.ID,
 		Surface: "ssh", Grantee: p, Device: att.Conn, RecordInput: recordInput,
-		PTY: &frame.PTY{
+	}
+	if profile == "shell" {
+		params.PTY = &frame.PTY{
 			Cols: ptyReq.Window.Width, Rows: ptyReq.Window.Height, Term: ptyReq.Term,
-		},
+		}
 	}
 
 	// Recording starts before the operator sees a prompt. If it cannot start, the
@@ -444,7 +473,17 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// After the channel is established and the session is paired — never as an
 	// unauthenticated early message that a prefix-truncation attack could remove
 	// (NFR7, and the reason Terrapin matters to a custom SSH server).
-	fmt.Fprint(sess, banner(dev, p, recording))
+	//
+	// On stdout for a shell, because that is where an operator is looking. On *stderr*
+	// for exec, because stdout there is a caller's data: a disclosure prepended to the
+	// output of `ssh device cat /etc/version` is a disclosure that corrupts whatever
+	// parses it. The requirement is that the operator is told, not that it lands in the
+	// one stream that must stay clean.
+	if profile == "exec" {
+		fmt.Fprint(sess.Stderr(), banner(dev, p, recording))
+	} else {
+		fmt.Fprint(sess, banner(dev, p, recording))
+	}
 
 	opConn := newSSHConn(sess, winCh)
 	defer opConn.Close(transport.CloseNormal, "session over")
@@ -454,8 +493,10 @@ func (s *Server) handleSession(sess gssh.Session) {
 	res := out.Result
 	code := out.ExitCode
 
-	if opConn.sawThrottle() {
+	if opConn.sawThrottle() && profile != "exec" {
 		// A shell must never drop. If one was announced, the policy engine is wrong.
+		// On exec it is the documented policy: coalesce and drop, with the byte count
+		// named, because a truncated log is better than a stalled device.
 		log.Error("THROTTLE reached an SSH operator on a shell session — "+
 			"shell must backpressure, never drop", "session", sessionID)
 	}

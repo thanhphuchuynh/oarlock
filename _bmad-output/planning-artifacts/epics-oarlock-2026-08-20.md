@@ -458,7 +458,29 @@ spec calls this the product's defining interaction.
 **Requirements:** FR10 (full), FR11, FR33, FR39 · **SC7**
 
 - **E5.S1** `exec` profile: allow-listed argv, no shell interpretation, `DATA_ERR` → SSH
-  extended data, exit code. `POST /api/v1/devices/{id}/exec` · `FR10, FR33`
+  extended data, exit code. `POST /api/v1/devices/{id}/exec` · `FR10, FR33` — ✅ **done**.
+  `agent.Exec` holds the allow-list on the device and matches argvs exactly; both operator
+  surfaces work — `ssh device some command`, and the API endpoint which runs the session on
+  the gateway and returns stdout, stderr and a status.
+
+  Four bugs, three of them mine and one pre-existing:
+
+  - **A session with no `EXIT` frame reported exit 0.** So a device *refusing* a command
+    looked to any caller like a command that had run and been happy. Pre-existing, and it
+    affected shells too; now 255, matching ssh's own convention.
+  - **The agent sent `EXIT` and `CLOSE` on a context it had just cancelled.** Cancelling a
+    context a websocket read is blocked on closes the connection, so every answer was
+    written to a torn-down socket — output arrived, status never did. This bit twice, once
+    per branch, which is why the ordering now lives in one place.
+  - **`cmd.Env = nil` means *inherit*, not empty.** The default that read as "no
+    environment" handed every command whatever the agent was started with.
+  - **The `waking…` progress line went to stdout**, which for `ssh device cat /etc/version`
+    corrupts whatever parses the output. Progress and the disclosure both move to stderr
+    for exec; stdout carries only the command's own bytes.
+
+  Each guarantee was checked by injecting its inverse — the exit-code default, a
+  program-only allow-list, the stdout leak, and an uncapped response — and all four were
+  caught.
 - **E5.S2** `file` profile confined to a root, symlinks resolved and re-checked, fuzzed · `FR10, NFR11`
 - **E5.S3** `tcp` profile, loopback-only allow-list, empty by default · `FR10`
 - **E5.S4** sftp subsystem and `direct-tcpip` on the gateway · `FR10`

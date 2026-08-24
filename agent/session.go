@@ -83,8 +83,10 @@ func (c *Control) Serve(ctx context.Context, inv frame.Invitation) error {
 	switch inv.Profile {
 	case "shell":
 		return s.runShell(ctx, c.cfg.Shell, inv)
+	case "exec":
+		return s.runExec(ctx, c.cfg.Exec, inv)
 	default:
-		// exec, log, file, tcp and sshpass land in E5. Refusing clearly beats
+		// log, file, tcp and sshpass land later in E5. Refusing clearly beats
 		// pretending: the gateway already knows what this build advertised.
 		err := fmt.Errorf("profile %q is not implemented by this build", inv.Profile)
 		_ = s.send(ctx, frame.TypeError, frame.Error{

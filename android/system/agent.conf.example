@@ -46,3 +46,21 @@ dns:
 #   per_profile:
 #     shell: "2000:2000"       # on-call: the adb-shell privilege level
 #     exec:  "9999:9999"       # field service: a dedicated, less privileged uid
+
+# The `exec` allow-list: complete argvs, matched element for element. Empty — the default —
+# means this device does not offer `exec` at all, and the gateway refuses such a session at
+# open time rather than after a round trip.
+#
+# This is the capability most support work actually needs, and the reason to prefer it over
+# `shell` on a machine in somebody's home: an allow-list of commands is a far smaller thing
+# to audit than a shell, and there is no shell interpretation anywhere on the path.
+#
+# Exact argvs, not "this program with any arguments". `logcat` with a caller-chosen file
+# argument reads any file; deciding which flags of which binary are safe is a per-binary
+# research project. Write one entry per variant you actually need.
+#
+# exec:
+#   - ["/system/bin/getprop", "ro.build.version.release"]
+#   - ["/system/bin/logcat", "-d", "-t", "500"]
+#   - ["/system/bin/dumpsys", "battery"]
+# exec_timeout: 30s

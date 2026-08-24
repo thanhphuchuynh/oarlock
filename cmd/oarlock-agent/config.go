@@ -15,6 +15,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -47,6 +48,17 @@ type Config struct {
 	DNS []string `yaml:"dns"`
 
 	Sessions Sessions `yaml:"sessions"`
+
+	// Exec is the allow-list for the `exec` profile: complete argvs, matched element for
+	// element. Empty — the default — means this device does not offer `exec` at all, and
+	// the gateway then refuses such a session at open time rather than after a round trip.
+	//
+	// Exact argvs rather than a list of programs with free arguments. See agent.Exec for
+	// why: `tail` with a caller-chosen path reads any file, `find -exec` runs anything,
+	// and deciding which flags of which binary are safe is a per-binary research project.
+	Exec [][]string `yaml:"exec"`
+	// ExecTimeout bounds one command. Zero uses the agent default.
+	ExecTimeout time.Duration `yaml:"exec_timeout"`
 }
 
 // Sessions says what OS identity a session's shell runs as.
