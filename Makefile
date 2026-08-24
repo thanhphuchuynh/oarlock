@@ -25,7 +25,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary
+.PHONY: help build binaries ui typecheck test vet check clean demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary
 
 help:
 	@printf '%s\n' \
@@ -36,6 +36,7 @@ help:
 		'  make check        Run typecheck, UI build, Go tests, and go vet' \
 		'  make test         Run Go tests and frontend tests' \
 		'  make vet          Run go vet ./...' \
+		'  make demo-url     Point demo/oarlock.yaml at this machine's current LAN address' \
 		'  make demo-reset   Remove demo/oarlock.db for a clean SQLite registry' \
 		'  make demo-server  Start demo gateway with demo/oarlock.yaml' \
 		'  make demo-seed-device  Add treadmill-4821 to the demo SQLite registry' \
@@ -71,6 +72,13 @@ check: typecheck ui
 clean:
 	rm -f $(OARLOCKD) $(OARLOCK_AGENT)
 	rm -rf dist web/dist .cache/go-build
+
+# The address a device dials back on has to be reachable *by the device*, so for a phone
+# on the LAN it is this machine's LAN address — which DHCP changes without asking. A stale
+# value looks like a device that never answers: the gateway logs `device_offline` and the
+# agent logs `connection refused` to an address that used to be here.
+demo-url:
+	@addr=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null); 	if [ -z "$$addr" ]; then echo "no LAN address on en0/en1"; exit 1; fi; 	current=$$(sed -n 's|^url: ws://\([^:]*\):.*|\1|p' $(DEMO_CONFIG)); 	if [ "$$current" = "$$addr" ]; then printf 'demo url is already ws://%s:8443\n' "$$addr"; exit 0; fi; 	sed -i '' "s|^url: ws://.*|url: ws://$$addr:8443|" $(DEMO_CONFIG); 	printf 'demo url: ws://%s:8443 (was %s) — restart the gateway, and update the APK\n' "$$addr" "$$current"
 
 demo-reset:
 	rm -f $(DEMO_DIR)/oarlock.db
