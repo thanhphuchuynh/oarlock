@@ -388,11 +388,14 @@ spec calls this the product's defining interaction.
 **SC4, SC5**
 
 - **E4.S1** OIDC authenticator: device-code over keyboard-interactive for CLI, code flow for
-  browser · `FR15` — 🟡 **partly done**: `internal/auth/oidc` verifies bearer JWTs for the
+  browser · `FR15` — ✅ **done**: `internal/auth/oidc` verifies bearer JWTs for the
   API and browser surface, and logs SSH operators in with the device authorization grant
   over keyboard-interactive (`plugin.InteractiveAuthenticator`, a new optional interface).
-  The **browser code flow is not built** — the console still takes a pasted `id_token`
-  rather than redirecting to the provider, which is the remaining half.
+  The browser code flow is built too: `internal/authsrv` serves `/auth/login`,
+  `/auth/callback`, `/auth/token` and `/auth/logout`, with PKCE (S256) and `state`, and the
+  console shows a sign-in button rather than asking for a pasted secret. There is no
+  session cookie — the callback hands the provider's own `id_token` over in one hop, so the
+  API keeps a single bearer path and no CSRF surface.
 
   Verification is owned rather than imported, so the classic JWT failures each have a test
   that performs them: `alg: none`, HS256 signed with the public key, an ECDSA header over
@@ -406,6 +409,15 @@ spec calls this the product's defining interaction.
   revocation mean anything. And the boot gate's `AuthenticatorKind == "static"` never
   matched, because the daemon reports `static_token`; a production deployment with static
   tokens passed the gate, saved only by the constructor refusing a non-dev env.
+
+  A third came from the browser half: `safeReturnTo` accepted `/\evil.example.com`, because
+  `url.Parse` reports no host for it and a browser normalises the backslash to a slash —
+  an open redirect on the login endpoint. Replaced with a character allow-list.
+
+  Two limits of the browser test suite, found by injection rather than assumed: it cannot
+  catch a `Secure`-flag mistake, because `http://127.0.0.1` is a secure context, and it
+  cannot catch a `SameSite` one, because a provider and a gateway both on loopback are
+  same-site whatever their ports.
 - **E4.S2** SSH-CA authenticator, promoted to recommended default; `authorized_keys` warns at
   boot that it does not scale · `FR15`
 - **E4.S3** Webhook authorizer with TTL cache and SSE `Watch` · `FR17` — ✅ **done**

@@ -51,9 +51,10 @@ import (
 	"github.com/oarlock/oarlock/internal/attachsrv"
 	"github.com/oarlock/oarlock/internal/audit"
 	"github.com/oarlock/oarlock/internal/auth/authorizedkeys"
-	"github.com/oarlock/oarlock/internal/auth/oidc"
 	"github.com/oarlock/oarlock/internal/auth/delegated"
+	"github.com/oarlock/oarlock/internal/auth/oidc"
 	"github.com/oarlock/oarlock/internal/auth/statictoken"
+	"github.com/oarlock/oarlock/internal/authsrv"
 	"github.com/oarlock/oarlock/internal/authz"
 	"github.com/oarlock/oarlock/internal/config"
 	"github.com/oarlock/oarlock/internal/controlsrv"
@@ -307,7 +308,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	}
 
 	// ── operator authentication ──
-	authn, authnKind, err := buildAuthenticator(cfg, log)
+	authn, oidcAuthn, authnKind, err := buildAuthenticator(cfg, log)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +374,24 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Runner: runner, Live: g.live, Log: log,
 	})
 	mux.Handle("/api/", api)
+
+	// The browser login, when a provider is configured and a callback is registered.
+	// Without redirect_url there is nothing to mount: the console then expects a pasted
+	// token, which is what a development gateway with static tokens wants.
+	if oidcAuthn != nil && cfg.Auth.RedirectURL != "" {
+		login, err := authsrv.New(authsrv.Options{
+			OIDC:        oidcAuthn,
+			RedirectURL: cfg.Auth.RedirectURL,
+			Audit:       g.audit,
+			Log:         log,
+		})
+		if err != nil {
+			return nil, err
+		}
+		mux.Handle(authsrv.Prefix+"/", login)
+		log.Info("browser login is available", "at", authsrv.Prefix+"/login",
+			"callback", cfg.Auth.RedirectURL)
+	}
 	// The console. Optional: a binary built without the front-end assets is a working
 	// gateway, and the handler says so rather than serving a blank page.
 	mux.Handle("/ui/", ui.Handler("/ui"))
@@ -661,7 +680,11 @@ func buildAuditSink(cfg *config.Config, log *slog.Logger) interface {
 	return audit.NewAsync(sink, cfg.Audit.Buffer, log)
 }
 
-func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authenticator, string, error) {
+// buildAuthenticator returns the authenticator, the concrete OIDC client when there is
+// one — the browser login needs the code-flow methods, which are not on the interface —
+// and a name for the boot gate and the log.
+func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authenticator,
+	*oidc.Authenticator, string, error) {
 	// OIDC answers both surfaces on its own — a bearer token on the API, a device-code
 	// login over SSH keyboard-interactive — so when it is configured it is the whole
 	// answer rather than one half of a pair.
@@ -683,14 +706,14 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 			Log:           log,
 		})
 		if err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 		// Keys alongside OIDC are legitimate — a break-glass account, or an automation
 		// that cannot do a browser flow — so they are combined rather than refused. What
 		// is *not* combined is static tokens: a long-lived shared secret next to a real
 		// identity provider is the weakest link deciding the strength of the chain.
 		if len(cfg.API.Tokens) > 0 {
-			return nil, "", errors.New("oarlockd: api.tokens is set alongside auth.kind: " +
+			return nil, nil, "", errors.New("oarlockd: api.tokens is set alongside auth.kind: " +
 				"oidc. A static token is a long-lived shared secret that cannot be " +
 				"revoked without a config push; next to an identity provider it is " +
 				"simply the easier way in. Remove api.tokens")
@@ -698,7 +721,7 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 		if cfg.SSH.AuthorizedKeys != "" {
 			ak, err := authorizedkeys.Open(cfg.SSH.AuthorizedKeys, log)
 			if err != nil {
-				return nil, "", err
+				return nil, nil, "", err
 			}
 			log.Warn("both oidc and ssh.authorized_keys are configured; an operator " +
 				"whose key is in that file does not need to log in, so revoking their " +
@@ -706,9 +729,9 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 			return &interactivePair{
 				pair:        pair{keys: ak, tokens: a},
 				interactive: a,
-			}, "oidc+authorized_keys", nil
+			}, a, "oidc+authorized_keys", nil
 		}
-		return a, "oidc", nil
+		return a, a, "oidc", nil
 	}
 
 	// An SSH key file authenticates operators at the front door; static tokens
@@ -718,7 +741,7 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 	if cfg.SSH.AuthorizedKeys != "" {
 		ak, err := authorizedkeys.Open(cfg.SSH.AuthorizedKeys, log)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 		keys = ak
 	}
@@ -726,20 +749,20 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 	if len(cfg.API.Tokens) > 0 {
 		st, err := statictoken.Open(cfg.Env, cfg.API.Tokens)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 		tokens = st
 	}
 	switch {
 	case keys == nil && tokens == nil:
-		return nil, "", errors.New("oarlockd: no authenticator configured: set " +
+		return nil, nil, "", errors.New("oarlockd: no authenticator configured: set " +
 			"ssh.authorized_keys, api.tokens, or both")
 	case tokens == nil:
-		return keys, "authorized_keys", nil
+		return keys, nil, "authorized_keys", nil
 	case keys == nil:
-		return tokens, "static_token", nil
+		return tokens, nil, "static_token", nil
 	default:
-		return &pair{keys: keys, tokens: tokens}, "authorized_keys+static_token", nil
+		return &pair{keys: keys, tokens: tokens}, nil, "authorized_keys+static_token", nil
 	}
 }
 

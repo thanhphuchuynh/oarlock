@@ -127,6 +127,57 @@ export class ApiError extends Error {
   }
 }
 
+/** How this gateway wants an operator to sign in. */
+export type LoginMode = "oidc" | "token";
+
+/**
+ * loginMode asks the gateway which sign-in to render.
+ *
+ * Asked rather than guessed: a console that assumed one and fell back to the other would
+ * flash the wrong screen on every load. Unauthenticated on purpose — "this gateway uses a
+ * provider" is visible from the login page either way.
+ */
+export async function loginMode(base = ""): Promise<LoginMode> {
+  try {
+    const res = await fetch(base + "/auth/config", { headers: { Accept: "application/json" } });
+    if (!res.ok) return "token";
+    const body: unknown = await res.json();
+    const login = (body as { login?: string }).login;
+    return login === "oidc" ? "oidc" : "token";
+  } catch {
+    // A gateway with no browser login does not serve this at all.
+    return "token";
+  }
+}
+
+/**
+ * collectHandoff picks up the token left by a completed sign-in, once.
+ *
+ * The callback set a one-hop cookie and redirected here; this exchanges it for the
+ * provider's own id_token and the gateway clears the cookie in the same response. Returns
+ * null on any load that did not just come back from a sign-in, which is most of them.
+ */
+export async function collectHandoff(base = ""): Promise<{ token: string; principal: string } | null> {
+  try {
+    const res = await fetch(base + "/auth/token", { method: "POST" });
+    if (res.status !== 200) return null;
+    const body = (await res.json()) as { token?: string; principal?: string };
+    if (!body.token) return null;
+    return { token: body.token, principal: body.principal ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+/** endSession clears whatever the gateway is holding for this browser. */
+export async function endSession(base = ""): Promise<void> {
+  try {
+    await fetch(base + "/auth/logout", { method: "POST" });
+  } catch {
+    // Signing out locally is the part that matters; the gateway holds nothing durable.
+  }
+}
+
 export class Client {
   constructor(
     private readonly base: string,

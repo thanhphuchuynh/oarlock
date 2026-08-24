@@ -220,6 +220,39 @@ header claiming one thing over a key of another gets nowhere.
 calling `userinfo`, which turns every API request into a second round trip and makes the
 provider's availability a dependency of every list of sessions.
 
+**The browser login** is mounted at `/auth/*` when `auth.redirect_url` is set:
+
+```yaml
+auth:
+  kind: oidc
+  issuer: https://accounts.example.com
+  client_id: oarlock-gateway
+  redirect_url: https://gw.example.com/auth/callback   # registered with the provider
+```
+
+Authorization code with PKCE (S256 only — `plain` makes the challenge equal the verifier,
+which protects against nobody who can read the request). `state` and PKCE are both present
+and do different jobs: PKCE stops a stolen code being spent, `state` stops an attacker
+starting a flow and having somebody else's browser finish it.
+
+`redirect_url` is required rather than derived from the request's `Host`. A provider
+matches it byte for byte, and deriving it from a header would let a proxy — or anyone who
+can set one — choose where an authorization code is delivered. It must be `https` outside
+loopback.
+
+**No session cookie.** The obvious design is a cookie the API accepts, and that is also how
+an API acquires a CSRF surface. Instead the callback sets a one-hop cookie, the console
+exchanges it once at `/auth/token` for the provider's own `id_token`, and the cookie is
+cleared in the same response. From then on the console sends a bearer header like any other
+client and the API has no cookie path at all. The token is the provider's, not one this
+gateway minted: a self-signed token would be a second credential system to rotate, revoke
+and get wrong.
+
+**`return_to` accepts only a path on this origin**, matched against an allow-list of
+characters rather than parsed. `url.Parse` reports no host for `/\evil.example.com`, and a
+browser normalises that backslash to a slash — so a parser-based check hands you an open
+redirect on the one endpoint every operator visits.
+
 **Static tokens alongside OIDC are refused at boot.** A long-lived shared secret next to a
 real identity provider is just the easier way in. A key file alongside is *allowed* — for a
 break-glass account, or automation that cannot do a browser flow — but it warns, because
