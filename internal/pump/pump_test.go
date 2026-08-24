@@ -698,3 +698,48 @@ func TestNoDeadlinesMeansNoSupervisor(t *testing.T) {
 		t.Fatalf("a session with no deadlines was closed: %q", res.Reason)
 	}
 }
+
+// TestBufferedOutputSurvivesTheSessionEnding.
+//
+// Output.Close() promises to "stop accepting writes and let Run drain what is buffered".
+// The event that triggers it — the device ending the session — is the same event that
+// cancels the pump's context, so draining on that context raced the cancellation and
+// dropped the final batch. For a shell that is the last line before the prompt returns;
+// for `exec`, where the whole point is collecting an answer, it is the answer.
+//
+// A long coalescing window makes the race deterministic in the failing direction: the
+// bytes are certainly still buffered when the session ends.
+func TestBufferedOutputSurvivesTheSessionEnding(t *testing.T) {
+	w := wire(t, "exec", pump.Limits{
+		Batch: 1 << 20, Window: 2 * time.Second,
+		HighWater: 1 << 16, LowWater: 1 << 12,
+	})
+
+	// Far below Batch, so nothing is flushed by size, and the window has not elapsed.
+	send(t, w.device, frame.Data([]byte("the answer")))
+	exit, _ := frame.Marshal(frame.TypeExit, frame.Exit{Code: 0})
+	send(t, w.device, exit)
+	closeFrame, _ := frame.Marshal(frame.TypeClose, frame.Close{Reason: "device_close"})
+	send(t, w.device, closeFrame)
+
+	// The buffered stdout has to arrive even though the session is over.
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("the buffered output never arrived: the final batch was dropped when " +
+				"the session ended")
+		default:
+		}
+		f := recv(t, w.operator)
+		if f.Type == frame.TypeData {
+			if string(f.Payload) != "the answer" {
+				t.Fatalf("payload = %q", f.Payload)
+			}
+			return
+		}
+		if f.Type == frame.TypeClose {
+			t.Fatal("the session closed before the buffered output was sent")
+		}
+	}
+}
