@@ -1,10 +1,22 @@
 // Command oarlock-agent is the reference device agent.
 //
 // It exists to be run: the agent library was exercised only from the gateway's own tests,
-// and a library nobody can start is a library nobody can try. On a real device this would
-// be embedded rather than shipped as a binary — Android 10 forbids executing a binary from
-// app storage, which is why the agent is a library first — but a binary is what makes the
-// thing testable on a laptop.
+// and a library nobody can start is a library nobody can try.
+//
+// # Where this binary actually runs
+//
+// Three places, and they differ in what a session can touch.
+//
+// A laptop, for trying it. An `init` service on a device whose system image you control —
+// `/system/bin/oarlock-agent`, started as `shell`, which is the identity `adb shell` runs
+// as and the one Android's SELinux policy has been hardened around. And inside an app, as
+// a library, when the image is not yours: Android 10 forbids executing a binary from app
+// storage, which is why the agent is a library first.
+//
+// The third case is the constrained one — an app-sandbox session sees the app's own files
+// and very little else. The second is why -config and `sessions:` exist: a service
+// started by init has a fixed argv baked into a system image, and if it starts as root
+// then every session is root unless the agent drops.
 package main
 
 import (
@@ -15,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -40,6 +53,8 @@ func main() {
 		insecure = flag.Bool("insecure-skip-pin", false,
 			"connect without pinning the gateway's key")
 		showVersion = flag.Bool("version", false, "print the version and exit")
+		configPath  = flag.String("config", "",
+			"path to an agent config file; flags given here win over it")
 	)
 	flag.Parse()
 
@@ -69,11 +84,81 @@ func main() {
 		return
 	}
 
-	if *gateway == "" || *device == "" {
-		log.Error("both -gateway and -device are required")
+	// The file first, then flags over the top: a flag is something somebody typed just
+	// now, and a config file is something a system image shipped six months ago.
+	cfg := &Config{}
+	if *configPath != "" {
+		loaded, err := LoadConfig(*configPath)
+		if err != nil {
+			log.Error("agent config", "error", err)
+			os.Exit(2)
+		}
+		cfg = loaded
+	}
+	flagsSet := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { flagsSet[f.Name] = true })
+	if flagsSet["gateway"] || cfg.Gateway == "" {
+		cfg.Gateway = *gateway
+	}
+	if flagsSet["device"] || cfg.Device == "" {
+		cfg.Device = *device
+	}
+	if flagsSet["key"] || cfg.Key == "" {
+		cfg.Key = *keyPath
+	}
+	if flagsSet["shell"] || cfg.Shell == "" {
+		cfg.Shell = *shell
+	}
+	if flagsSet["pin"] && *pin != "" {
+		cfg.Pins = strings.Split(*pin, ",")
+	}
+	if flagsSet["insecure-skip-pin"] {
+		cfg.InsecureSkipPin = *insecure
+	}
+
+	if cfg.Gateway == "" || cfg.Device == "" {
+		log.Error("both -gateway and -device are required (or gateway and device/" +
+			"device_file in -config)")
 		os.Exit(2)
 	}
-	signer, err := loadOrGenerateKey(*keyPath, false, log)
+
+	// Named resolvers before anything dials, because the first thing that resolves a
+	// name is the control channel itself.
+	if resolver, err := newResolver(cfg.DNS); err != nil {
+		log.Error("dns", "error", err)
+		os.Exit(2)
+	} else if resolver != nil {
+		net.DefaultResolver = resolver
+		log.Info("resolving through the configured servers rather than the system's",
+			"servers", strings.Join(cfg.DNS, ","))
+	}
+
+	// Which identity a session runs as, and whether this process could possibly manage
+	// it. Checked at boot: a session that fails at exec time fails thirty seconds after
+	// an operator asked for it, with nothing legible to look at.
+	identities, err := cfg.Sessions.identities()
+	if err != nil {
+		log.Error("agent config: sessions", "error", err)
+		os.Exit(2)
+	}
+	if err := canDropTo(identities, []string{"shell", "exec"}); err != nil {
+		log.Error("sessions cannot run as the configured user", "error", err)
+		os.Exit(2)
+	}
+	// Asking the hook rather than trusting the config: it collapses a drop to our own
+	// identity into "inherit", so the config and the behaviour can differ and the log
+	// has to report the behaviour.
+	if identities == nil || identities("shell") == nil {
+		// Said out loud, because it is the difference between a recorded shell that can
+		// read one app's files and a recorded shell that can do anything.
+		log.Info("sessions will run as this process's own user",
+			"uid", os.Geteuid(), "gid", os.Getegid())
+	} else {
+		log.Info("sessions will run as a separate user", "default", cfg.Sessions.User,
+			"per_profile", cfg.Sessions.PerProfile, "groups", cfg.Sessions.Groups)
+	}
+
+	signer, err := loadOrGenerateKey(cfg.Key, false, log)
 	if err != nil {
 		log.Error("device key", "error", err)
 		os.Exit(2)
@@ -81,7 +166,7 @@ func main() {
 
 	// The key first, so that generating one is a setup step rather than something that
 	// requires deciding about pinning on the way past.
-	if *pin == "" && !*insecure {
+	if len(cfg.Pins) == 0 && !cfg.InsecureSkipPin {
 		// Wire version v0 has no channel binding, so pinning is what stands between the
 		// handshake and a TLS-terminating middlebox relaying it. Refusing rather than
 		// defaulting to unpinned: an agent that connects without a pin because nobody
@@ -93,24 +178,21 @@ func main() {
 		os.Exit(2)
 	}
 
-	var pins []string
-	if *pin != "" {
-		pins = strings.Split(*pin, ",")
-	}
-
 	control, err := agent.NewControl(agent.Config{
-		Gateway:   *gateway,
-		DeviceID:  *device,
+		Gateway:   cfg.Gateway,
+		DeviceID:  cfg.Device,
 		Signer:    signer,
 		Dialer:    websocket.Dialer{},
-		PinSHA256: pins,
+		PinSHA256: cfg.Pins,
 		Caps:      []string{"shell"},
 		Info: frame.AgentInfo{
 			Version:  version,
 			Platform: platform(),
 		},
-		Shell: agent.Forkpty(strings.Fields(*shell)),
-		Log:   log,
+		Shell: agent.ForkptyWith(strings.Fields(cfg.Shell), agent.ShellOptions{
+			Identity: identities,
+		}),
+		Log: log,
 	})
 	if err != nil {
 		log.Error("agent", "error", err)
@@ -120,8 +202,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The merged configuration, not the flags: with -config the flags are mostly empty,
+	// and a startup line reading gateway="" from a process that is about to connect to
+	// one is worse than no line at all.
 	log.Info("oarlock-agent starting",
-		"device", *device, "gateway", *gateway, "shell", *shell, "version", version)
+		"device", cfg.Device, "gateway", cfg.Gateway, "shell", cfg.Shell,
+		"pinned", len(cfg.Pins) > 0, "version", version)
 	if err := control.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Error("control channel", "error", err)
 		os.Exit(1)
