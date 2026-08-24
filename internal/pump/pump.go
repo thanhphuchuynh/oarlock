@@ -221,10 +221,26 @@ func (s *Session) Run(ctx context.Context) (Result, error) {
 		}
 	}
 
+	// The coalescer runs on a context that outlives the session's own.
+	//
+	// Close() means "stop accepting writes and send what is buffered" — and the event
+	// that triggers it, the device ending the session, is the same event that cancels
+	// ctx. Draining on the cancelled context therefore raced the cancellation and lost
+	// the final batch: for a shell that is the last line before the prompt comes back,
+	// and for `exec` it is the answer. It showed up as a one-in-many flake on a loaded
+	// machine, which is what a lost race looks like from the outside.
+	//
+	// Bounded rather than unbounded, so an operator socket that never drains cannot hold
+	// the session open. One coalescing window would do; five seconds is generous and
+	// still finite.
+	drainCtx, stopDrain := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer stopDrain()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := out.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := out.Run(drainCtx); err != nil && !errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) {
 			finish("transport_error", err)
 			cancel()
 		}
