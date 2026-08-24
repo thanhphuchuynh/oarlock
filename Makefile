@@ -23,8 +23,9 @@ ANDROID_APP := android/agent-app
 ANDROID_AAR := $(ANDROID_APP)/app/libs/oarlockagent.aar
 ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
+ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk
+.PHONY: help build binaries ui typecheck test vet check clean demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary
 
 help:
 	@printf '%s\n' \
@@ -41,7 +42,8 @@ help:
 		'  make demo-seed-permissions  Add the demo grants to SQLite' \
 		'  make demo-agent   Start demo oarlock-agent for treadmill-4821' \
 		'  make dev-ui       Start Vite console dev server' \
-		'  make android-apk  Build the standalone ARM64 Android/VR agent APK'
+		'  make android-apk  Build the standalone ARM64 Android/VR agent APK' \
+		'  make android-binary  Build the ARM64 agent binary for a system image'
 
 build: binaries
 
@@ -133,6 +135,21 @@ android-aar: android-tools android-test
 		-javapkg dev.oarlock.mobile -trimpath \
 		-ldflags='-s -w -extldflags=-Wl,-z,max-page-size=16384' \
 		-o ../../$(ANDROID_AAR) ./oarlockagent
+
+# The agent as an ordinary binary for a device whose system image you control.
+#
+# No NDK and no gomobile: CGO_ENABLED=0 and this is the same source, the same flags and
+# the same code path as the agent that runs on a server. One artifact to test.
+#
+# The cost of dropping cgo is DNS: Go's pure resolver reads /etc/resolv.conf, Android has
+# none, and the fallback is 127.0.0.1:53 where nothing listens. Name the servers in the
+# agent's config (`dns:`) or put an IP in the gateway URL.
+android-binary:
+	mkdir -p $(dir $(ANDROID_BIN))
+	GOOS=android GOARCH=arm64 CGO_ENABLED=0 GOCACHE=$(GOCACHE) \
+		$(GO) build -trimpath -ldflags='-s -w' -o $(ANDROID_BIN) ./cmd/oarlock-agent
+	@printf 'binary: %s\n' '$(CURDIR)/$(ANDROID_BIN)'
+	@printf 'install: adb push %s /system/bin/oarlock-agent  (or bake it into the image)\n' '$(ANDROID_BIN)'
 
 android-apk: android-aar
 	cd $(ANDROID_APP) && ./gradlew --offline --no-daemon assembleDebug

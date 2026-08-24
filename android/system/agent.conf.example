@@ -1,0 +1,48 @@
+# The agent's configuration, at /data/vendor/oarlock/agent.conf.
+#
+# It lives in /data rather than in the system image because everything in here is a thing
+# an operator changes — the gateway moves, pins rotate, a privilege decision is revisited
+# — and a system image is not where changeable things belong. Owned by shell:shell, 0640.
+#
+# Flags win over this file when both are given: a flag is something somebody typed just
+# now. `dns` and `sessions` have no flags, because they are deployment decisions rather
+# than things to type at a prompt.
+
+gateway: wss://gw.example.org/ws/control
+
+# One image, one config, ten thousand machines — so the id comes from a file rather than
+# from here. init writes it once at first boot; see oarlock.rc.
+device_file: /data/vendor/oarlock/device-id
+
+key: /data/vendor/oarlock/device.key
+shell: /system/bin/sh
+
+# Wire v0 has no channel binding, so pinning the gateway's key is what stands between the
+# handshake and a TLS-terminating middlebox relaying it. `oarlockd` prints this at boot.
+pins:
+  - "REPLACE_WITH_THE_GATEWAY_KEY_SHA256"
+
+# Android has no /etc/resolv.conf, and a CGO-free build falls back to 127.0.0.1:53 where
+# nothing is listening — so a gateway URL with a hostname never resolves. Name the
+# resolvers, or put an IP in the URL above. An address without a port gets :53.
+dns:
+  - "1.1.1.1"
+  - "8.8.8.8"
+
+# What a session's shell runs as.
+#
+# Leave this out entirely when init already starts the agent as the right user
+# (`user shell` in oarlock.rc) — sessions then inherit uid 2000 and there is nothing to
+# decide here.
+#
+# Fill it in when the agent starts as root and should drop per session, which is how you
+# get two privilege tiers on one device. That is the sshd shape: the supervisor is
+# privileged and no session ever is.
+#
+# sessions:
+#   # Anything without its own entry below.
+#   user: "2000:2000"          # AID_SHELL — what `adb shell` is
+#   groups: [1007, 3003]       # log, inet. Without inet a session cannot open a socket.
+#   per_profile:
+#     shell: "2000:2000"       # on-call: the adb-shell privilege level
+#     exec:  "9999:9999"       # field service: a dedicated, less privileged uid

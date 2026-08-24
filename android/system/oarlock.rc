@@ -1,0 +1,59 @@
+# The agent as an init service, for a device whose system image you control.
+#
+# Install to /system/etc/init/oarlock.rc, with the binary at /system/bin/oarlock-agent.
+#
+# Why this exists at all: on stock Android there is no way for an MDM to run a command, so
+# reaching a device means an app, an app means a foreground service, and an app-sandbox
+# session can see the app's own files and very little else. If the image is yours, an init
+# service skips all of it — no app, no notification, no battery-optimisation exemption to
+# beg for, and it comes back by itself when it dies.
+#
+# ── the only line that really matters ────────────────────────────────────────────────
+#
+#   user shell
+#
+# init runs a service as root unless told otherwise, and the agent hands a session
+# whatever identity it holds. Without this line every recorded shell on every machine is
+# a root shell. uid 2000 (AID_SHELL) is what `adb shell` runs as: it can reach pm, am,
+# dumpsys, logcat and settings, it cannot reach another app's data, and its SELinux domain
+# has been hardened for a decade by people who do this full time. Start there and add
+# only what a technician demonstrably needs.
+#
+# For two privilege tiers on one device — `exec` for field service, `shell` for on-call —
+# drop `user shell` here, let init start the agent as root, and set `sessions:` in the
+# config instead. The agent then drops per session and no session is ever root. That is
+# the shape sshd has, and it is the only reason running this as root is defensible.
+
+service oarlock /system/bin/oarlock-agent -config /data/vendor/oarlock/agent.conf
+    class late_start
+    user shell
+    group shell log inet
+    #                ^ inet is AID_INET (3003). Without it socket() fails and the agent
+    #                  cannot dial the gateway at all. log (1007) is for logcat.
+    seclabel u:r:shell:s0
+    # SELinux, not the uid, is the real boundary on Android — even root is confined.
+    # Reusing the shell domain inherits a policy somebody already got right; a dedicated
+    # u:r:oarlock:s0 is better isolation and a week of chasing denials.
+
+    # capabilities NET_RAW
+    # ^ uncomment only if a technician genuinely needs tcpdump. A capability is a far
+    #   smaller grant than root and should be reached for before `user root` ever is.
+
+    restart_period 10
+    # Ten seconds, not immediately: a gateway that is down should not be met with a
+    # reconnect loop from the whole fleet at once. The agent has its own backoff for a
+    # channel that drops; this is for a process that exits.
+
+    oneshot false
+    disabled false
+
+# The device id, once, at first boot.
+#
+# init cannot reliably expand a property into a service argument, so the id is written to
+# a file the agent reads (`device_file:`). Serial is the obvious choice; an asset id from
+# your own provisioning is usually the better one.
+on post-fs-data
+    mkdir /data/vendor/oarlock 0750 shell shell
+    exec -- /system/bin/sh -c "test -s /data/vendor/oarlock/device-id || getprop ro.serialno > /data/vendor/oarlock/device-id"
+    chown shell shell /data/vendor/oarlock/device-id
+    chmod 0640 /data/vendor/oarlock/device-id
