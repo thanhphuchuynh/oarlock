@@ -65,6 +65,10 @@ type Config struct {
 	// trip.
 	Exec ExecFunc
 
+	// File reads and writes under one configured root. Nil on a build with no
+	// filesystem worth exposing — and then leave "file" out of Caps too.
+	File FileFunc
+
 	// OnInvitation is called for every invitation, from a DIAL frame and from
 	// WELCOME.resume alike. It runs on its own goroutine: dialling a session must
 	// not stall the channel that delivers the next invitation.

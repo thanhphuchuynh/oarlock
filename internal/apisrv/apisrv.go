@@ -155,6 +155,11 @@ func New(o Options) (*Server, error) {
 		// terminal to attach to, so a caller wanting one command should not have to
 		// speak the session protocol to get it.
 		s.mux.HandleFunc("POST "+Prefix+"/devices/{id}/exec", s.wrap(s.execOnDevice))
+		// Read and write one file under the device's configured root. Streamed rather
+		// than buffered: holding a whole log per concurrent request is a memory profile
+		// nobody asked for.
+		s.mux.HandleFunc("GET "+Prefix+"/devices/{id}/file", s.wrap(s.readFileOnDevice))
+		s.mux.HandleFunc("PUT "+Prefix+"/devices/{id}/file", s.wrap(s.writeFileOnDevice))
 	}
 	if o.Registry != nil {
 		s.mux.HandleFunc("GET "+Prefix+"/devices", s.wrap(s.listDevices))

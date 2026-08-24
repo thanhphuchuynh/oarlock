@@ -103,6 +103,18 @@ type Params struct {
 // matches ssh's own convention for a session that failed rather than a command that ran.
 const NoExitStatus = 255
 
+// recordedProfile says whether a profile's bytes belong in a recording.
+func recordedProfile(profile string) bool {
+	switch profile {
+	case "file", "tcp", "sshpass":
+		// sshpass is mode A: the gateway cannot read it at all, so there is nothing to
+		// record even in principle.
+		return false
+	default:
+		return true
+	}
+}
+
 // Outcome is what happened, including whether it was recorded — which the caller
 // needs in order to tell the operator the truth.
 type Outcome struct {
@@ -121,7 +133,13 @@ func (r *Runner) Prepare(ctx context.Context, p Params) (plugin.RecordingWriter,
 	var rw plugin.RecordingWriter
 	recording := false
 
-	if r.Recorder != nil {
+	// `file` and `tcp` are not recorded, per ARCHITECTURE § 9.4, and this is where that
+	// becomes true rather than aspirational. A recording is an asciicast — a terminal
+	// replay — so streaming a binary file into one produces something nobody can watch
+	// *and* puts a second copy of every transferred byte in a store with its own
+	// retention. The session row still says `not_recorded`, so it is a queryable fact
+	// rather than an absence somebody has to notice.
+	if r.Recorder != nil && recordedProfile(p.Profile) {
 		var err error
 		rw, err = r.Recorder.Open(ctx, &plugin.SessionMeta{
 			SessionID: p.SessionID, DeviceID: p.DeviceID, Profile: p.Profile,

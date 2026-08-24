@@ -481,7 +481,33 @@ spec calls this the product's defining interaction.
   Each guarantee was checked by injecting its inverse — the exit-code default, a
   program-only allow-list, the stdout leak, and an uncapped response — and all four were
   caught.
-- **E5.S2** `file` profile confined to a root, symlinks resolved and re-checked, fuzzed · `FR10, NFR11`
+- **E5.S2** `file` profile confined to a root, symlinks resolved and re-checked, fuzzed ·
+  `FR10, NFR11` — ✅ **done**. Confinement is `os.Root`, not a path check: the story says
+  "symlinks resolved and re-checked", and the honest version of that is that check-and-use
+  must be one syscall, which no amount of string inspection achieves. `GET`/`PUT
+  /api/v1/devices/{id}/file` stream through it; `file:read` and `file:write` are separate
+  grants.
+
+  Fuzzed per NFR11, and the fuzz property is the security one rather than "does not crash":
+  a root seeded with symlinks pointing outside it, asserting no input can read or modify
+  what is out there. 74k executions clean; against a naive `filepath.Join` implementation
+  it finds an escape from its seed corpus in 0.06s.
+
+  Three bugs found while building it:
+
+  - **Opening a FIFO blocks before a "regular file?" check can refuse it**, so a named pipe
+    anywhere under the root hung a session until its timeout. Reads now use `O_NONBLOCK`.
+  - **`file` was being recorded.** `Prepare` recorded whenever a recorder existed, so the
+    architecture's "not recorded" was aspirational — every transfer put a second copy of
+    its bytes in a store with different retention. Now enforced for `file`, `tcp` and
+    `sshpass`.
+  - **A read cancelled its own context.** The goroutine that forwards operator bytes for a
+    write also ran for reads, where the promised size is zero — so it finished instantly
+    and abandoned the read before it opened anything.
+
+  One test-fixture bug worth recording because it looked like a finding: sharing one root
+  across sub-tests let an earlier write replace a symlink, and the later "read succeeded"
+  was reading a perfectly ordinary file the test itself had created.
 - **E5.S3** `tcp` profile, loopback-only allow-list, empty by default · `FR10`
 - **E5.S4** sftp subsystem and `direct-tcpip` on the gateway · `FR10`
 - **E5.S5** Mode A passthrough on `tcp`: both guard rails, the banner, `not_recorded`.

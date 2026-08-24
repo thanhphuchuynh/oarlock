@@ -59,6 +59,19 @@ type Config struct {
 	Exec [][]string `yaml:"exec"`
 	// ExecTimeout bounds one command. Zero uses the agent default.
 	ExecTimeout time.Duration `yaml:"exec_timeout"`
+
+	// FileRoot is the directory the `file` profile is confined to. Empty — the default —
+	// means this device does not offer `file` at all.
+	//
+	// Point it at a directory holding only what support should see. Confinement below the
+	// root is the kernel's job via os.Root, but the root's own contents are a policy
+	// choice, and `/` is a choice.
+	FileRoot string `yaml:"file_root"`
+	// FileWritable allows writes under the root. Off by default: a device whose logs
+	// only need reading should not accept writes because nobody said it should not.
+	FileWritable bool `yaml:"file_writable"`
+	// FileMaxBytes bounds one transfer. Zero uses the agent default.
+	FileMaxBytes int64 `yaml:"file_max_bytes"`
 }
 
 // Sessions says what OS identity a session's shell runs as.

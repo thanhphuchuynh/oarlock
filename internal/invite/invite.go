@@ -123,6 +123,7 @@ type Request struct {
 	RecordInput bool
 	PTY         *frame.PTY
 	Exec        []string
+	File        *frame.FileOp
 
 	// AttachTicket asks for an operator-side ticket as well as the device's.
 	//
@@ -344,6 +345,7 @@ func (i *Inviter) Invite(ctx context.Context, dev *plugin.Device, req Request) (
 		Profile:   req.Profile,
 		PTY:       req.PTY,
 		Exec:      req.Exec,
+		File:      req.File,
 		Principal: req.Principal,
 		ExpiresAt: now.Add(ttl).UTC().Format(time.RFC3339),
 	}

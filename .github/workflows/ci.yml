@@ -127,6 +127,14 @@ jobs:
       - name: fuzz the scrollback ring
         run: go test ./internal/ring/ -run=NONE -fuzz=FuzzRingNeverReplaysMidSequence -fuzztime=60s
 
+      # NFR11 names two surfaces, and this is the second: the `file` profile's path
+      # handling. The property is not "does not crash" but "nothing outside the root is
+      # ever reachable", asserted against a root that contains symlinks pointing out of
+      # it — so a confinement that regressed to string-checking fails here rather than in
+      # somebody's home.
+      - name: fuzz the file profile's confinement
+        run: go test ./agent/ -run=NONE -fuzz=FuzzFilePathConfinement -fuzztime=60s
+
       - name: upload any crashers
         if: failure()
         uses: actions/upload-artifact@v4
@@ -137,6 +145,7 @@ jobs:
           path: |
             pkg/frame/testdata/fuzz/
             internal/ring/testdata/fuzz/
+            agent/testdata/fuzz/
 
   fuzz-nightly:
     if: github.event_name == 'schedule'
@@ -148,6 +157,7 @@ jobs:
           go-version: '1.25'
       - run: go test ./pkg/frame/ -run=NONE -fuzz=FuzzDecode -fuzztime=30m
       - run: go test ./internal/ring/ -run=NONE -fuzz=FuzzRingNeverReplaysMidSequence -fuzztime=15m
+      - run: go test ./agent/ -run=NONE -fuzz=FuzzFilePathConfinement -fuzztime=15m
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -155,6 +165,7 @@ jobs:
           path: |
             pkg/frame/testdata/fuzz/
             internal/ring/testdata/fuzz/
+            agent/testdata/fuzz/
 
   # The front end. Two tiers in one runner: `unit` is pure logic in Node — the codec,
   # the disclosure policy — and `component` mounts the real component in real Chromium,
