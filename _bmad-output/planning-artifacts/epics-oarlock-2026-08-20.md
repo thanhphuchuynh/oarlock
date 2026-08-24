@@ -388,7 +388,24 @@ spec calls this the product's defining interaction.
 **SC4, SC5**
 
 - **E4.S1** OIDC authenticator: device-code over keyboard-interactive for CLI, code flow for
-  browser · `FR15`
+  browser · `FR15` — 🟡 **partly done**: `internal/auth/oidc` verifies bearer JWTs for the
+  API and browser surface, and logs SSH operators in with the device authorization grant
+  over keyboard-interactive (`plugin.InteractiveAuthenticator`, a new optional interface).
+  The **browser code flow is not built** — the console still takes a pasted `id_token`
+  rather than redirecting to the provider, which is the remaining half.
+
+  Verification is owned rather than imported, so the classic JWT failures each have a test
+  that performs them: `alg: none`, HS256 signed with the public key, an ECDSA header over
+  an RSA key, a token from another issuer, an issuer that is a prefix of ours, another
+  relying party's audience, a missing `exp`, a tampered payload. Five deliberate
+  reintroductions of those flaws were each caught.
+
+  Two bugs found on the way, both in existing code: a withdrawn signing key kept verifying
+  tokens forever, because nothing refetched the key set unless a `kid` was *unknown* and a
+  retired kid is still cached — fixed with a staleness bound, which is what makes key
+  revocation mean anything. And the boot gate's `AuthenticatorKind == "static"` never
+  matched, because the daemon reports `static_token`; a production deployment with static
+  tokens passed the gate, saved only by the constructor refusing a non-dev env.
 - **E4.S2** SSH-CA authenticator, promoted to recommended default; `authorized_keys` warns at
   boot that it does not scale · `FR15`
 - **E4.S3** Webhook authorizer with TTL cache and SSE `Watch` · `FR17` — ✅ **done**

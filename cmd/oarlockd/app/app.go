@@ -51,6 +51,7 @@ import (
 	"github.com/oarlock/oarlock/internal/attachsrv"
 	"github.com/oarlock/oarlock/internal/audit"
 	"github.com/oarlock/oarlock/internal/auth/authorizedkeys"
+	"github.com/oarlock/oarlock/internal/auth/oidc"
 	"github.com/oarlock/oarlock/internal/auth/delegated"
 	"github.com/oarlock/oarlock/internal/auth/statictoken"
 	"github.com/oarlock/oarlock/internal/authz"
@@ -661,6 +662,55 @@ func buildAuditSink(cfg *config.Config, log *slog.Logger) interface {
 }
 
 func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authenticator, string, error) {
+	// OIDC answers both surfaces on its own — a bearer token on the API, a device-code
+	// login over SSH keyboard-interactive — so when it is configured it is the whole
+	// answer rather than one half of a pair.
+	if cfg.Auth.Kind == "oidc" {
+		a, err := oidc.Open(context.Background(), oidc.Config{
+			Issuer:       cfg.Auth.Issuer,
+			ClientID:     cfg.Auth.ClientID,
+			ClientSecret: cfg.Auth.ClientSecret,
+			Audience:     cfg.Auth.Audience,
+			Scopes:       cfg.Auth.Scopes,
+			Claims: oidc.ClaimMap{
+				Subject: cfg.Auth.SubjectClaim,
+				Email:   cfg.Auth.EmailClaim,
+				Groups:  cfg.Auth.GroupsClaim,
+			},
+			Skew:          cfg.Auth.Skew,
+			JWKSRefresh:   cfg.Auth.JWKSRefresh,
+			DeviceTimeout: cfg.Auth.DeviceTimeout,
+			Log:           log,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		// Keys alongside OIDC are legitimate — a break-glass account, or an automation
+		// that cannot do a browser flow — so they are combined rather than refused. What
+		// is *not* combined is static tokens: a long-lived shared secret next to a real
+		// identity provider is the weakest link deciding the strength of the chain.
+		if len(cfg.API.Tokens) > 0 {
+			return nil, "", errors.New("oarlockd: api.tokens is set alongside auth.kind: " +
+				"oidc. A static token is a long-lived shared secret that cannot be " +
+				"revoked without a config push; next to an identity provider it is " +
+				"simply the easier way in. Remove api.tokens")
+		}
+		if cfg.SSH.AuthorizedKeys != "" {
+			ak, err := authorizedkeys.Open(cfg.SSH.AuthorizedKeys, log)
+			if err != nil {
+				return nil, "", err
+			}
+			log.Warn("both oidc and ssh.authorized_keys are configured; an operator " +
+				"whose key is in that file does not need to log in, so revoking their " +
+				"access means editing the file on every replica as well")
+			return &interactivePair{
+				pair:        pair{keys: ak, tokens: a},
+				interactive: a,
+			}, "oidc+authorized_keys", nil
+		}
+		return a, "oidc", nil
+	}
+
 	// An SSH key file authenticates operators at the front door; static tokens
 	// authenticate the API. A deployment needs both surfaces, so the two are combined
 	// rather than chosen between.
@@ -701,6 +751,23 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 type pair struct {
 	keys   plugin.Authenticator
 	tokens plugin.Authenticator
+}
+
+// interactivePair is a pair whose token half can also hold a conversation.
+//
+// A separate type rather than a nil-able field on pair, because the optional interface is
+// discovered by type assertion: a pair that carried the method unconditionally would
+// advertise keyboard-interactive to SSH clients even in a keys-and-tokens deployment,
+// where it can only ever refuse. An operator would be prompted, have nothing useful to
+// type, and be turned away twice.
+type interactivePair struct {
+	pair
+	interactive plugin.InteractiveAuthenticator
+}
+
+func (p *interactivePair) AuthInteractive(ctx context.Context, user string,
+	ask plugin.Challenge) (*plugin.Principal, error) {
+	return p.interactive.AuthInteractive(ctx, user, ask)
 }
 
 func (p *pair) AuthPublicKey(ctx context.Context, user string, key xssh.PublicKey) (*plugin.Principal, error) {

@@ -112,12 +112,17 @@ func Check(s Settings, log *slog.Logger) ([]Problem, error) {
 			"or development rules by omission")
 	}
 
-	// Static tokens are long-lived shared secrets. Fine on a laptop.
-	if s.AuthenticatorKind == "static" && prod {
+	// Matched as substrings, because a deployment usually has more than one backend and
+	// the kind is a composite: "authorized_keys+static_token", "oidc+authorized_keys".
+	// These were equality checks against "static" and "authorized_keys", so the static
+	// check never fired at all — the kind the daemon reports is "static_token" — and the
+	// key-file check missed every deployment that also had tokens. A gate that silently
+	// matches nothing is worse than no gate, because it reads like coverage.
+	if strings.Contains(s.AuthenticatorKind, "static") && prod {
 		add(true, "authenticator", "static tokens cannot be revoked without a config "+
 			"push and never expire; use oidc or sshca outside development")
 	}
-	if s.AuthenticatorKind == "authorized_keys" && prod {
+	if strings.Contains(s.AuthenticatorKind, "authorized_keys") && prod {
 		add(false, "authenticator", "authorized_keys means revoking an operator is a "+
 			"file edit on every replica; sshca or oidc scale, this does not")
 	}

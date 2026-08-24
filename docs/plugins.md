@@ -164,6 +164,67 @@ Do not reuse the recording signing key here. The SSH host key is presented to ev
 client; the recording key attests to archived bytes. Rotating one must not force rotating
 the other.
 
+### 2.1 The `oidc` backend
+
+The one that makes production possible. Both surfaces, one identity:
+
+| surface | mechanism |
+|---|---|
+| API and browser | a bearer JWT, verified offline against the provider's published keys |
+| SSH | the device authorization grant (RFC 8628) over keyboard-interactive |
+
+```yaml
+auth:
+  kind: oidc
+  issuer: https://accounts.example.com
+  client_id: oarlock-gateway
+  scopes: [email, groups]
+  subject_claim: email      # what becomes the principal id
+  groups_claim: groups
+```
+
+**SSH with no key and no password.** The gateway prints a URL and a short code; the
+operator approves in a browser that already holds their session and whatever second factor
+the provider enforces. The gateway never sees a password and cannot weaken the MFA, and no
+key material lands on a laptop. Offered only when the backend implements the optional
+`plugin.InteractiveAuthenticator`, so a key-only deployment does not advertise a method it
+cannot answer.
+
+**The principal id is a policy decision, not a default.** `subject_claim` defaults to
+`email` because the authorisation language is globs over principal ids and people write
+`*@oncall.example.com`, not a list of opaque uuids. The cost is that email is mutable at
+the provider — so a token whose `email_verified` is false is refused outright, since an
+unverified email is a name its owner chose rather than an identity anyone vouches for. Set
+`subject_claim: sub` where immutability matters more than legibility; `sub` and `iss` are
+kept in `Principal.Attrs` either way.
+
+**Only asymmetric algorithms, ever.** `RS256/384/512` and `ES256/384/512`. There is no
+shared secret between a gateway and a provider that could make an HMAC meaningful, so
+accepting `HS*` would only ever be the algorithm-confusion attack succeeding — and the
+verification routine is chosen from the *key's* type, never from the token header, so a
+header claiming one thing over a key of another gets nowhere.
+
+**Key rotation and key revocation are different problems**, and both are handled:
+
+- A token naming a key we have not got triggers one refetch, rate-limited to once every
+  thirty seconds so a flood of invented `kid`s cannot become a flood of requests aimed at
+  the provider. A rotation is therefore picked up within seconds.
+- The cached set is refetched once it is older than `jwks_refresh` (default five minutes),
+  whether or not anything is missing. **This is the bound on how long a key the provider
+  has withdrawn keeps verifying tokens** — without it a retired key works for as long as
+  the process lives. If the provider is unreachable the stale set is served rather than
+  refusing every login, and that is logged loudly, because a key retired during the outage
+  keeps working until it ends.
+
+**Opaque access tokens are refused.** Send the `id_token`. Verifying an opaque token means
+calling `userinfo`, which turns every API request into a second round trip and makes the
+provider's availability a dependency of every list of sessions.
+
+**Static tokens alongside OIDC are refused at boot.** A long-lived shared secret next to a
+real identity provider is just the easier way in. A key file alongside is *allowed* — for a
+break-glass account, or automation that cannot do a browser flow — but it warns, because
+revoking that operator then means editing a file on every replica as well.
+
 ## 3. `Authorizer` — may they, on this device, right now
 
 ```go

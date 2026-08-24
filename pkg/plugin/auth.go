@@ -58,3 +58,35 @@ type Authenticator interface {
 	// authenticate an HTTP caller — a file of SSH keys, for instance.
 	AuthHTTP(ctx context.Context, r *http.Request) (*Principal, error)
 }
+
+// Challenge asks the operator something during SSH keyboard-interactive auth, and
+// returns their answers in order.
+//
+// A challenge with no questions is how a server *tells* the operator something: the
+// client displays the instruction and returns immediately. That is the whole mechanism
+// behind a device-code login at an SSH prompt — there is nothing to type, only a URL to
+// visit — and it is why this signature carries an instruction separately from the
+// questions rather than folding it into a prompt.
+type Challenge func(instruction string, questions []string, echos []bool) ([]string, error)
+
+// InteractiveAuthenticator is the optional keyboard-interactive surface.
+//
+// Optional, and asserted for rather than added to Authenticator, because most backends
+// have no use for it: a file of SSH keys authenticates a key, and a bearer token arrives
+// on a header. Only a backend that has to send the operator somewhere — a browser, a
+// phone, an authenticator app — needs a conversation, and making every implementation
+// carry a method to refuse would be worse than a type assertion here.
+//
+// A backend that implements this is offered to SSH clients as `keyboard-interactive`, and
+// a client that fails publickey auth will try it. That is not a bypass — it is a second,
+// independent authentication of the same person — but it does change what revocation
+// means: deleting somebody's key no longer removes their access, because they can still
+// prove who they are. Withdraw access at the identity provider or in the authorizer.
+type InteractiveAuthenticator interface {
+	// AuthInteractive authenticates by conversation. user is the **device id**, as
+	// everywhere else on this interface, and should be ignored for authentication.
+	//
+	// It may block for as long as the operator takes, so honour ctx: an SSH client
+	// that hung up is a login nobody is waiting for.
+	AuthInteractive(ctx context.Context, user string, ask Challenge) (*Principal, error)
+}
