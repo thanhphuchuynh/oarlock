@@ -111,7 +111,8 @@ func (s *session) runShell(ctx context.Context, shell ShellFunc, inv frame.Invit
 			Code: "profile_unsupported", Message: err.Error()})
 		return err
 	}
-	req := ShellRequest{SessionID: inv.SessionID, Principal: inv.Principal}
+	req := ShellRequest{SessionID: inv.SessionID, Principal: inv.Principal,
+		Profile: inv.Profile}
 	if inv.PTY != nil {
 		req.Term, req.Cols, req.Rows = inv.PTY.Term, inv.PTY.Cols, inv.PTY.Rows
 	}
