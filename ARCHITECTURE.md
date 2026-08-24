@@ -664,6 +664,30 @@ exit status propagating. `POST /api/v1/devices/{id}/exec` runs the session on th
 itself and answers with stdout, stderr and a code, because there is no terminal to attach
 to and a backend wanting one command should not have to speak the session protocol.
 
+### The `file` profile
+
+Confinement is delegated to `os.Root`, deliberately. Every hand-rolled version of this
+check has the same bug list — `..` surviving a clean, an absolute path bypassing the join,
+a symlink whose target is outside the root, and the time-of-check-to-time-of-use race where
+the symlink is swapped between the check and the open. The last one cannot be fixed by
+inspecting a string at all, which is why the string is not what is inspected: `os.Root`
+resolves each component in the kernel, so check and use are the same syscall.
+
+What the profile adds on top is what `os.Root` has no opinion about. Only regular files —
+a directory read is nonsense, `/dev/zero` is an unbounded transfer, and a FIFO opened for
+reading waits for a writer that may never come, so reads use `O_NONBLOCK` and refuse
+anything that is not regular *after* the open rather than blocking before it. A ceiling on
+each transfer. And an atomic commit: a write goes to a temporary in the same directory and
+is renamed into place, because a half-written configuration file is worse than the old one.
+
+Not recorded, and that is enforced rather than documented: an asciicast of a binary
+transfer is unwatchable, and a second copy of every transferred byte in the recording store
+has its own retention and its own disclosure problem. The session row still says
+`not_recorded`, so it is a queryable fact rather than an absence.
+
+`file:read` and `file:write` are separate actions, so a grant to pull logs is not a grant
+to replace a config.
+
 **A session that ends without an `EXIT` frame reports 255**, matching `ssh`'s own
 convention for a session that failed rather than a command that ran. It used to report 0,
 which meant a device refusing a command looked to any caller like a command that succeeded.

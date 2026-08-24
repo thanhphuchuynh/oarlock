@@ -199,6 +199,26 @@ func main() {
 		log.Info("exec is available on this device", "commands", len(cfg.Exec))
 	}
 
+	// `file` likewise: offered only when a root is configured.
+	var fileFn agent.FileFunc
+	if cfg.FileRoot != "" {
+		opts := []agent.FileOption{}
+		if cfg.FileWritable {
+			opts = append(opts, agent.FileWritable())
+		}
+		if cfg.FileMaxBytes > 0 {
+			opts = append(opts, agent.FileMaxBytes(cfg.FileMaxBytes))
+		}
+		fileFn, err = agent.File(cfg.FileRoot, opts...)
+		if err != nil {
+			log.Error("file root", "error", err)
+			os.Exit(2)
+		}
+		caps = append(caps, "file")
+		log.Info("file transfer is available on this device",
+			"root", cfg.FileRoot, "writable", cfg.FileWritable)
+	}
+
 	control, err := agent.NewControl(agent.Config{
 		Gateway:   cfg.Gateway,
 		DeviceID:  cfg.Device,
@@ -214,6 +234,7 @@ func main() {
 			Identity: identities,
 		}),
 		Exec: execFn,
+		File: fileFn,
 		Log:  log,
 	})
 	if err != nil {

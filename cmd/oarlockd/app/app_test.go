@@ -95,13 +95,13 @@ func deploy(t *testing.T, log *slog.Logger) *deployment {
     platform: linux
     keys:
       - %q
-    profiles: [shell, exec]
+    profiles: [shell, exec, file]
 `, strings.TrimRight(string(xssh.MarshalAuthorizedKey(devSSH)), "\n")))
 
 	write(t, filepath.Join(dir, "rules.yaml"), `rules:
   - principals: ["phuc@example.com"]
     devices: ["treadmill-*"]
-    actions: ["shell", "exec", "replay", "observe"]
+    actions: ["shell", "exec", "replay", "observe", "file:read", "file:write"]
 `)
 
 	// The ports are chosen here rather than with :0 because `url` has to be the address
@@ -206,6 +206,29 @@ func (d *deployment) serve(t *testing.T) {
 	waitForPort(t, d.sshAddr)
 }
 
+// fileFn confines the file profile to a directory inside the deployment, with a file to
+// read and a secret one level up that must stay unreachable.
+func (d *deployment) fileFn(t *testing.T) agent.FileFunc {
+	t.Helper()
+	root := filepath.Join(d.dir, "fileroot")
+	if err := os.MkdirAll(filepath.Join(root, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "logs", "app.log"),
+		[]byte("belt calibrated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.dir, "outside.txt"),
+		[]byte("NOT-FOR-OPERATORS"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fn, err := agent.File(root, agent.FileWritable())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fn
+}
+
 // startAgent runs a real agent against the deployment.
 func (d *deployment) startAgent(t *testing.T, log *slog.Logger) *agent.Control {
 	t.Helper()
@@ -215,7 +238,7 @@ func (d *deployment) startAgent(t *testing.T, log *slog.Logger) *agent.Control {
 		Signer:    d.devKey,
 		Dialer:    websocket.Dialer{},
 		PinSHA256: []string{"smoke-test-does-not-pin"},
-		Caps:      []string{"shell", "exec"},
+		Caps:      []string{"shell", "exec", "file"},
 		Info:      frame.AgentInfo{Version: "smoke", Platform: "test"},
 		Shell:     agent.Forkpty([]string{"/bin/sh"}),
 		// The device's own allow-list. Exact argvs — the gateway authorises the action,
@@ -225,7 +248,8 @@ func (d *deployment) startAgent(t *testing.T, log *slog.Logger) *agent.Control {
 			{"/bin/sh", "-c", "printf out; printf err >&2; exit 3"},
 			{"/usr/bin/yes"},
 		}, agent.ExecTimeout(2*time.Second)),
-		Log: log,
+		File: d.fileFn(t),
+		Log:  log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -819,5 +843,177 @@ func TestExecTruncatesRatherThanFillingMemory(t *testing.T) {
 	}
 	if got := len(out["stdout"].(string)); got > 2<<20 {
 		t.Fatalf("stdout was %d bytes; the cap is not holding", got)
+	}
+}
+
+// ── the file profile, through the assembled daemon ──────────────────────────────
+
+func fileURL(d *deployment, path string) string {
+	return "http://" + d.httpAddr + "/api/v1/devices/treadmill-4821/file?path=" + path
+}
+
+func apiDo(t *testing.T, method, url, body string) (*http.Response, string) {
+	t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer smoke-token-long-enough-for-checks")
+	if body != "" {
+		req.ContentLength = int64(len(body))
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	return resp, string(raw)
+}
+
+// TestFileReadPullsALogWithoutAShell is the story's point: getting a log off a device
+// should not require granting a shell on it.
+func TestFileReadPullsALogWithoutAShell(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	resp, body := apiDo(t, http.MethodGet, fileURL(d, "logs/app.log"), "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	if body != "belt calibrated\n" {
+		t.Fatalf("body = %q", body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/octet-stream" {
+		t.Fatalf("content-type = %q", got)
+	}
+}
+
+// TestFileTransfersAreNotRecorded. An asciicast of a binary transfer is unwatchable, and a
+// second copy of every byte in the recording store is not what anybody asked for — so the
+// row has to say `not_recorded` rather than the recorder quietly taking a copy.
+func TestFileTransfersAreNotRecorded(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	if resp, body := apiDo(t, http.MethodGet, fileURL(d, "logs/app.log"), ""); resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	resp, body := apiDo(t, http.MethodGet, "http://"+d.httpAddr+"/api/v1/sessions?limit=10", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sessions: %d %s", resp.StatusCode, body)
+	}
+	var listed struct {
+		Sessions []struct {
+			Profile        string `json:"profile"`
+			RecordingState string `json:"recording_state"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(body), &listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range listed.Sessions {
+		if s.Profile != "file" {
+			continue
+		}
+		found = true
+		if s.RecordingState == "recorded" {
+			t.Fatalf("a file transfer was recorded: %+v", s)
+		}
+	}
+	if !found {
+		t.Fatalf("no file session in the ledger; a transfer must still be accounted for: %s", body)
+	}
+}
+
+// TestFileWriteIsAtomicOverTheAPI.
+func TestFileWriteIsAtomicOverTheAPI(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	resp, body := apiDo(t, http.MethodPut, fileURL(d, "logs/written.txt"), "from the gateway")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	got, err := os.ReadFile(filepath.Join(d.dir, "fileroot", "logs", "written.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "from the gateway" {
+		t.Fatalf("file = %q", got)
+	}
+
+	// Readable straight back out.
+	resp, body = apiDo(t, http.MethodGet, fileURL(d, "logs/written.txt"), "")
+	if resp.StatusCode != http.StatusOK || body != "from the gateway" {
+		t.Fatalf("read back: %d %q", resp.StatusCode, body)
+	}
+}
+
+// TestTheAPIRefusesToLeaveTheRoot. Confinement lives on the device; this is the end-to-end
+// proof that nothing in between quietly undoes it.
+func TestTheAPIRefusesToLeaveTheRoot(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	for _, path := range []string{
+		"..%2Foutside.txt",
+		"logs%2F..%2F..%2Foutside.txt",
+		"%2Fetc%2Fpasswd",
+		"..",
+	} {
+		t.Run(path, func(t *testing.T) {
+			resp, body := apiDo(t, http.MethodGet, fileURL(d, path), "")
+			if resp.StatusCode == http.StatusOK && strings.Contains(body, "NOT-FOR-OPERATORS") {
+				t.Fatalf("%q read outside the root", path)
+			}
+			if strings.Contains(body, "NOT-FOR-OPERATORS") {
+				t.Fatalf("%q leaked the file outside the root", path)
+			}
+		})
+	}
+	// And the file outside is untouched after all that.
+	got, err := os.ReadFile(filepath.Join(d.dir, "outside.txt"))
+	if err != nil || string(got) != "NOT-FOR-OPERATORS" {
+		t.Fatalf("the file outside the root changed: %q %v", got, err)
+	}
+}
+
+// TestAWriteWithNoLengthIsRefused: the device is told the exact size so a short transfer
+// cannot be committed as a whole file, and a chunked body has no size to tell it.
+func TestAWriteWithNoLengthIsRefused(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	req, err := http.NewRequest(http.MethodPut, fileURL(d, "logs/chunked.txt"),
+		strings.NewReader("no length here"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer smoke-token-long-enough-for-checks")
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusLengthRequired {
+		t.Fatalf("status %d, want 411", resp.StatusCode)
 	}
 }

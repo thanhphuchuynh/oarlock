@@ -204,8 +204,34 @@ type Invitation struct {
 	Profile   string   `json:"profile"`
 	PTY       *PTY     `json:"pty,omitempty"`
 	Exec      []string `json:"exec,omitempty"`
+	File      *FileOp  `json:"file,omitempty"`
 	Principal string   `json:"principal,omitempty"`
 	ExpiresAt string   `json:"expires_at,omitempty"` // RFC 3339
+}
+
+// FileOp is one file operation, for the `file` profile.
+//
+// The path travels in the invitation rather than in a request frame, for the same reason
+// the exec argv does: the ticket is scoped to a profile *and* to what was authorised, so a
+// session cannot be repurposed after it opens. One session is one file.
+type FileOp struct {
+	// Op is "read" or "write".
+	Op string `json:"op"`
+	// Path is relative to the device's configured root. Absolute paths and anything
+	// escaping the root are refused by the device, which is the side that knows where
+	// its root is.
+	Path string `json:"path"`
+	// Size is the exact byte count for a write.
+	//
+	// Known up front rather than signalled by an end-of-stream marker, because the
+	// frame vocabulary has no operator-side "I am done" and CLOSE means the session is
+	// over. A device that knows the size can also refuse before it starts, and a
+	// transfer that delivers fewer bytes is detectably incomplete rather than silently
+	// truncated.
+	Size int64 `json:"size,omitempty"`
+	// Mode is the permission bits for a created file. Zero means 0o600 — a file written
+	// by a remote operator should not be world-readable because nobody said otherwise.
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 // Cancel withdraws an invitation. Without it a device that woke slowly would dial

@@ -39,6 +39,8 @@ spec that drifts from the code is worse than no spec, because people trust it.
 | `POST` | `/api/v1/sessions/{id}/attach` | Mint a fresh attach ticket — for a reconnecting browser, or a second viewer. |
 | `GET` | `/api/v1/agents` | Connected `oarlock-agent` control channels on this gateway node. |
 | `DELETE` | `/api/v1/agents/{device_id}` | Stop one connected reference agent. It exits instead of reconnecting. Requires `admin:kill` on the device. |
+| `GET` | `/api/v1/devices/{id}/file?path=…` | Read one file under the device's configured root, streamed. Requires `file:read`. Paths are relative to that root and cannot climb out of it. |
+| `PUT` | `/api/v1/devices/{id}/file?path=…&mode=644` | Write one file under the root, committed atomically. Requires `file:write` and a `Content-Length` — the device is told the exact size so a short transfer cannot be committed as a whole file. |
 | `POST` | `/api/v1/devices/{id}/exec` | Run one allow-listed command, wait, return stdout, stderr and exit code. No terminal, no attach, no ticket. Creates its own session row and is recorded like any other session. Requires the `exec` action, which `shell` does not imply. `argv` is an array — there is no shell on this path. |
 | `GET` | `/api/v1/devices` | What the gateway knows. Connection state, mode, capabilities. |
 | `GET` | `/api/v1/devices/{id}` | One device. |
