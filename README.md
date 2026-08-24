@@ -343,6 +343,10 @@ stream, the MQTT dispatcher, delegated authority, device key rotation and retire
 `record_input` policy, the SQLite device registry and authorizer with an admin UI, and the
 authorisation gate on that admin surface.
 
+Also working: the `exec` profile — one allow-listed command, no shell, over `ssh device
+some command` or `POST /api/v1/devices/{id}/exec`. It is the capability most support work
+needs, and it can be granted where a shell should not be.
+
 Missing: the SSH-CA authenticator. Operator identity can now come from an identity
 provider on all three surfaces — a bearer JWT for the API, a sign-in redirect for the
 console, a device code at an SSH prompt. Epics 5 to 8 (the rest of the profiles, passthrough, multi-replica operation, the generated

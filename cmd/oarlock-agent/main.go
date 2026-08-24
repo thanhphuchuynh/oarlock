@@ -178,13 +178,34 @@ func main() {
 		os.Exit(2)
 	}
 
+	// `exec` is offered only when the device has an allow-list. Advertising a capability
+	// with nothing on the list would mean the gateway accepted such a session and the
+	// device refused every command in it — a round trip to learn what the handshake
+	// could have said.
+	caps := []string{"shell"}
+	var execFn agent.ExecFunc
+	if len(cfg.Exec) > 0 {
+		opts := []agent.ExecOption{}
+		if cfg.ExecTimeout > 0 {
+			opts = append(opts, agent.ExecTimeout(cfg.ExecTimeout))
+		}
+		if identities != nil {
+			if id := identities("exec"); id != nil {
+				opts = append(opts, agent.ExecAs(id))
+			}
+		}
+		execFn = agent.Exec(cfg.Exec, opts...)
+		caps = append(caps, "exec")
+		log.Info("exec is available on this device", "commands", len(cfg.Exec))
+	}
+
 	control, err := agent.NewControl(agent.Config{
 		Gateway:   cfg.Gateway,
 		DeviceID:  cfg.Device,
 		Signer:    signer,
 		Dialer:    websocket.Dialer{},
 		PinSHA256: cfg.Pins,
-		Caps:      []string{"shell"},
+		Caps:      caps,
 		Info: frame.AgentInfo{
 			Version:  version,
 			Platform: platform(),
@@ -192,7 +213,8 @@ func main() {
 		Shell: agent.ForkptyWith(strings.Fields(cfg.Shell), agent.ShellOptions{
 			Identity: identities,
 		}),
-		Log: log,
+		Exec: execFn,
+		Log:  log,
 	})
 	if err != nil {
 		log.Error("agent", "error", err)

@@ -159,9 +159,16 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 		Signer:    devPriv,
 		Dialer:    websocket.Dialer{},
 		PinSHA256: []string{"unused-in-test"},
-		Caps:      []string{"shell"},
+		Caps:      []string{"shell", "exec"},
 		Shell:     agent.Forkpty(shell),
-		Log:       quiet(),
+		// The allow-list the exec tests run against. Exact argvs, which is the profile's
+		// whole security property — see agent/exec.go.
+		Exec: agent.Exec([][]string{
+			{"/bin/echo", "hello"},
+			{"/bin/sh", "-c", "printf out; printf err >&2; exit 3"},
+			{"/bin/echo", "a;b|c$(d)"},
+		}),
+		Log: quiet(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +459,11 @@ func TestUnknownDeviceIsRefusedWithoutLeaking(t *testing.T) {
 	}
 }
 
-func TestNonInteractiveIsRefusedClearly(t *testing.T) {
+// ── the exec profile ────────────────────────────────────────────────────────────
+
+// TestExecRunsOneCommand: `ssh device some command` runs it under the exec profile, with
+// no terminal and no attach.
+func TestExecRunsOneCommand(t *testing.T) {
 	s := newStack(t, []string{"/bin/sh"}, fastLimits())
 	c := s.dial(t, nil, "")
 	sess, err := c.NewSession()
@@ -460,10 +471,131 @@ func TestNonInteractiveIsRefusedClearly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.Close()
-	out, _ := sess.CombinedOutput("uptime")
-	// exec lands in E5; refusing clearly beats half-running something.
-	if !strings.Contains(string(out), "only interactive shells") {
-		t.Errorf("unexpected output: %q", out)
+
+	out, err := sess.Output("/bin/echo hello")
+	if err != nil {
+		t.Fatalf("exec failed: %v (output %q)", err, out)
+	}
+	// **Only** the command's output. The disclosure went to stderr, because stdout here
+	// is a caller's data and a banner prepended to it corrupts whatever parses it.
+	if strings.TrimSpace(string(out)) != "hello" {
+		t.Fatalf("stdout = %q; something other than the command wrote to it", out)
+	}
+}
+
+// TestExecKeepsStderrSeparateAndPropagatesTheExitCode.
+//
+// DATA_ERR is in the frame vocabulary for exactly this: stderr arrives on the SSH
+// extended-data channel, which is where a local shell would put it.
+func TestExecKeepsStderrSeparateAndPropagatesTheExitCode(t *testing.T) {
+	s := newStack(t, []string{"/bin/sh"}, fastLimits())
+	c := s.dial(t, nil, "")
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	var stdout, stderr syncBuf
+	sess.Stdout, sess.Stderr = &stdout, &stderr
+	err = sess.Run("/bin/sh -c 'printf out; printf err >&2; exit 3'")
+
+	var exit *xssh.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("err = %v, want an exit status", err)
+	}
+	if exit.ExitStatus() != 3 {
+		t.Fatalf("exit = %d, want 3", exit.ExitStatus())
+	}
+	if stdout.String() != "out" {
+		t.Fatalf("stdout = %q, want only the command's stdout", stdout.String())
+	}
+	// The disclosure shares stderr with the command, which is the trade: one of the two
+	// streams has to carry it, and corrupting the one a caller parses is worse.
+	if !strings.Contains(stderr.String(), "err") {
+		t.Fatalf("stderr = %q, want the command's stderr in it", stderr.String())
+	}
+}
+
+// TestExecDoesNotInterpretAShell. There is no `sh -c` between the client and execve, so
+// the argv arrives as the client split it.
+func TestExecDoesNotInterpretAShell(t *testing.T) {
+	s := newStack(t, []string{"/bin/sh"}, fastLimits())
+	c := s.dial(t, nil, "")
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	// A single argument full of shell metacharacters. Nothing between the client's
+	// lexer and execve interprets it, so it comes back verbatim.
+	out, err := sess.Output(`/bin/echo 'a;b|c$(d)'`)
+	if err != nil {
+		t.Fatalf("exec failed: %v (%q)", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "a;b|c$(d)" {
+		t.Fatalf("stdout = %q; the metacharacters were interpreted somewhere", out)
+	}
+}
+
+// TestExecRefusesACommandOffTheList, and says so where a caller will see it.
+func TestExecRefusesACommandOffTheList(t *testing.T) {
+	s := newStack(t, []string{"/bin/sh"}, fastLimits())
+	c := s.dial(t, nil, "")
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	var stdout, stderr syncBuf
+	sess.Stdout, sess.Stderr = &stdout, &stderr
+	if err := sess.Run("/bin/cat /etc/passwd"); err == nil {
+		t.Fatal("a command that is not on the device's allow-list ran")
+	}
+	if stdout.String() != "" {
+		t.Fatalf("a refused command wrote to stdout: %q", stdout.String())
+	}
+	// The device refused, and named the command, so an operator knows what to ask for.
+	if !strings.Contains(stderr.String(), "not allowed") {
+		t.Fatalf("stderr = %q, want the device's refusal", stderr.String())
+	}
+}
+
+// TestExecNeedsNoTerminal is the point of the profile: automation does not have one.
+func TestExecNeedsNoTerminal(t *testing.T) {
+	s := newStack(t, []string{"/bin/sh"}, fastLimits())
+	c := s.dial(t, nil, "")
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	// No RequestPty at all, which is what `ssh -T device cmd` and every library client
+	// does. A shell in the same position is refused with "this needs a terminal".
+	if out, err := sess.Output("/bin/echo hello"); err != nil {
+		t.Fatalf("exec required a terminal: %v (%q)", err, out)
+	}
+}
+
+func TestASubsystemIsStillRefused(t *testing.T) {
+	s := newStack(t, []string{"/bin/sh"}, fastLimits())
+	c := s.dial(t, nil, "")
+	sess, err := c.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	var stderr syncBuf
+	sess.Stderr = &stderr
+	// The request is accepted at the channel level and refused by the handler, so the
+	// failure arrives as a non-zero exit rather than a rejected request.
+	if err := sess.RequestSubsystem("sftp"); err != nil {
+		return // rejected outright, which is also a refusal
+	}
+	_ = sess.Wait()
+	if !strings.Contains(stderr.String(), "sftp") {
+		t.Fatalf("stderr = %q, want it to name the unsupported subsystem", stderr.String())
 	}
 }
 

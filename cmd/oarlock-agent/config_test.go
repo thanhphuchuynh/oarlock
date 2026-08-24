@@ -315,3 +315,39 @@ func TestDroppingToOurOwnIdentityIsNotADrop(t *testing.T) {
 		t.Fatalf("a genuinely different uid = %+v, want a credential", got)
 	}
 }
+
+// TestExecIsOptInAndExact.
+//
+// Empty by default, because a device that offers `exec` with nothing on its list makes the
+// gateway accept a session the device then refuses — a round trip to learn what the
+// handshake could have said.
+func TestExecIsOptInAndExact(t *testing.T) {
+	none, err := LoadConfig(write(t, "a.conf", "gateway: wss://x/ws\ndevice: d1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none.Exec) != 0 {
+		t.Fatalf("exec = %v, want empty by default", none.Exec)
+	}
+
+	c, err := LoadConfig(write(t, "b.conf", `
+gateway: wss://x/ws
+device: d1
+exec_timeout: 5s
+exec:
+  - ["/system/bin/logcat", "-d", "-t", "500"]
+  - ["/system/bin/getprop", "ro.build.version.release"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Exec) != 2 {
+		t.Fatalf("exec = %v", c.Exec)
+	}
+	if c.Exec[0][0] != "/system/bin/logcat" || len(c.Exec[0]) != 4 {
+		t.Fatalf("the first argv did not survive: %v", c.Exec[0])
+	}
+	if c.ExecTimeout != 5*time.Second {
+		t.Fatalf("exec_timeout = %v", c.ExecTimeout)
+	}
+}

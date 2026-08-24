@@ -39,7 +39,7 @@ spec that drifts from the code is worse than no spec, because people trust it.
 | `POST` | `/api/v1/sessions/{id}/attach` | Mint a fresh attach ticket — for a reconnecting browser, or a second viewer. |
 | `GET` | `/api/v1/agents` | Connected `oarlock-agent` control channels on this gateway node. |
 | `DELETE` | `/api/v1/agents/{device_id}` | Stop one connected reference agent. It exits instead of reconnecting. Requires `admin:kill` on the device. |
-| `POST` | `/api/v1/devices/{id}/exec` | Run one allow-listed command, wait, return stdout, stderr and exit code. No terminal, no attach, no ticket. Creates its own session row. |
+| `POST` | `/api/v1/devices/{id}/exec` | Run one allow-listed command, wait, return stdout, stderr and exit code. No terminal, no attach, no ticket. Creates its own session row and is recorded like any other session. Requires the `exec` action, which `shell` does not imply. `argv` is an array — there is no shell on this path. |
 | `GET` | `/api/v1/devices` | What the gateway knows. Connection state, mode, capabilities. |
 | `GET` | `/api/v1/devices/{id}` | One device. |
 | `GET` | `/api/v1/devices/{id}/access` | Which policy rules are written about this device, denials first, evaluated by the gateway's own matcher. Requires `admin:permissions` on `gateway`. Also returns `admin_actions`, so a caller can tell "who can reach this" from "who can administer it" without keeping its own copy of the vocabulary. |

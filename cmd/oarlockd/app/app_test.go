@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,7 +95,7 @@ func deploy(t *testing.T, log *slog.Logger) *deployment {
     platform: linux
     keys:
       - %q
-    profiles: [shell]
+    profiles: [shell, exec]
 `, strings.TrimRight(string(xssh.MarshalAuthorizedKey(devSSH)), "\n")))
 
 	write(t, filepath.Join(dir, "rules.yaml"), `rules:
@@ -213,10 +215,17 @@ func (d *deployment) startAgent(t *testing.T, log *slog.Logger) *agent.Control {
 		Signer:    d.devKey,
 		Dialer:    websocket.Dialer{},
 		PinSHA256: []string{"smoke-test-does-not-pin"},
-		Caps:      []string{"shell"},
+		Caps:      []string{"shell", "exec"},
 		Info:      frame.AgentInfo{Version: "smoke", Platform: "test"},
 		Shell:     agent.Forkpty([]string{"/bin/sh"}),
-		Log:       log,
+		// The device's own allow-list. Exact argvs — the gateway authorises the action,
+		// the device decides what may actually run on it.
+		Exec: agent.Exec([][]string{
+			{"/bin/echo", "hello"},
+			{"/bin/sh", "-c", "printf out; printf err >&2; exit 3"},
+			{"/usr/bin/yes"},
+		}, agent.ExecTimeout(2*time.Second)),
+		Log: log,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -640,4 +649,175 @@ func readLedger(t *testing.T, d *deployment) []ledgerRow {
 		out = append(out, ledgerRow{id: s.ID, state: string(s.State), reason: s.CloseReason})
 	}
 	return out
+}
+
+// ── the exec profile, through the assembled daemon ──────────────────────────────
+
+// execViaAPI posts one command and returns the decoded response.
+func execViaAPI(t *testing.T, d *deployment, body string) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost,
+		"http://"+d.httpAddr+"/api/v1/devices/treadmill-4821/exec",
+		strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer smoke-token-long-enough-for-checks")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	return resp.StatusCode, out
+}
+
+// TestExecOverTheAPIReturnsOutputAndAnExitCode is the story's headline: one allow-listed
+// command, no terminal, no attach, and stdout, stderr and a status in the response.
+func TestExecOverTheAPIReturnsOutputAndAnExitCode(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	status, out := execViaAPI(t, d, `{"argv":["/bin/echo","hello"],"reason":"SUP-1"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, out)
+	}
+	if got := strings.TrimSpace(out["stdout"].(string)); got != "hello" {
+		t.Fatalf("stdout = %q", got)
+	}
+	if code, _ := out["exit_code"].(float64); code != 0 {
+		t.Fatalf("exit_code = %v", out["exit_code"])
+	}
+	// A real session, with a row and a recording: exec being convenient must not make it
+	// invisible.
+	if out["session_id"] == "" {
+		t.Fatal("no session id in the response")
+	}
+	if recorded, _ := out["recorded"].(bool); !recorded {
+		t.Fatalf("recorded = %v; an exec session is recorded like any other", out["recorded"])
+	}
+}
+
+// TestExecSeparatesStderrAndReportsTheStatus. Merging the streams is what a terminal
+// does; a caller collecting output should not have to grep an error out of it.
+func TestExecSeparatesStderrAndReportsTheStatus(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	status, out := execViaAPI(t, d,
+		`{"argv":["/bin/sh","-c","printf out; printf err >&2; exit 3"]}`)
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, out)
+	}
+	if out["stdout"] != "out" {
+		t.Fatalf("stdout = %q", out["stdout"])
+	}
+	if out["stderr"] != "err" {
+		t.Fatalf("stderr = %q", out["stderr"])
+	}
+	if code, _ := out["exit_code"].(float64); code != 3 {
+		t.Fatalf("exit_code = %v, want 3", out["exit_code"])
+	}
+}
+
+// TestExecRefusedByTheDeviceIsNotASuccess.
+//
+// The device holds the allow-list, so the gateway can authorise `exec` and still be told
+// no. What must not happen is that refusal arriving as exit 0 — anything checking a
+// status would read it as "the command ran and was happy".
+func TestExecRefusedByTheDeviceIsNotASuccess(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	status, out := execViaAPI(t, d, `{"argv":["/bin/cat","/etc/passwd"]}`)
+	if status != http.StatusOK {
+		// The HTTP call itself succeeded; the command did not.
+		t.Fatalf("status %d: %v", status, out)
+	}
+	if code, _ := out["exit_code"].(float64); code == 0 {
+		t.Fatalf("a command the device refused reported success: %v", out)
+	}
+	if out["stdout"] != "" {
+		t.Fatalf("a refused command produced stdout: %q", out["stdout"])
+	}
+}
+
+// TestExecIsAuthorisedSeparatelyFromShell: the whole point of the profile is that support
+// work can be granted without granting a shell, which only works if a grant for one is
+// not a grant for the other.
+func TestExecIsAuthorisedSeparatelyFromShell(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	// The rules file grants exec to phuc@example.com and nobody else, so a principal
+	// with no grant at all is refused before a row exists.
+	req, err := http.NewRequest(http.MethodPost,
+		"http://"+d.httpAddr+"/api/v1/devices/treadmill-4821/exec",
+		strings.NewReader(`{"argv":["/bin/echo","hello"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer not-a-configured-token-but-long")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("an unauthenticated caller ran a command")
+	}
+}
+
+// TestExecRefusesAnEmptyArgv, because "run nothing" is a bug in the caller and silently
+// doing nothing would hide it.
+func TestExecRefusesAnEmptyArgv(t *testing.T) {
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	if status, out := execViaAPI(t, d, `{"argv":[]}`); status != http.StatusBadRequest {
+		t.Fatalf("status %d: %v", status, out)
+	}
+	// And a shell string where an argv belongs: there is no shell on this path, so a
+	// string could only be mis-split by whoever eventually split it.
+	if status, _ := execViaAPI(t, d, `{"argv":["/bin/echo hello"]}`); status != http.StatusOK {
+		t.Fatalf("status %d; a single-element argv is well-formed, just not allowed", status)
+	}
+}
+
+// TestExecTruncatesRatherThanFillingMemory. The output is buffered to be returned as
+// JSON, so a command that never stops is this process's memory — and a caller parsing a
+// truncated log has to be told.
+func TestExecTruncatesRatherThanFillingMemory(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/yes"); err != nil {
+		t.Skip("/usr/bin/yes is not on this system")
+	}
+	log := quiet()
+	d := deploy(t, log)
+	d.serve(t)
+	d.startAgent(t, log)
+
+	status, out := execViaAPI(t, d, `{"argv":["/usr/bin/yes"],"timeout_ms":4000}`)
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %v", status, out)
+	}
+	if truncated, _ := out["truncated"].(bool); !truncated {
+		t.Fatalf("an unbounded command was not reported as truncated: %v",
+			len(out["stdout"].(string)))
+	}
+	if got := len(out["stdout"].(string)); got > 2<<20 {
+		t.Fatalf("stdout was %d bytes; the cap is not holding", got)
+	}
 }

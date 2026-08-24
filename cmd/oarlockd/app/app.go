@@ -342,6 +342,10 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Permissions: permissionAdmin,
 		SSH:         sshInfo,
 		Agents:      g.hub, Replays: replays, SQL: g.sql,
+		// The exec endpoint runs a session itself, so it needs the same collaborators
+		// the SSH front door has.
+		Recorder: recorder, Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
+		AuthzSupervisor: g.supervisor,
 		RecordInput:     cfg.Policy.RecordInput,
 		Audit:           g.audit,
 		AttachURL:       strings.TrimRight(cfg.URL, "/") + "/ws/attach",

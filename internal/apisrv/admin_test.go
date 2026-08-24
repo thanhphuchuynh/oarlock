@@ -89,7 +89,7 @@ func newAdminFixture(t *testing.T, configAdmins ...string) *adminFixture {
 	}
 	api, err := apisrv.New(apisrv.Options{
 		Sessions: f.ledger, Live: f.live, Authenticator: authn,
-		Authz: &authz.Checker{Backend: store, Admins: configAdmins, Log: quiet()},
+		Authz:    &authz.Checker{Backend: store, Admins: configAdmins, Log: quiet()},
 		Registry: reg, RegistryAdmin: reg, Permissions: store,
 		Agents: f.agents, SQL: sqlStub{}, Audit: f.audit, Log: quiet(),
 	})

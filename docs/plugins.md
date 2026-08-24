@@ -353,6 +353,24 @@ first version of it was not. Three actions govern the surface:
 | `admin:permissions` | the synthetic `gateway` device | all of `/api/v1/permissions`, reads included |
 | `admin:kill` | the session's or agent's device | `DELETE /api/v1/sessions/{id}` for somebody else's session, `DELETE /api/v1/agents/{id}` |
 
+`exec` is worth granting where `shell` is not. It is the capability most support work
+actually needs — read a log, restart a service, print a version — and on a device in
+somebody's home the difference matters:
+
+```yaml
+# What field service needs, most days: allow-listed commands, on a leash.
+- principals: ["*@field.example.com"]
+  devices: ["*"]
+  actions: ["exec"]
+  max_duration: 15m
+  idle: 2m
+  ttl: 10s
+```
+
+The gateway authorises the *action*; the **device** holds the list of commands, in its own
+config. Those are different questions, and the second must not be answerable from the
+network. `exec` does not imply `shell` and `shell` does not imply `exec`.
+
 ```yaml
 # A fleet lead who runs the treadmills and cannot touch policy.
 - principals: ["lead@example.com"]

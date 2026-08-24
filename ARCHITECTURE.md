@@ -644,6 +644,30 @@ a frame at the ceiling is unambiguously a bug or an attack, never traffic.
 one command, and an allow-listed argv is a far smaller thing to audit than
 `sh -c "$anything"`.
 
+Three properties, each a deliberate refusal:
+
+- **No shell interpretation.** The argv goes to `execve`. No quoting to get wrong, no
+  globbing, no `$(…)`, no `;`, no redirection.
+- **The device holds the allow-list.** The gateway authorises the *action*; the device
+  decides what may actually run on it. A gateway that could name arbitrary commands would
+  make every device's capability a property of the network.
+- **Exact argvs.** An entry matches element for element. The tempting alternative — an
+  allow-list of *programs* with caller-supplied arguments — is where the shell problem
+  returns in a new shape: `tail` with a chosen path reads any file, `find -exec` runs
+  anything, `curl -o` writes anywhere, `git -c` runs a configured pager. Deciding which
+  flags of which binary are safe is a per-binary research project and getting it wrong is
+  silent. Parameterised commands are spelled out one per variant.
+
+Two operator surfaces. `ssh device some command` runs it, with stderr on the SSH
+extended-data channel — which is what `DATA_ERR` is in the frame vocabulary for — and the
+exit status propagating. `POST /api/v1/devices/{id}/exec` runs the session on the gateway
+itself and answers with stdout, stderr and a code, because there is no terminal to attach
+to and a backend wanting one command should not have to speak the session protocol.
+
+**A session that ends without an `EXIT` frame reports 255**, matching `ssh`'s own
+convention for a session that failed rather than a command that ran. It used to report 0,
+which meant a device refusing a command looked to any caller like a command that succeeded.
+
 ## 10. More than one gateway
 
 Single node is the default and it is honest: one `oarlockd`, in-memory store, in-memory

@@ -30,6 +30,7 @@ import (
 	"github.com/oarlock/oarlock/internal/authz"
 	"github.com/oarlock/oarlock/internal/hub"
 	"github.com/oarlock/oarlock/internal/invite"
+	"github.com/oarlock/oarlock/internal/pump"
 	"github.com/oarlock/oarlock/internal/recordpolicy"
 	"github.com/oarlock/oarlock/internal/sessions"
 	"github.com/oarlock/oarlock/internal/sqlexplore"
@@ -83,6 +84,15 @@ type Options struct {
 	SQL SQLExplorer
 	// RecordInput resolves whether a session recording captures keystrokes.
 	RecordInput recordpolicy.RecordInput
+
+	// The collaborators below are needed only by the exec endpoint, which is the one
+	// place this server runs a session itself rather than handing back a ticket. Leaving
+	// them unset is fine for an API-only replica; `POST /devices/{id}/exec` then records
+	// nothing and uses the pump's defaults.
+	Recorder        plugin.Recorder
+	Limits          pump.Limits
+	Deadlines       pump.Deadlines
+	AuthzSupervisor *authz.Supervisor
 	// Audit receives API and session-control events. Nil disables audit emission.
 	Audit plugin.AuditSink
 
@@ -141,6 +151,10 @@ func New(o Options) (*Server, error) {
 	// able to open anything.
 	if o.Registry != nil && o.Inviter != nil {
 		s.mux.HandleFunc("POST "+Prefix+"/sessions", s.wrap(s.openSession))
+		// Runs the session itself rather than handing back a ticket: there is no
+		// terminal to attach to, so a caller wanting one command should not have to
+		// speak the session protocol to get it.
+		s.mux.HandleFunc("POST "+Prefix+"/devices/{id}/exec", s.wrap(s.execOnDevice))
 	}
 	if o.Registry != nil {
 		s.mux.HandleFunc("GET "+Prefix+"/devices", s.wrap(s.listDevices))
