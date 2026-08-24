@@ -87,7 +87,7 @@ external service — and nothing forces the defaults on you at scale.
 
 | Interface | Default | Also shipped |
 |---|---|---|
-| `Authenticator` | `authorized_keys` file | OIDC device flow, SSH certificate CA, static token |
+| `Authenticator` | `authorized_keys` file | **OIDC** (bearer JWT + SSH device code), SSH certificate CA, static token |
 | `Authorizer` | allow-listed `principal → device` rules in YAML | SQLite permissions with an admin UI, HTTP webhook (with revocation stream) |
 | `Recorder` | asciicast v3 on local disk | S3 / GCS streaming, `none` |
 | `SessionStore` | in-memory | SQLite, Postgres |
@@ -343,9 +343,9 @@ stream, the MQTT dispatcher, delegated authority, device key rotation and retire
 `record_input` policy, the SQLite device registry and authorizer with an admin UI, and the
 authorisation gate on that admin surface.
 
-Missing: the OIDC and SSH-CA authenticators, so operator identity is still an
-`authorized_keys` file or a static token — and static tokens refuse to start outside `dev`.
-Epics 5 to 8 (the rest of the profiles, passthrough, multi-replica operation, the generated
+Missing: the SSH-CA authenticator, and the browser half of the OIDC login — the API and
+the SSH surfaces authenticate against a provider, but the console still takes a pasted
+`id_token` rather than redirecting you to sign in. Epics 5 to 8 (the rest of the profiles, passthrough, multi-replica operation, the generated
 SDKs and the supply-chain work) are planned and unbuilt. No releases and no API stability:
 the protocol in `docs/protocol.md` is `v0` and will change without ceremony until it is
 tagged.

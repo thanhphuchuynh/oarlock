@@ -45,6 +45,7 @@ type Config struct {
 	SSH      SSH                 `yaml:"ssh"`
 	Store    Store               `yaml:"store"`
 	Devices  Devices             `yaml:"devices"`
+	Auth     Auth                `yaml:"auth"`
 	Authz    Authz               `yaml:"authorizer"`
 	Dispatch Dispatch            `yaml:"dispatcher"`
 	Recorder Recorder            `yaml:"recorder"`
@@ -128,6 +129,42 @@ func (d *Devices) UnmarshalYAML(n *yaml.Node) error {
 	default:
 		return fmt.Errorf("devices must be a path or a mapping")
 	}
+}
+
+// Auth configures who an operator is. Authz configures whether they may.
+type Auth struct {
+	// Kind is "oidc" today, or empty to use ssh.authorized_keys and api.tokens.
+	Kind string `yaml:"kind"`
+
+	// Issuer is the OIDC issuer URL. Discovery happens at
+	// <issuer>/.well-known/openid-configuration, and every token must name this
+	// issuer exactly.
+	Issuer string `yaml:"issuer"`
+	// ClientID identifies this gateway to the provider, and is the default audience a
+	// token must name.
+	ClientID string `yaml:"client_id"`
+	// ClientSecret is used for the device-code exchange. Public clients omit it.
+	ClientSecret string `yaml:"client_secret"`
+	// Audience overrides ClientID as the audience a token must name.
+	Audience string `yaml:"audience"`
+	// Scopes are requested during the SSH device-code login. `openid` is always sent.
+	Scopes []string `yaml:"scopes"`
+
+	// SubjectClaim becomes the principal id: what is recorded and what an
+	// authorisation rule matches. Defaults to `email`, because rules are globs over
+	// principal ids and people write `*@oncall.example.com` — at the cost that an
+	// unverified email is refused. Set to `sub` to prefer immutability.
+	SubjectClaim string `yaml:"subject_claim"`
+	EmailClaim   string `yaml:"email_claim"`
+	GroupsClaim  string `yaml:"groups_claim"`
+
+	// Skew tolerates clock drift between this gateway and the provider.
+	Skew time.Duration `yaml:"skew"`
+	// JWKSRefresh is how long a cached key set may be used. It is the upper bound on
+	// how long a key the provider has *withdrawn* keeps verifying tokens.
+	JWKSRefresh time.Duration `yaml:"jwks_refresh"`
+	// DeviceTimeout is how long an SSH device-code login may sit unapproved.
+	DeviceTimeout time.Duration `yaml:"device_timeout"`
 }
 
 // Authz configures the authorisation backend.
@@ -485,6 +522,29 @@ func (c *Config) Validate() error {
 	}
 	if c.Authz.RecheckInterval < 0 {
 		add("authorizer.recheck_interval is negative")
+	}
+	switch c.Auth.Kind {
+	case "", "none":
+		// The existing surfaces: ssh.authorized_keys and api.tokens. Checked elsewhere.
+	case "oidc":
+		if c.Auth.Issuer == "" {
+			add("auth.issuer is required for kind: oidc")
+		}
+		if c.Auth.ClientID == "" {
+			add("auth.client_id is required for kind: oidc")
+		}
+		if c.Auth.Skew < 0 {
+			add("auth.skew is negative")
+		}
+		if c.Auth.JWKSRefresh < 0 {
+			add("auth.jwks_refresh is negative")
+		}
+		if c.Auth.DeviceTimeout < 0 {
+			add("auth.device_timeout is negative")
+		}
+	default:
+		add("auth.kind %q is not known (oidc, or empty for authorized_keys and "+
+			"api.tokens)", c.Auth.Kind)
 	}
 	for i, admin := range c.Authz.Admins {
 		switch {

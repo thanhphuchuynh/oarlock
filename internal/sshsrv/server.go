@@ -160,6 +160,15 @@ func New(o Options) (*Server, error) {
 		},
 	}
 
+	// Advertised only when the backend can answer it, so a key-only deployment does not
+	// list keyboard-interactive among its methods. That is cosmetic — the handler asserts
+	// again before challenging, so nobody is ever prompted for something it cannot check —
+	// but it is the difference between `Permission denied (publickey)` and a message that
+	// names a method the server was never going to honour.
+	if _, ok := o.Authenticator.(plugin.InteractiveAuthenticator); ok {
+		s.srv.KeyboardInteractiveHandler = s.handleKeyboardInteractive
+	}
+
 	hk := o.HostKey
 	if hk == nil {
 		var err error
@@ -188,6 +197,44 @@ func (s *Server) ListenAndServe() error {
 
 // Close stops the server.
 func (s *Server) Close() error { return s.srv.Close() }
+
+// handleKeyboardInteractive authenticates by conversation, when the backend can.
+//
+// This is how an operator logs in with no key and no password: the backend prints a URL
+// and a code, they approve in a browser that already holds their session and their second
+// factor, and the shell opens. Neither this process nor the terminal ever sees a secret.
+//
+// Offered only when the authenticator implements the optional interface. Enabling it means
+// an operator may use either method, which is worth being deliberate about: withdrawing
+// somebody's access means withdrawing it at the identity provider or in the authorizer,
+// not deleting a line from authorized_keys.
+func (s *Server) handleKeyboardInteractive(ctx gssh.Context,
+	challenger xssh.KeyboardInteractiveChallenge) bool {
+
+	interactive, ok := s.o.Authenticator.(plugin.InteractiveAuthenticator)
+	if !ok {
+		return false
+	}
+	ask := func(instruction string, questions []string, echos []bool) ([]string, error) {
+		// The name field is empty: clients render it inconsistently — some as a title,
+		// some not at all — and anything an operator has to read belongs in the
+		// instruction, which every client shows.
+		return challenger("", instruction, questions, echos)
+	}
+	p, err := interactive.AuthInteractive(ctx, ctx.User(), ask)
+	if err != nil || p == nil {
+		// The reason stays in the log. On the wire an unauthenticated peer learns only
+		// that it failed — and in particular does not learn whether the device in the
+		// username exists, which would be a fleet enumeration oracle over SSH.
+		s.log.Warn("ssh keyboard-interactive auth failed",
+			"user", ctx.User(), "remote", ctx.RemoteAddr().String(), "error", err)
+		return false
+	}
+	ctx.SetValue(principalKey{}, p)
+	s.log.Info("ssh keyboard-interactive auth succeeded",
+		"principal", p.ID, "remote", ctx.RemoteAddr().String())
+	return true
+}
 
 // handlePublicKey authenticates the operator and stashes the principal.
 func (s *Server) handlePublicKey(ctx gssh.Context, key gssh.PublicKey) bool {

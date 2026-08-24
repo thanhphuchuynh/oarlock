@@ -230,3 +230,53 @@ func TestNoRecorderDoesNotAlsoWarnAboutStorage(t *testing.T) {
 		}
 	}
 }
+
+// TestCompositeAuthenticatorKindsAreMatched.
+//
+// The kind a deployment reports is usually a composite — "authorized_keys+static_token",
+// "oidc+authorized_keys" — and these checks were equality comparisons against "static"
+// and "authorized_keys". The first matched nothing at all, because the daemon reports
+// "static_token"; the second missed every deployment that also had tokens. A gate that
+// silently matches nothing reads like coverage and is not.
+func TestCompositeAuthenticatorKindsAreMatched(t *testing.T) {
+	for _, tc := range []struct {
+		kind  string
+		fatal bool // refuses to boot
+		warns bool
+	}{
+		{kind: "oidc"},
+		{kind: "static_token", fatal: true},
+		{kind: "authorized_keys", warns: true},
+		{kind: "authorized_keys+static_token", fatal: true, warns: true},
+		{kind: "oidc+authorized_keys", warns: true},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			s := safeProd()
+			s.AuthenticatorKind = tc.kind
+			problems, err := safety.Check(s, quiet())
+
+			var sawFatal, sawWarning bool
+			for _, p := range problems {
+				if p.Setting != "authenticator" {
+					continue
+				}
+				if p.Fatal {
+					sawFatal = true
+				} else {
+					sawWarning = true
+				}
+			}
+			if sawFatal != tc.fatal {
+				t.Errorf("fatal = %v, want %v (problems: %v, err: %v)",
+					sawFatal, tc.fatal, problems, err)
+			}
+			if sawWarning != tc.warns {
+				t.Errorf("warned = %v, want %v (problems: %v)", sawWarning, tc.warns, problems)
+			}
+			// A fatal finding must actually stop the boot, not merely be reported.
+			if tc.fatal && err == nil {
+				t.Error("a fatal authenticator finding did not refuse the boot")
+			}
+		})
+	}
+}

@@ -45,6 +45,37 @@ devices: ./devices.yaml
 # devices:
 #   kind: sqlite
 
+# Who an operator is. Omit the block entirely to use ssh.authorized_keys and api.tokens,
+# which is what a laptop wants and what production should not have: a static token is a
+# long-lived shared secret and a key file makes revocation a file edit on every replica.
+#
+# auth:
+#   kind: oidc
+#   issuer: https://accounts.example.com     # discovery, and the issuer every token must name
+#   client_id: oarlock-gateway
+#   client_secret: ...                       # omit for a public client
+#   scopes: [email, groups]                  # `openid` is always sent
+#
+#   # Which claim becomes the principal id — what gets recorded and what an authorisation
+#   # rule matches. `email` by default, because rules are globs and people write
+#   # `*@oncall.example.com`; an unverified email is then refused outright. Use `sub` where
+#   # immutability matters more than legibility.
+#   subject_claim: email
+#   groups_claim: groups
+#
+#   # How long a cached signing key may be used. This is the upper bound on how long a key
+#   # the provider has *withdrawn* still verifies tokens.
+#   jwks_refresh: 5m
+#   # How long an SSH device-code login may sit unapproved.
+#   device_timeout: 5m
+#
+# With this set, SSH offers keyboard-interactive: the gateway prints a URL and a short
+# code, the operator approves in a browser that already holds their session and their
+# second factor, and the shell opens. Nothing types a password into a terminal.
+#
+# api.tokens must be removed — a static secret next to an identity provider is simply the
+# easier way in, and the gateway refuses to start with both.
+
 authorizer:
   kind: rules
   path: ./rules.yaml
