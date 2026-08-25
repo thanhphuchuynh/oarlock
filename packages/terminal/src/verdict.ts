@@ -42,7 +42,12 @@ export interface VerdictCopy {
   readonly tone: "trusted" | "partial" | "broken";
 }
 
-const copy: Record<string, (v: Verdict) => VerdictCopy> = {
+// Partial on purpose. Indexing a total Record<string, …> yields a function that is
+// never undefined, which makes the guards below dead code by the types even though the
+// runtime relies on them: a status this build does not recognise has no entry here, and
+// the fallback at the end of describe() is what withholds the claim of integrity. The
+// type has to admit the miss for that promise to be checked rather than merely intended.
+const copy: Partial<Record<string, (v: Verdict) => VerdictCopy>> = {
   valid: (v) => ({
     tone: "trusted",
     headline: "This recording is intact.",
