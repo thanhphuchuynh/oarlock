@@ -90,7 +90,35 @@ type Result struct {
 type Limits struct {
 	PerDevice    int // default 1
 	PerPrincipal int // default 5
+	// TCPConnsPerDevice caps live `tcp` sessions on one device — see HoldsDevice for
+	// why they are counted apart from everything else. Default 16.
+	TCPConnsPerDevice int
 }
+
+// ProfileTCP is the port-forwarding profile. Named here because the concurrency caps
+// treat it differently and more than one file has to agree which string that is.
+const ProfileTCP = "tcp"
+
+// HoldsDevice reports whether a live session of this profile counts against PerDevice
+// and PerPrincipal.
+//
+// Every profile does except `tcp`. A shell, an exec or a file transfer is one operator
+// doing one thing, and "one session per device" is a real guarantee about that. A forward
+// is not one of anything: `ssh -L` opens as many TCP connections as whatever is on the
+// other end asks for, and a browser loading a single page opens six. Counted against the
+// same cap, the second image on that page fails with "this device already has a session
+// open", and a forward starves the shell somebody needs in order to fix it.
+//
+// So forwards get their own cap, and the interactive guarantee keeps meaning what the
+// session list and the console say it means.
+func HoldsDevice(profile string) bool { return profile != ProfileTCP }
+
+// DefaultTCPConnsPerDevice is the default cap on live forwarded connections per device.
+//
+// Sixteen rather than a handful: HTTP/1.1 clients open up to six connections per origin,
+// and a cap that a single page load can reach is a cap that produces intermittent,
+// unexplainable failures rather than a clear refusal.
+const DefaultTCPConnsPerDevice = 16
 
 // Errors.
 var (
@@ -148,6 +176,9 @@ func NewMemory(l Limits, now func() time.Time) *Memory {
 	if l.PerPrincipal <= 0 {
 		l.PerPrincipal = 5
 	}
+	if l.TCPConnsPerDevice <= 0 {
+		l.TCPConnsPerDevice = DefaultTCPConnsPerDevice
+	}
 	if now == nil {
 		now = time.Now
 	}
@@ -165,25 +196,37 @@ func (m *Memory) Create(_ context.Context, s *Session) error {
 	if _, dup := m.by[s.ID]; dup {
 		return fmt.Errorf("%w: %s", ErrExists, s.ID)
 	}
-	var perDevice, perPrincipal int
+	var perDevice, perPrincipal, tcpPerDevice int
 	for _, e := range m.by {
 		if !e.Live() {
 			continue
 		}
+		holds := HoldsDevice(e.Profile)
 		if e.DeviceID == s.DeviceID {
-			perDevice++
+			if holds {
+				perDevice++
+			} else {
+				tcpPerDevice++
+			}
 		}
-		if s.Principal != "" && e.Principal == s.Principal {
+		if holds && s.Principal != "" && e.Principal == s.Principal {
 			perPrincipal++
 		}
 	}
-	if perDevice >= m.limits.PerDevice {
-		return fmt.Errorf("%w: %s already has %d of %d sessions",
-			ErrLimit, s.DeviceID, perDevice, m.limits.PerDevice)
-	}
-	if s.Principal != "" && perPrincipal >= m.limits.PerPrincipal {
-		return fmt.Errorf("%w: %s already has %d of %d sessions",
-			ErrLimit, s.Principal, perPrincipal, m.limits.PerPrincipal)
+	if !HoldsDevice(s.Profile) {
+		if tcpPerDevice >= m.limits.TCPConnsPerDevice {
+			return fmt.Errorf("%w: %s already has %d of %d forwarded connections",
+				ErrLimit, s.DeviceID, tcpPerDevice, m.limits.TCPConnsPerDevice)
+		}
+	} else {
+		if perDevice >= m.limits.PerDevice {
+			return fmt.Errorf("%w: %s already has %d of %d sessions",
+				ErrLimit, s.DeviceID, perDevice, m.limits.PerDevice)
+		}
+		if s.Principal != "" && perPrincipal >= m.limits.PerPrincipal {
+			return fmt.Errorf("%w: %s already has %d of %d sessions",
+				ErrLimit, s.Principal, perPrincipal, m.limits.PerPrincipal)
+		}
 	}
 
 	cp := *s

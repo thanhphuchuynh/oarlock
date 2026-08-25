@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- above it. Counting and querying use the state column instead — an earlier
   -- version used live_device for both, and because it is only populated when the cap
   -- is one, the per-device cap silently stopped being enforced for any other value.
+  --
+  -- tcp rows never set it. A forwarded connection does not hold the device in the
+  -- sense this index enforces (sessions.HoldsDevice), and one ssh -L would otherwise
+  -- take the slot the shell needs.
   live_device     TEXT
 );
 
@@ -77,6 +81,14 @@ CREATE INDEX IF NOT EXISTS sessions_by_state     ON sessions(state, created_at);
 // with Session.Live(); a drift between the two would show up as a cap that counts
 // rows the ledger considers finished.
 const liveState = `state NOT IN ('closed','rejected')`
+
+// holdsDevice and isForward are sessions.HoldsDevice expressed in SQL, split so a
+// query can ask for either side. The two definitions have to agree; a test asserts it
+// rather than trusting that whoever adds the next profile reads both files.
+var (
+	holdsDevice = `profile <> '` + sessions.ProfileTCP + `'`
+	isForward   = `profile = '` + sessions.ProfileTCP + `'`
+)
 
 // Store is a SQLite-backed ledger.
 type Store struct {
@@ -95,6 +107,9 @@ func Open(path string, l sessions.Limits, now func() time.Time) (*Store, error) 
 	}
 	if l.PerPrincipal <= 0 {
 		l.PerPrincipal = 5
+	}
+	if l.TCPConnsPerDevice <= 0 {
+		l.TCPConnsPerDevice = sessions.DefaultTCPConnsPerDevice
 	}
 	if now == nil {
 		now = time.Now
@@ -162,25 +177,41 @@ func (s *Store) Create(ctx context.Context, sess *sessions.Session) error {
 		return fmt.Errorf("%w: %s", sessions.ErrExists, row.ID)
 	}
 
-	var liveDevice, livePrincipal int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM sessions WHERE device_id = ? AND `+liveState,
-		row.DeviceID).Scan(&liveDevice); err != nil {
-		return err
-	}
-	if liveDevice >= s.limits.PerDevice {
-		return fmt.Errorf("%w: %s already has %d of %d sessions",
-			sessions.ErrLimit, row.DeviceID, liveDevice, s.limits.PerDevice)
-	}
-	if row.Principal != "" {
+	// Forwarded connections are counted apart from everything else, and against their
+	// own cap — see sessions.HoldsDevice. A `tcp` row must not consume the device's
+	// interactive slot, or one `ssh -L` locks out the shell for as long as it runs.
+	if !sessions.HoldsDevice(row.Profile) {
+		var liveForwards int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT count(*) FROM sessions WHERE principal = ? AND `+liveState,
-			row.Principal).Scan(&livePrincipal); err != nil {
+			`SELECT count(*) FROM sessions WHERE device_id = ? AND `+liveState+
+				` AND `+isForward, row.DeviceID).Scan(&liveForwards); err != nil {
 			return err
 		}
-		if livePrincipal >= s.limits.PerPrincipal {
+		if liveForwards >= s.limits.TCPConnsPerDevice {
+			return fmt.Errorf("%w: %s already has %d of %d forwarded connections",
+				sessions.ErrLimit, row.DeviceID, liveForwards, s.limits.TCPConnsPerDevice)
+		}
+	} else {
+		var liveDevice, livePrincipal int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM sessions WHERE device_id = ? AND `+liveState+
+				` AND `+holdsDevice, row.DeviceID).Scan(&liveDevice); err != nil {
+			return err
+		}
+		if liveDevice >= s.limits.PerDevice {
 			return fmt.Errorf("%w: %s already has %d of %d sessions",
-				sessions.ErrLimit, row.Principal, livePrincipal, s.limits.PerPrincipal)
+				sessions.ErrLimit, row.DeviceID, liveDevice, s.limits.PerDevice)
+		}
+		if row.Principal != "" {
+			if err := tx.QueryRowContext(ctx,
+				`SELECT count(*) FROM sessions WHERE principal = ? AND `+liveState+
+					` AND `+holdsDevice, row.Principal).Scan(&livePrincipal); err != nil {
+				return err
+			}
+			if livePrincipal >= s.limits.PerPrincipal {
+				return fmt.Errorf("%w: %s already has %d of %d sessions",
+					sessions.ErrLimit, row.Principal, livePrincipal, s.limits.PerPrincipal)
+			}
 		}
 	}
 
@@ -188,7 +219,7 @@ func (s *Store) Create(ctx context.Context, sess *sessions.Session) error {
 	// unique index can express. Above one, the transaction is the only enforcement —
 	// which is documented rather than silently different.
 	var live any
-	if s.limits.PerDevice == 1 {
+	if s.limits.PerDevice == 1 && sessions.HoldsDevice(row.Profile) {
 		live = row.DeviceID
 	}
 
@@ -237,7 +268,7 @@ func (s *Store) Update(ctx context.Context, id string, f func(*sessions.Session)
 	// any path that sets a terminal state frees the slot, rather than each caller
 	// remembering to.
 	var live any
-	if row.Live() && s.limits.PerDevice == 1 {
+	if row.Live() && s.limits.PerDevice == 1 && sessions.HoldsDevice(row.Profile) {
 		live = row.DeviceID
 	}
 	_, err = tx.ExecContext(ctx, `

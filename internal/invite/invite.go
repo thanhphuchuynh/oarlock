@@ -124,6 +124,7 @@ type Request struct {
 	PTY         *frame.PTY
 	Exec        []string
 	File        *frame.FileOp
+	TCP         *frame.TCPTarget
 
 	// AttachTicket asks for an operator-side ticket as well as the device's.
 	//
@@ -346,6 +347,7 @@ func (i *Inviter) Invite(ctx context.Context, dev *plugin.Device, req Request) (
 		PTY:       req.PTY,
 		Exec:      req.Exec,
 		File:      req.File,
+		TCP:       req.TCP,
 		Principal: req.Principal,
 		ExpiresAt: now.Add(ttl).UTC().Format(time.RFC3339),
 	}

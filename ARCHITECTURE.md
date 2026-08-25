@@ -692,6 +692,62 @@ to replace a config.
 convention for a session that failed rather than a command that ran. It used to report 0,
 which meant a device refusing a command looked to any caller like a command that succeeded.
 
+### 9.5 Port forwarding
+
+`ssh -L 8080:localhost:3000 treadmill-4821@gw.example.org -N` reaches a web UI, a database
+or an `adb` daemon on a machine that holds no listener. The operator's own `ssh` is the
+client: there is nothing to install, and `scp`, `rsync` and everything else that rides an
+SSH channel come along with it. The gateway handles `direct-tcpip` itself rather than
+using the library's handler, which dials from the *gateway* — the whole point is that the
+**device** dials, on its own loopback.
+
+**The target is a port, never a host.** `-L 8080:localhost:3000` is honoured;
+`-L 8080:10.0.0.5:3000` is refused with a sentence saying why. A device that dialled a
+host the gateway named would be an open proxy into whatever network it sits on — and that
+network is, by construction, the one nobody outside can reach, which is why the device is
+behind Oarlock at all.
+
+**The device holds the allow-list**, exactly as it does for `exec`. `forward_ports` in the
+agent's config is what is actually reachable; an agent with none advertises no `tcp`
+capability, so an upgraded gateway forwards nothing until a device opts in. List ports
+deliberately: a socket bound to loopback is usually bound there *because* it has no
+authentication of its own, so forwarding it hands out whatever it was protecting.
+
+`tcp` is its own action. A grant to open a shell is not a grant to reach every listening
+socket on the device.
+
+A refusal is carried as an SSH channel-open failure with the reason attached, which
+OpenSSH prints only under `ssh -v`; the gateway log always carries it, so "why did my
+forward not open" has an answer on both sides.
+
+**One connection is one session** — ADR-024 applied rather than worked around. Each
+forwarded connection gets its own row, its own invitation and its own websocket, so a
+forward is killable, revocable and auditable with the machinery a shell already has. It is
+not free: a browser opens up to six connections for one page, each costing a handshake to
+the device. ADR-024 accepted that cost for sessions that are "rare and short"; forwarded
+connections are neither, and that is the honest price of not multiplexing.
+
+**Forwards are capped separately** (`limits.tcp_conns_per_device`, default 16) and do not
+count against `sessions_per_device`. Sharing that cap would mean the second image on a page
+failing with "this device already has a session open", and a forward starving the shell
+somebody needs in order to fix it. The one-interactive-session-per-device guarantee keeps
+meaning what the session list says it means.
+
+**Half-close is not represented.** TCP lets one side finish sending while the other keeps
+going, and `direct-tcpip` carries that as EOF; Oarlock's frame vocabulary has no
+half-close, so a peer's EOF ends the whole forward. That is right for HTTP, Postgres, Redis
+and adb, and wrong for protocols that signal end-of-request by shutting down the write side
+— mostly `nc` and HTTP/1.0. Written down rather than half-implemented: a forward that
+silently truncates one direction is worse than one that documents what it does not do.
+
+Not recorded, for the same reason `file` is not: a TLS handshake streamed into an asciicast
+is unwatchable. The audit trail is who forwarded which port and when, never the bytes.
+
+The session timers apply unchanged, and `limits.idle` is the one to look at: a forwarded
+connection with no traffic in either direction for five minutes is closed. A browser simply
+reopens one, which is the common case and invisible; a long-lived idle connection —
+`adb connect`, an open database handle — is not, so raise `idle` if that is the use.
+
 ## 10. More than one gateway
 
 Single node is the default and it is honest: one `oarlockd`, in-memory store, in-memory
@@ -856,6 +912,7 @@ sdk/python/              generated client under a thin ergonomic layer
 | OL-023 | `observe` is its own action, and the observed operator is told | Watching someone work is a different capability from working, with a consent dimension that must not be inherited from `shell`. |
 | OL-024 | **Oarlock does not multiplex.** A connection is one session or the control channel. | Found while building the codec: adopting a multiplexer needs a byte stream, which puts a length field back and hands back the allocation surface the framing removes; hand-rolling one means owning flow control and the head-of-line problem. Not multiplexing costs a TLS handshake per session — for sessions that are rare and short — and makes the two reachability modes one data path. |
 | OL-025 | The invitation names a gateway **node**, not a load balancer | An agent dials the replica the operator is already waiting on, which removes the need to forward a session between replicas (§ 10). |
+| OL-026 | Forwarded connections are capped separately from sessions, and never claim the device's slot | One `ssh -L` is as many TCP connections as the client opens — a browser page load is six. Sharing `sessions_per_device` would fail the second image on a page with "this device already has a session open", and let a forward starve the shell needed to fix it. Splitting the cap keeps "one interactive session per device" meaning what the session list says (§ 9.5). |
 | OL-026 | Where a replay may start is tracked as bytes are written to the ring, not decided when they are read | A ring drops its oldest bytes, and the byte it drops may be the `ESC` that opened a sequence still in the buffer. From the middle of a stream, a parameter byte and a printable byte are the same byte, so a reader cannot tell `1;2` inside a CSI from the text "1;2" — the information only exists while the stream is being parsed in order. A minimal parser marks the positions between sequences on the way in; the replay starts at the oldest surviving mark and reports what it skipped. |
 | OL-029 | The re-check interval is the revocation guarantee; `Watch` is only an optimisation | A stream can die quietly — a proxy timing out an SSE connection looks like nothing at all. A design where `Watch` carries the load passes every test that exercises it and stops revoking the day it breaks, silently. So the interval loop runs regardless, and a dropped stream reconnects rather than closing anything. |
 | OL-027 | A watcher's read-only-ness is structural: the pump never reads their connection | A check is a line somebody can later move, and the thing being prevented is a second person typing into a shell they are only supposed to be reading. With no code path from a watcher's socket to the device, the guarantee survives a mistake about who they are. Their socket is still read — by the handler holding it — so that leaving is noticed promptly and attempted input is counted rather than vanishing. |
@@ -888,8 +945,9 @@ screens, asciinema-player for replay.
 grace window, the **MQTT** dispatcher adapter, S3/GCS recorder, Postgres store, device key
 rotation.
 
-**M4 — the rest of the protocol.** `exec`, `file`, `tcp`, sftp subsystem, `direct-tcpip`,
-and mode A passthrough on top of `tcp`.
+**M4 — the rest of the protocol.** `exec`, `file`, `tcp` and `direct-tcpip` have landed
+(§ 9.5). What is left: the `log` profile, the sftp subsystem, and mode A passthrough on
+top of `tcp`.
 
 **M5 — more than one.** Redis ownership, node-to-node forwarding, drain, and the load test
 that says how many idle agents one replica actually holds.

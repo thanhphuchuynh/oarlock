@@ -27,6 +27,7 @@ import (
 	"github.com/oarlock/oarlock/internal/recordpolicy"
 	"github.com/oarlock/oarlock/internal/ring"
 	"github.com/oarlock/oarlock/internal/safety"
+	"github.com/oarlock/oarlock/internal/sessions"
 )
 
 // Config is the whole file.
@@ -41,6 +42,20 @@ type Config struct {
 	// Not a load balancer. An agent dials the replica the operator is waiting on
 	// (ADR-025), so this has to be the address of *this* process.
 	URL string `yaml:"url"`
+
+	// BrowserOrigins lists origins allowed to open the browser-facing websockets
+	// (/ws/session and /ws/attach). Empty means same-origin only.
+	//
+	// This exists for an embedding console served from a different origin — the MDM
+	// hosting the terminal, say. It loosens a real defence: the browser leg is
+	// authenticated by a ticket in the OPEN frame, and the Origin check is what stops
+	// any page from starting the handshake before that ticket is ever examined. So
+	// name exact origins; a wildcard here hands every site on the internet the first
+	// half of an attach.
+	//
+	// Deliberately not applied to /ws/control — the device leg sends no Origin, and
+	// widening it there would protect nothing and weaken something.
+	BrowserOrigins []string `yaml:"browser_origins"`
 
 	Listen   Listen              `yaml:"listen"`
 	SSH      SSH                 `yaml:"ssh"`
@@ -309,6 +324,11 @@ type Limits struct {
 	Scrollback           int           `yaml:"scrollback"`
 	SessionsPerDevice    int           `yaml:"sessions_per_device"`
 	SessionsPerPrincipal int           `yaml:"sessions_per_principal"`
+	// TCPConnsPerDevice caps live forwarded connections (`ssh -L`) on one device.
+	// Counted apart from sessions_per_device because a forward is not one of anything:
+	// one `ssh -L` is as many connections as the client opens, and a browser loading a
+	// page opens six. Default 16.
+	TCPConnsPerDevice int `yaml:"tcp_conns_per_device"`
 }
 
 // Load reads and validates a configuration file.
@@ -445,6 +465,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Limits.SessionsPerPrincipal == 0 {
 		c.Limits.SessionsPerPrincipal = 5
+	}
+	if c.Limits.TCPConnsPerDevice == 0 {
+		c.Limits.TCPConnsPerDevice = sessions.DefaultTCPConnsPerDevice
 	}
 }
 
@@ -633,6 +656,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Limits.Rate < 0 || c.Limits.Batch <= 0 || c.Limits.Scrollback < 0 {
 		add("limits.rate, limits.batch and limits.scrollback must be positive")
+	}
+	if c.Limits.TCPConnsPerDevice <= 0 {
+		add("limits.tcp_conns_per_device must be positive")
 	}
 	if c.Limits.SessionsPerDevice <= 0 || c.Limits.SessionsPerPrincipal <= 0 {
 		add("limits.sessions_per_device and limits.sessions_per_principal must be positive")

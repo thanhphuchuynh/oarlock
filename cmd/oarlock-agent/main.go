@@ -219,6 +219,19 @@ func main() {
 			"root", cfg.FileRoot, "writable", cfg.FileWritable)
 	}
 
+	// `tcp` likewise: offered only when the device names ports to forward.
+	var dialFn agent.DialFunc
+	if len(cfg.ForwardPorts) > 0 {
+		opts := []agent.DialOption{}
+		if cfg.ForwardDialTimeout > 0 {
+			opts = append(opts, agent.DialTimeout(cfg.ForwardDialTimeout))
+		}
+		dialFn = agent.Dial(cfg.ForwardPorts, opts...)
+		caps = append(caps, "tcp")
+		log.Info("port forwarding is available on this device",
+			"ports", cfg.ForwardPorts)
+	}
+
 	control, err := agent.NewControl(agent.Config{
 		Gateway:   cfg.Gateway,
 		DeviceID:  cfg.Device,
@@ -235,6 +248,7 @@ func main() {
 		}),
 		Exec: execFn,
 		File: fileFn,
+		Dial: dialFn,
 		Log:  log,
 	})
 	if err != nil {

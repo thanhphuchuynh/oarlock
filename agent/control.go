@@ -69,6 +69,11 @@ type Config struct {
 	// filesystem worth exposing — and then leave "file" out of Caps too.
 	File FileFunc
 
+	// Dial opens one connection to an allow-listed device-local port, for the `tcp`
+	// profile — this is what carries `ssh -L`. Nil on a build with nothing worth
+	// forwarding, and then leave "tcp" out of Caps too.
+	Dial DialFunc
+
 	// OnInvitation is called for every invitation, from a DIAL frame and from
 	// WELCOME.resume alike. It runs on its own goroutine: dialling a session must
 	// not stall the channel that delivers the next invitation.

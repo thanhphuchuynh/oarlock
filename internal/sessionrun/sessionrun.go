@@ -75,6 +75,16 @@ type Params struct {
 	// rather than here — and until then an attribute-based backend should be pointed at
 	// the SSH surface, or re-resolve the principal itself.
 	Grantee *plugin.Principal
+	// Action is the grant this session must keep holding, re-checked for as long as it
+	// runs. Empty derives it from Profile via ActionFor.
+	//
+	// It used to be plugin.ActionShell for every session, whatever the profile. That is
+	// wrong in both directions: an operator granted only `exec` had their command killed
+	// mid-run for lacking `shell`, and withdrawing somebody's `exec` left the exec
+	// session they already had running — which is the one thing supervision exists to
+	// prevent.
+	Action plugin.Action
+
 	// Surface names where the operator came from — "ssh" or "browser" — for logs
 	// and for the audit trail. Two surfaces reaching one device is worth being able
 	// to tell apart afterwards.
@@ -103,8 +113,32 @@ type Params struct {
 // matches ssh's own convention for a session that failed rather than a command that ran.
 const NoExitStatus = 255
 
-// recordedProfile says whether a profile's bytes belong in a recording.
-func recordedProfile(profile string) bool {
+// ActionFor maps a profile to the action a live session of it must keep being allowed.
+//
+// `file` is deliberately not here: read and write are separate grants on one profile, so
+// a caller that knows which it is says so in Params.Action. Guessing would either
+// supervise a write against the weaker grant, which is a hole, or supervise a read
+// against the stronger one, which revokes a session that was never unauthorised — and a
+// spurious revocation is the failure this package is most careful about elsewhere.
+func ActionFor(profile string) plugin.Action {
+	switch profile {
+	case "exec":
+		return plugin.ActionExec
+	case sessions.ProfileTCP:
+		return plugin.ActionTCP
+	default:
+		return plugin.ActionShell
+	}
+}
+
+// Recorded says whether a profile's bytes belong in a recording.
+//
+// Exported because the READY frame has to tell the device the truth about *this* session
+// before any bytes move, and the answer is not "is a recorder configured" — a gateway
+// with a recorder still does not record a `file` transfer or a `tcp` forward. Answering
+// the easier question told the device it was being recorded when it was not, which is
+// the direction this codebase treats as the dangerous one.
+func Recorded(profile string) bool {
 	switch profile {
 	case "file", "tcp", "sshpass":
 		// sshpass is mode A: the gateway cannot read it at all, so there is nothing to
@@ -139,7 +173,7 @@ func (r *Runner) Prepare(ctx context.Context, p Params) (plugin.RecordingWriter,
 	// *and* puts a second copy of every transferred byte in a store with its own
 	// retention. The session row still says `not_recorded`, so it is a queryable fact
 	// rather than an absence somebody has to notice.
-	if r.Recorder != nil && recordedProfile(p.Profile) {
+	if r.Recorder != nil && Recorded(p.Profile) {
 		var err error
 		rw, err = r.Recorder.Open(ctx, &plugin.SessionMeta{
 			SessionID: p.SessionID, DeviceID: p.DeviceID, Profile: p.Profile,
@@ -294,8 +328,12 @@ func (r *Runner) Run(ctx context.Context, p Params, rw plugin.RecordingWriter,
 		if grantee == nil {
 			grantee = &plugin.Principal{ID: p.Principal}
 		}
+		act := p.Action
+		if act == "" {
+			act = ActionFor(p.Profile)
+		}
 		go r.Authz.Guard(runCtx, p.SessionID, grantee,
-			&plugin.Device{ID: p.DeviceID}, plugin.ActionShell)
+			&plugin.Device{ID: p.DeviceID}, act)
 	}
 
 	res, err := ps.Run(runCtx)

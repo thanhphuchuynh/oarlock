@@ -158,6 +158,16 @@ func New(o Options) (*Server, error) {
 			}
 			return true
 		},
+		// `direct-tcpip` is what `ssh -L` opens. Deliberately *not*
+		// gssh.DirectTCPIPHandler: that one dials from the gateway, and the whole
+		// point is that the device dials, on its own loopback, from its own
+		// allow-list. Every other channel type stays unhandled and is refused by the
+		// library, which is the right answer for `-R` — a device opening listeners on
+		// the gateway is a different feature with a different threat model.
+		ChannelHandlers: map[string]gssh.ChannelHandler{
+			"session":      gssh.DefaultSessionHandler,
+			"direct-tcpip": s.handleDirectTCPIP,
+		},
 	}
 
 	// Advertised only when the backend can answer it, so a key-only deployment does not
@@ -446,6 +456,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	}
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: profile, Principal: p.ID,
+		Action:  action,
 		Surface: "ssh", Grantee: p, Device: att.Conn, RecordInput: recordInput,
 	}
 	if profile == "shell" {

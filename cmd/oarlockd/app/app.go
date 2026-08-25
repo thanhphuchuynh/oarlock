@@ -206,8 +206,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		}
 	}
 	ledger, err := sqlitestore.Open(dbPath, sessions.Limits{
-		PerDevice:    cfg.Limits.SessionsPerDevice,
-		PerPrincipal: cfg.Limits.SessionsPerPrincipal,
+		PerDevice:         cfg.Limits.SessionsPerDevice,
+		PerPrincipal:      cfg.Limits.SessionsPerPrincipal,
+		TCPConnsPerDevice: cfg.Limits.TCPConnsPerDevice,
 	}, nil)
 	if err != nil {
 		return nil, err
@@ -365,16 +366,24 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		},
 		Hub: g.hub, Log: log,
 	})
+	// The two browser-facing sockets honour browser_origins; /ws/control above does
+	// not, because a device sends no Origin header and never should.
+	browserWS := websocket.Upgrader{OriginPatterns: cfg.BrowserOrigins}
 	mux.Handle("/ws/session", &sessionsrv.Server{
-		Upgrader: websocket.Upgrader{}, Inviter: g.inviter, Log: log,
+		Upgrader: browserWS, Inviter: g.inviter, Log: log,
 		Ready: func(c *ticket.Claims) frame.Ready {
+			// Whether *this session* is recorded, not whether a recorder exists. A
+			// `file` transfer and a `tcp` forward are never recorded however the
+			// gateway is configured, and telling the device otherwise is a false
+			// disclosure in the dangerous direction.
 			return frame.Ready{
-				SessionID: c.SessionID, Mode: "gateway", Recording: recorder != nil,
+				SessionID: c.SessionID, Mode: "gateway",
+				Recording: recorder != nil && sessionrun.Recorded(c.Profile),
 			}
 		},
 	})
 	mux.Handle("/ws/attach", &attachsrv.Server{
-		Upgrader: websocket.Upgrader{}, Inviter: g.inviter,
+		Upgrader: browserWS, Inviter: g.inviter,
 		Runner: runner, Live: g.live, Log: log,
 	})
 	mux.Handle("/api/", api)

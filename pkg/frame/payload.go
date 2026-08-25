@@ -198,15 +198,32 @@ type Welcome struct {
 // authorisation input — the agent trusts the gateway completely and cannot check
 // anything itself. Do not gate on it.
 type Invitation struct {
-	SessionID string   `json:"session_id"`
-	Ticket    string   `json:"ticket"`
-	URL       string   `json:"url"`
-	Profile   string   `json:"profile"`
-	PTY       *PTY     `json:"pty,omitempty"`
-	Exec      []string `json:"exec,omitempty"`
-	File      *FileOp  `json:"file,omitempty"`
-	Principal string   `json:"principal,omitempty"`
-	ExpiresAt string   `json:"expires_at,omitempty"` // RFC 3339
+	SessionID string     `json:"session_id"`
+	Ticket    string     `json:"ticket"`
+	URL       string     `json:"url"`
+	Profile   string     `json:"profile"`
+	PTY       *PTY       `json:"pty,omitempty"`
+	Exec      []string   `json:"exec,omitempty"`
+	File      *FileOp    `json:"file,omitempty"`
+	TCP       *TCPTarget `json:"tcp,omitempty"`
+	Principal string     `json:"principal,omitempty"`
+	ExpiresAt string     `json:"expires_at,omitempty"` // RFC 3339
+}
+
+// TCPTarget is the device-local port a `tcp` session carries bytes to.
+//
+// Port only, and loopback only. There is deliberately no host field. A device that
+// dialled a host the gateway named would be a proxy into whatever network the device
+// sits on — reachable by anyone who can open a `tcp` session, and on a machine behind
+// NAT that is exactly the network Oarlock exists because you cannot reach. Dialling
+// 127.0.0.1 and nothing else keeps the blast radius of a compromised gateway at the
+// device itself, which is the same bargain the exec allow-list makes.
+//
+// Like FileOp, the target travels in the invitation rather than in a request frame: the
+// ticket is scoped to a profile *and* to what was authorised, so one session is one
+// connection to one port and cannot be repointed after it opens.
+type TCPTarget struct {
+	Port int `json:"port"`
 }
 
 // FileOp is one file operation, for the `file` profile.

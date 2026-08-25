@@ -437,6 +437,16 @@ are the complete set of frames exempt from the one-kind rule.
   "expires_at": "2026-08-21T09:15:02Z" }
 ```
 
+For a `tcp` session the invitation carries `"tcp": {"port": 3000}` instead of `pty` or
+`exec`. A **port, never a host**: the agent dials `127.0.0.1` and nothing else, so a
+gateway cannot name a third party and turn the device into a proxy into the network it
+sits on. The port is matched against the device's own allow-list on arrival, and refused
+with `not_authorized` if it is not on it.
+
+The target travels here rather than in a request frame, for the same reason `exec` and
+`file` do: the ticket is scoped to a profile *and* to what was authorised, so one session
+is one connection to one port and cannot be repointed after it opens.
+
 *Dial me for this session.* This is the entire content of the control channel's
 usefulness, and it is why the channel exists.
 
@@ -577,7 +587,7 @@ bytes out of an SSH stream breaks the MAC and kills the connection.
 | `profile_unsupported` | agent did not advertise this capability | no |
 | `policy_denied` | e.g. passthrough where `allow_unrecorded` is false | no |
 | `policy_conflict` | two `record_input` rules disagree and one is non-overridable | no |
-| `session_limit` | per-device or per-principal cap reached | yes |
+| `session_limit` | per-device, per-principal, or per-device forward cap reached | yes |
 | `version_unsupported` | no shared protocol version | no |
 | `frame_too_large` | exceeded `limits.frame` | no |
 | `protocol_error` | malformed frame, wrong order, text frame | no |
