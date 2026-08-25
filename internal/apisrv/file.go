@@ -231,6 +231,9 @@ func (s *Server) runFileSession(w http.ResponseWriter, r *http.Request, p *plugi
 	}
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: "file", Principal: p.ID,
+		// Read and write are separate grants, so supervision has to be told which
+		// one this session is holding — ActionFor cannot derive it.
+		Action:   fileAction(op.Op),
 		OpenedBy: p.OpenedBy, Unattended: p.Unattended,
 		Surface: "api", Grantee: p, Device: att.Conn,
 	}
@@ -377,3 +380,11 @@ func (f *fileSource) Close(transport.CloseCode, string) error {
 }
 
 func (f *fileSource) RemoteAddr() string { return "" }
+
+// fileAction is which grant a file session has to keep holding while it runs.
+func fileAction(op string) plugin.Action {
+	if op == "write" {
+		return plugin.ActionFileWrite
+	}
+	return plugin.ActionFileRead
+}

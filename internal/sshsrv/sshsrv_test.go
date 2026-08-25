@@ -96,6 +96,37 @@ var authzChecker *authz.Checker
 // an explicit nil says the test is not exercising it.
 var authzSupervisor *authz.Supervisor
 
+// forwardPorts is the device's `tcp` allow-list, in the same style as authzChecker
+// above. Empty for every test that is not about port forwarding — and then the agent
+// advertises no "tcp" capability either, which is what an unconfigured device does.
+var forwardPorts []int
+
+// newStackForwarding wires an agent that will forward the named device-local ports.
+func newStackForwarding(t *testing.T, ports []int) *stack {
+	t.Helper()
+	prev := forwardPorts
+	forwardPorts = ports
+	t.Cleanup(func() { forwardPorts = prev })
+	return newStackWith(t, []string{"/bin/sh"}, fastLimits(), 0, false)
+}
+
+// agentCaps and agentDial keep the forwarding wiring out of the middle of newStackWith,
+// where it would read as a second thing that builder does.
+func agentCaps() []string {
+	caps := []string{"shell", "exec"}
+	if len(forwardPorts) > 0 {
+		caps = append(caps, "tcp")
+	}
+	return caps
+}
+
+func agentDial() agent.DialFunc {
+	if len(forwardPorts) == 0 {
+		return nil
+	}
+	return agent.Dial(forwardPorts)
+}
+
 func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 	doorbellDelay time.Duration, withRecorder bool) *stack {
 	t.Helper()
@@ -159,8 +190,9 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 		Signer:    devPriv,
 		Dialer:    websocket.Dialer{},
 		PinSHA256: []string{"unused-in-test"},
-		Caps:      []string{"shell", "exec"},
+		Caps:      agentCaps(),
 		Shell:     agent.Forkpty(shell),
+		Dial:      agentDial(),
 		// The allow-list the exec tests run against. Exact argvs, which is the profile's
 		// whole security property — see agent/exec.go.
 		Exec: agent.Exec([][]string{

@@ -64,3 +64,24 @@ dns:
 #   - ["/system/bin/logcat", "-d", "-t", "500"]
 #   - ["/system/bin/dumpsys", "battery"]
 # exec_timeout: 30s
+
+# The `file` profile's root. Empty — the default — means this device does not offer it.
+# Confinement below the root is the kernel's job (os.Root); the root's own contents are a
+# policy choice, and `/` is a choice.
+#
+# file_root: /data/vendor/oarlock/files
+# file_writable: false
+
+# The `tcp` allow-list: device-local ports an operator may reach with
+# `ssh -L 8080:localhost:3000 <device>@gateway -N`. Empty — the default — means this device
+# does not offer port forwarding at all, and the gateway refuses at open time.
+#
+# Every entry is dialled on 127.0.0.1 and nowhere else, so this can never become a route
+# into the network the device sits on. What it *can* do is hand out whatever the listening
+# service protects: a port bound to loopback is usually bound there because it has no
+# authentication of its own. List what should be reachable, not what happens to be running.
+#
+# forward_ports:
+#   - 3000                     # the on-device web console
+#   - 5555                     # adbd, if you want `adb connect` through the gateway
+# forward_dial_timeout: 5s

@@ -192,6 +192,7 @@ func (s *Server) execOnDevice(w http.ResponseWriter, r *http.Request, p *plugin.
 	}
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: "exec", Principal: p.ID,
+		Action:   plugin.ActionExec,
 		OpenedBy: p.OpenedBy, Unattended: p.Unattended,
 		Surface: "api", Grantee: p, Device: att.Conn, RecordInput: recordInput,
 	}

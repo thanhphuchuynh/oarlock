@@ -72,6 +72,19 @@ type Config struct {
 	FileWritable bool `yaml:"file_writable"`
 	// FileMaxBytes bounds one transfer. Zero uses the agent default.
 	FileMaxBytes int64 `yaml:"file_max_bytes"`
+
+	// ForwardPorts is the allow-list for the `tcp` profile: device-local ports an
+	// operator may reach with `ssh -L`. Empty — the default — means this device does
+	// not offer `tcp` at all, and the gateway then refuses such a session at open time
+	// rather than after a round trip.
+	//
+	// Every entry is dialled on 127.0.0.1 and nowhere else. List only what should be
+	// reachable: a port bound to loopback is usually bound there *because* it has no
+	// authentication of its own, so forwarding it hands out whatever it protects.
+	ForwardPorts []int `yaml:"forward_ports"`
+	// ForwardDialTimeout bounds connecting to a forwarded port. Zero uses the agent
+	// default.
+	ForwardDialTimeout time.Duration `yaml:"forward_dial_timeout"`
 }
 
 // Sessions says what OS identity a session's shell runs as.
