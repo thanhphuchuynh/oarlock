@@ -39,6 +39,18 @@ node_modules/
 # examples/ carries the same configuration without the secrets.
 /demo/
 
+# The same artefacts, one directory up. A config with relative paths — `oarlockd -config
+# demo/oarlock.yaml` run from the repo root rather than from demo/ — resolves them
+# against the working directory, so a signing key lands here instead. It is 32 bytes at
+# mode 0600 with an innocuous name, next to a hundred files that are meant to be
+# committed, which is precisely how a private key gets into a repository.
+/oarlock.db
+/oarlock.db-shm
+/oarlock.db-wal
+/recording.key
+/recording.key.pub
+/hostkey
+
 # Fuzzing corpora that Go writes on a crash are useful locally and are committed
 # deliberately when they are a regression case, so this ignores nothing by default.
 
