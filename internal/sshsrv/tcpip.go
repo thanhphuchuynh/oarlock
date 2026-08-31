@@ -134,7 +134,7 @@ func (s *Server) handleDirectTCPIP(_ *gssh.Server, _ *xssh.ServerConn,
 	// action: a grant to open a shell is not a grant to reach every listening socket on
 	// the device, and several of those are bound to loopback precisely because they
 	// have no authentication of their own.
-	if verdict := s.o.Authz.AtOpen(ctx, p, dev, plugin.ActionTCP); !verdict.Allow() {
+	if verdict := s.o.Authz.AtOpen(ctx, p, dev, plugin.ActionTCP, plugin.Target{Port: int(d.DestPort)}); !verdict.Allow() {
 		c, _ := condition.Lookup(verdict.Code)
 		text := c.Text()
 		if verdict.Reason != "" {
@@ -241,6 +241,7 @@ func (s *Server) handleDirectTCPIP(_ *gssh.Server, _ *xssh.ServerConn,
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: sessions.ProfileTCP,
 		Principal: p.ID, Action: plugin.ActionTCP,
+		Target:  plugin.Target{Port: int(d.DestPort)},
 		Surface: "ssh", Grantee: p,
 		Device: att.Conn,
 		// No PTY, no reattach: a forwarded connection has no terminal and no second

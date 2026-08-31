@@ -867,7 +867,7 @@ type sshAuthz struct {
 }
 
 func (s *sshAuthz) Authorize(context.Context, *plugin.Principal, *plugin.Device,
-	plugin.Action) (plugin.Decision, error) {
+	plugin.Action, plugin.Target) (plugin.Decision, error) {
 	if s.err != nil {
 		return plugin.Decision{}, s.err
 	}

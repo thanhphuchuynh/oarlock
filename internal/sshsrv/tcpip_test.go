@@ -228,7 +228,7 @@ type denyAction struct {
 }
 
 func (d denyAction) Authorize(_ context.Context, _ *plugin.Principal, _ *plugin.Device,
-	a plugin.Action) (plugin.Decision, error) {
+	a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if a == d.deny {
 		return plugin.Decision{Allow: false, Reason: d.reason}, nil
 	}
@@ -246,7 +246,7 @@ type recordingAuthz struct {
 }
 
 func (r *recordingAuthz) Authorize(_ context.Context, _ *plugin.Principal,
-	_ *plugin.Device, a plugin.Action) (plugin.Decision, error) {
+	_ *plugin.Device, a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	r.mu.Lock()
 	r.seen = append(r.seen, a)
 	r.mu.Unlock()

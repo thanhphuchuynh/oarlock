@@ -33,7 +33,7 @@ func TestPermissionLifecycleAndDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
-		&plugin.Device{ID: "samsung-s23", Tags: map[string]string{"fleet": "qa"}}, plugin.ActionShell)
+		&plugin.Device{ID: "samsung-s23", Tags: map[string]string{"fleet": "qa"}}, plugin.ActionShell, plugin.Target{})
 	if err != nil || !decision.Allow {
 		t.Fatalf("decision = %+v, error = %v", decision, err)
 	}
@@ -46,7 +46,7 @@ func TestPermissionLifecycleAndDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision, err = store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
-		&plugin.Device{ID: "samsung-s23", Tags: map[string]string{"fleet": "qa"}}, plugin.ActionShell)
+		&plugin.Device{ID: "samsung-s23", Tags: map[string]string{"fleet": "qa"}}, plugin.ActionShell, plugin.Target{})
 	if err != nil || decision.Allow {
 		t.Fatalf("disabled permission decision = %+v, error = %v", decision, err)
 	}
@@ -71,7 +71,7 @@ func TestDenyBeatsHigherPriorityAllow(t *testing.T) {
 		}
 	}
 	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
-		&plugin.Device{ID: "pos-1", Tags: map[string]string{"scope": "pci"}}, plugin.ActionShell)
+		&plugin.Device{ID: "pos-1", Tags: map[string]string{"scope": "pci"}}, plugin.ActionShell, plugin.Target{})
 	if err != nil || decision.Allow || decision.Reason != "change ticket required" {
 		t.Fatalf("deny decision = %+v, error = %v", decision, err)
 	}
@@ -87,7 +87,7 @@ func TestValidationAndDatabaseFailureAreDistinct(t *testing.T) {
 		t.Fatal(err)
 	}
 	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
-		&plugin.Device{ID: "samsung-s23"}, plugin.ActionShell)
+		&plugin.Device{ID: "samsung-s23"}, plugin.ActionShell, plugin.Target{})
 	if err == nil || decision.Allow {
 		t.Fatalf("database outage was reported as a decision: %+v, %v", decision, err)
 	}

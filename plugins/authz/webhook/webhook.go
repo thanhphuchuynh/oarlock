@@ -50,6 +50,11 @@ type cacheKey struct {
 	principal string
 	device    string
 	action    plugin.Action
+	// target is the JSON encoding of the plugin.Target, not its String(): this is a
+	// map key, so it has to be both comparable and injective. A cache keyed without it
+	// would answer "may I forward port 3000" with the decision it cached for port 22 —
+	// the cache would become the hole the target was added to close.
+	target string
 }
 
 type cached struct {
@@ -81,6 +86,15 @@ type authorizeRequest struct {
 	Principal principalDTO  `json:"principal"`
 	Device    deviceDTO     `json:"device"`
 	Action    plugin.Action `json:"action"`
+	// Target is omitted entirely for an action that names none, so a backend written
+	// before targets existed sees exactly the body it saw before.
+	Target *targetDTO `json:"target,omitempty"`
+}
+
+type targetDTO struct {
+	Port int      `json:"port,omitempty"`
+	Path string   `json:"path,omitempty"`
+	Argv []string `json:"argv,omitempty"`
 }
 
 type principalDTO struct {
@@ -118,7 +132,7 @@ type limitsResponse struct {
 
 // Authorize asks the webhook for a decision.
 func (a *Authorizer) Authorize(ctx context.Context, p *plugin.Principal, dev *plugin.Device,
-	act plugin.Action) (plugin.Decision, error) {
+	act plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if err := ctx.Err(); err != nil {
 		return plugin.Decision{}, err
 	}
@@ -129,7 +143,15 @@ func (a *Authorizer) Authorize(ctx context.Context, p *plugin.Principal, dev *pl
 		return plugin.Decision{Allow: false, Reason: "no principal or device"}, nil
 	}
 
-	key := cacheKey{principal: p.ID, device: dev.ID, action: act}
+	dto := &targetDTO{Port: tgt.Port, Path: tgt.Path, Argv: tgt.Argv}
+	if tgt.IsZero() {
+		dto = nil
+	}
+	targetKey, err := json.Marshal(dto)
+	if err != nil {
+		return plugin.Decision{}, fmt.Errorf("webhook authorizer: encoding target: %w", err)
+	}
+	key := cacheKey{principal: p.ID, device: dev.ID, action: act, target: string(targetKey)}
 	if d, ok := a.cached(key); ok {
 		return d, nil
 	}
@@ -144,6 +166,7 @@ func (a *Authorizer) Authorize(ctx context.Context, p *plugin.Principal, dev *pl
 			AllowPassthrough: dev.AllowPassthrough, Tags: dev.Tags, Profiles: dev.Profiles,
 		},
 		Action: act,
+		Target: dto,
 	})
 	if err != nil {
 		return plugin.Decision{}, fmt.Errorf("webhook authorizer: encoding: %w", err)

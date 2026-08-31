@@ -54,7 +54,7 @@ func TestAuthorizePostsTheDecisionRequest(t *testing.T) {
 			ID: "treadmill-4821", Platform: plugin.PlatformAndroid,
 			Tags: map[string]string{"scope": "pci"},
 		},
-		plugin.ActionShell,
+		plugin.ActionShell, plugin.Target{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestHTTPFailureIsUnavailableNotADenial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell)
+	d, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{})
 	if err == nil {
 		t.Fatalf("Authorize error = nil, decision = %+v", d)
 	}
@@ -107,7 +107,7 @@ func TestForbiddenIsADenial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := a.Authorize(context.Background(), who("bob@example.com"), dev("treadmill-4821"), plugin.ActionShell)
+	d, err := a.Authorize(context.Background(), who("bob@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestCacheTTL(t *testing.T) {
 	}
 	a.Now = func() time.Time { return now }
 	for range 2 {
-		if _, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell); err != nil {
+		if _, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,7 +138,7 @@ func TestCacheTTL(t *testing.T) {
 		t.Fatalf("calls before expiry = %d", calls.Load())
 	}
 	now = now.Add(3 * time.Second)
-	if _, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell); err != nil {
+	if _, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{}); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {

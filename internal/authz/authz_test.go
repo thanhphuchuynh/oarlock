@@ -27,7 +27,7 @@ type backend struct {
 }
 
 func (b *backend) Authorize(context.Context, *plugin.Principal, *plugin.Device,
-	plugin.Action) (plugin.Decision, error) {
+	plugin.Action, plugin.Target) (plugin.Decision, error) {
 	b.calls.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -69,13 +69,13 @@ func TestAtOpenHasThreeOutcomes(t *testing.T) {
 	c := checker(b, 3)
 	ctx := context.Background()
 
-	got := c.AtOpen(ctx, phuc, tread, plugin.ActionShell)
+	got := c.AtOpen(ctx, phuc, tread, plugin.ActionShell, plugin.Target{})
 	if !got.Allow() {
 		t.Errorf("an allowed open was refused: %+v", got)
 	}
 
 	b.set(false, "not in the on-call group", nil)
-	got = c.AtOpen(ctx, phuc, tread, plugin.ActionShell)
+	got = c.AtOpen(ctx, phuc, tread, plugin.ActionShell, plugin.Target{})
 	if got.Outcome != authz.Denied {
 		t.Errorf("outcome %v, want denied", got.Outcome)
 	}
@@ -87,7 +87,7 @@ func TestAtOpenHasThreeOutcomes(t *testing.T) {
 	}
 
 	b.set(false, "", errors.New("dial tcp: connection refused"))
-	got = c.AtOpen(ctx, phuc, tread, plugin.ActionShell)
+	got = c.AtOpen(ctx, phuc, tread, plugin.ActionShell, plugin.Target{})
 	if got.Outcome != authz.Unavailable {
 		t.Errorf("outcome %v, want unavailable", got.Outcome)
 	}
@@ -110,7 +110,7 @@ func TestAnOutageRefusesNewSessionsFromTheFirstFailure(t *testing.T) {
 	b := &backend{err: errors.New("down")}
 	c := checker(b, 100) // a huge grace window, which must not apply here
 	for i := range 3 {
-		if got := c.AtOpen(context.Background(), phuc, tread, plugin.ActionShell); got.Allow() {
+		if got := c.AtOpen(context.Background(), phuc, tread, plugin.ActionShell, plugin.Target{}); got.Allow() {
 			t.Fatalf("attempt %d: a new session was opened while authorization was down", i)
 		}
 	}
@@ -121,10 +121,10 @@ func TestNoBackendAllows(t *testing.T) {
 	// internal/safety refuses to boot production without one; a gateway that refused
 	// every session until somebody wrote a rules file would be one nobody could evaluate.
 	var c *authz.Checker
-	if !c.AtOpen(context.Background(), phuc, tread, plugin.ActionShell).Allow() {
+	if !c.AtOpen(context.Background(), phuc, tread, plugin.ActionShell, plugin.Target{}).Allow() {
 		t.Error("a nil checker refused a session")
 	}
-	if !checker(nil, 3).AtOpen(context.Background(), phuc, tread, plugin.ActionShell).Allow() {
+	if !checker(nil, 3).AtOpen(context.Background(), phuc, tread, plugin.ActionShell, plugin.Target{}).Allow() {
 		t.Error("a checker with no backend refused a session")
 	}
 }
@@ -135,7 +135,7 @@ func TestNoBackendAllows(t *testing.T) {
 // has to say so.
 func TestADenialClosesAsRevoked(t *testing.T) {
 	b := &backend{allow: true}
-	s := checker(b, 3).Track(phuc, tread, plugin.ActionShell)
+	s := checker(b, 3).Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 	if got := s.Recheck(context.Background()); !got.Allow() {
 		t.Fatal("the first re-check refused")
 	}
@@ -158,7 +158,7 @@ func TestADenialClosesAsRevoked(t *testing.T) {
 func TestAnOutageIsSurvivedForExactlyTheGraceWindow(t *testing.T) {
 	for _, grace := range []int{1, 3, 5} {
 		b := &backend{allow: true}
-		s := checker(b, grace).Track(phuc, tread, plugin.ActionShell)
+		s := checker(b, grace).Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 		s.Recheck(context.Background()) // one good answer to be stale about
 
 		b.set(false, "", errors.New("down"))
@@ -187,7 +187,7 @@ func TestAnOutageIsSurvivedForExactlyTheGraceWindow(t *testing.T) {
 // to a closure.
 func TestRecoveryResetsTheWindow(t *testing.T) {
 	b := &backend{allow: true}
-	s := checker(b, 2).Track(phuc, tread, plugin.ActionShell)
+	s := checker(b, 2).Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 
 	for range 3 {
 		b.set(false, "", errors.New("down"))
@@ -210,7 +210,7 @@ func TestRecoveryResetsTheWindow(t *testing.T) {
 // denial arriving mid-window closes as `revoked` rather than being counted as a failure.
 func TestADenialEndsTheOutage(t *testing.T) {
 	b := &backend{allow: true}
-	s := checker(b, 3).Track(phuc, tread, plugin.ActionShell)
+	s := checker(b, 3).Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 	s.Recheck(context.Background())
 
 	b.set(false, "", errors.New("down"))
@@ -240,7 +240,7 @@ func TestADenialEndsTheOutage(t *testing.T) {
 // are different things.
 func TestStrictFailClosed(t *testing.T) {
 	b := &backend{allow: true}
-	s := checker(b, 0).Track(phuc, tread, plugin.ActionShell)
+	s := checker(b, 0).Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 	s.Recheck(context.Background())
 
 	b.set(false, "", errors.New("down"))
@@ -255,7 +255,7 @@ func TestStrictFailClosed(t *testing.T) {
 
 func TestGraceDefaultsToThree(t *testing.T) {
 	b := &backend{allow: true}
-	s := defaultChecker(b).Track(phuc, tread, plugin.ActionShell)
+	s := defaultChecker(b).Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 	s.Recheck(context.Background())
 	b.set(false, "", errors.New("down"))
 	for i := 1; i <= authz.DefaultGrace; i++ {
@@ -285,7 +285,7 @@ func TestZeroSessionsClosedInASixtySecondOutage(t *testing.T) {
 	var live []*authz.Session
 	c := defaultChecker(b)
 	for range 50 {
-		s := c.Track(phuc, tread, plugin.ActionShell)
+		s := c.Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 		s.Recheck(context.Background())
 		live = append(live, s)
 	}
@@ -320,7 +320,7 @@ func TestConcurrentRechecksAreSafe(t *testing.T) {
 	c := checker(b, 3)
 	var wg sync.WaitGroup
 	for range 32 {
-		s := c.Track(phuc, tread, plugin.ActionShell)
+		s := c.Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -338,7 +338,7 @@ func TestZeroAndUnsetAreDifferent(t *testing.T) {
 	fail := func(c *authz.Checker) bool {
 		b := &backend{allow: true}
 		c.Backend = b
-		s := c.Track(phuc, tread, plugin.ActionShell)
+		s := c.Track(phuc, tread, plugin.ActionShell, plugin.Target{})
 		s.Recheck(context.Background())
 		b.set(false, "", errors.New("down"))
 		return !s.Recheck(context.Background()).Allow()

@@ -2,6 +2,8 @@ package plugin
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -123,14 +125,99 @@ type RevocationEvent struct {
 	Reason      string
 }
 
+// Target is the specific thing an action is aimed at, for the actions that have one.
+//
+// Without it a backend can answer "may this principal forward ports on this device" and
+// nothing narrower — and the difference matters, because the ports worth forwarding and
+// the ports bound to loopback *precisely so that nobody reaches them* live on the same
+// device. The same argument applies to a path under the file root and to an argv under
+// `exec`.
+//
+// # A zero Target means the action names nothing
+//
+// It does not mean "everything". `shell` has no target: it is a whole device either way,
+// which is the point of it being its own action. `admin:permissions` is checked against
+// the gateway. A backend that sees a zero Target is being asked about the action itself.
+//
+// # A backend that ignores Target grants every target
+//
+// That is the behaviour every backend had before this field existed, and it stays the
+// default so that adding the parameter did not silently narrow anybody's policy. It also
+// means the widening direction is the *quiet* one, which is worth knowing when reviewing
+// a backend: forgetting to read Target is not a compile error.
+//
+// # The device still refuses on its own
+//
+// This does not replace the agent's allow-lists, and must not be allowed to. The
+// gateway's compromise is total (threat model § 4), so a device that trusted the
+// gateway's target check and dropped its own would have moved its last line of defence
+// inside the blast radius. Gateway-side targets are policy an operator can edit centrally
+// and revoke in thirty seconds; device-side allow-lists are what holds when the gateway
+// is lying. Both, always.
+type Target struct {
+	// Port is the device-local TCP port, for ActionTCP.
+	Port int
+	// Path is the path relative to the device's file root, for ActionFileRead and
+	// ActionFileWrite. Exactly as the operator wrote it: untrusted, and not yet
+	// resolved against anything.
+	Path string
+	// Argv is the command and its arguments, for ActionExec. Argv[0] is the command.
+	Argv []string
+}
+
+// IsZero reports whether the action named no target.
+func (t Target) IsZero() bool {
+	return t.Port == 0 && t.Path == "" && len(t.Argv) == 0
+}
+
+// Equal compares two targets.
+//
+// Target holds a slice, so `==` does not compile on it — which is a good accident: a
+// caller reaching for equality is usually a cache key or a re-check assertion, and both
+// want to be explicit that Argv compares element by element.
+func (t Target) Equal(o Target) bool {
+	if t.Port != o.Port || t.Path != o.Path || len(t.Argv) != len(o.Argv) {
+		return false
+	}
+	for i := range t.Argv {
+		if t.Argv[i] != o.Argv[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// String renders a target for a log line or an audit event.
+//
+// Deliberately terse and deliberately not round-trippable: this is for a human reading
+// a denial, not for a parser. An empty target renders as "-" rather than as nothing at
+// all, so a log line never loses a column.
+func (t Target) String() string {
+	switch {
+	case t.Port != 0:
+		return "port " + strconv.Itoa(t.Port)
+	case t.Path != "":
+		return "path " + t.Path
+	case len(t.Argv) > 0:
+		return "argv " + strings.Join(t.Argv, " ")
+	default:
+		return "-"
+	}
+}
+
 // Authorizer answers whether a principal may do something, on a device, right now.
 //
 // Called more than once per session: at open, every recheck_interval, and on a
 // RevocationEvent. The re-check interval is the guarantee and Watch is the optimisation —
 // a backend whose Watch is disconnected for a minute costs a minute of staleness, not a
 // missed revocation.
+//
+// Every one of those calls carries the *same* Target the session opened with. A re-check
+// that asked about a different target — or about no target — would re-authorise something
+// nobody had asked for, and a grant narrowed to one port would never be revoked when that
+// narrowing changed.
 type Authorizer interface {
-	Authorize(ctx context.Context, p *Principal, dev *Device, a Action) (Decision, error)
+	Authorize(ctx context.Context, p *Principal, dev *Device, a Action, t Target) (Decision, error)
 
 	// Watch streams revocations. Returning ErrUnsupported is fine and common: the
 	// gateway falls back to polling Authorize.

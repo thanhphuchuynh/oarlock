@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS oarlock_permissions (
   devices_json        TEXT NOT NULL DEFAULT '[]',
   tags_json           TEXT NOT NULL DEFAULT '{}',
   actions_json        TEXT NOT NULL,
+  targets_json        TEXT NOT NULL DEFAULT '{}',
   effect              TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
   reason              TEXT NOT NULL DEFAULT '',
   priority            INTEGER NOT NULL DEFAULT 0,
@@ -70,12 +71,22 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("sqlite authorizer: applying schema: %w", err)
 	}
+	// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so a
+	// database written before target narrowing needs the column added. SQLite has no
+	// ADD COLUMN IF NOT EXISTS; the duplicate is the expected outcome on every start
+	// after the first, so it is the one error worth swallowing here and no other.
+	if _, err := db.Exec(`ALTER TABLE oarlock_permissions
+	  ADD COLUMN targets_json TEXT NOT NULL DEFAULT '{}'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		_ = db.Close()
+		return nil, fmt.Errorf("sqlite authorizer: adding targets_json: %w", err)
+	}
 	return &Store{db: db, now: now}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func (s *Store) Authorize(ctx context.Context, principal *plugin.Principal, device *plugin.Device, action plugin.Action) (plugin.Decision, error) {
+func (s *Store) Authorize(ctx context.Context, principal *plugin.Principal, device *plugin.Device, action plugin.Action, target plugin.Target) (plugin.Decision, error) {
 	if principal == nil || device == nil {
 		return plugin.Decision{Reason: "no principal or device"}, nil
 	}
@@ -85,7 +96,7 @@ func (s *Store) Authorize(ctx context.Context, principal *plugin.Principal, devi
 	}
 	var granted *plugin.Permission
 	for _, permission := range permissions {
-		if !matches(permission, principal, device, action) {
+		if !matches(permission, principal, device, action, target) {
 			continue
 		}
 		if permission.Deny {
@@ -127,7 +138,8 @@ func (s *Store) ListPermissions(ctx context.Context) ([]*plugin.Permission, erro
 
 func (s *Store) list(ctx context.Context, enabledOnly bool) ([]*plugin.Permission, error) {
 	query := `SELECT id, name, principals_json, devices_json, tags_json, actions_json,
-	  effect, reason, priority, enabled, max_duration_ns, idle_ns, ttl_ns, created_at, updated_at
+	  targets_json, effect, reason, priority, enabled, max_duration_ns, idle_ns, ttl_ns,
+	  created_at, updated_at
 	  FROM oarlock_permissions`
 	if enabledOnly {
 		query += ` WHERE enabled = 1`
@@ -151,8 +163,8 @@ func (s *Store) list(ctx context.Context, enabledOnly bool) ([]*plugin.Permissio
 
 func (s *Store) GetPermission(ctx context.Context, id string) (*plugin.Permission, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, name, principals_json, devices_json, tags_json,
-	  actions_json, effect, reason, priority, enabled, max_duration_ns, idle_ns, ttl_ns,
-	  created_at, updated_at FROM oarlock_permissions WHERE id = ?`, id)
+	  actions_json, targets_json, effect, reason, priority, enabled, max_duration_ns, idle_ns,
+	  ttl_ns, created_at, updated_at FROM oarlock_permissions WHERE id = ?`, id)
 	permission, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", plugin.ErrNoPermission, id)
@@ -164,16 +176,16 @@ func (s *Store) CreatePermission(ctx context.Context, permission *plugin.Permiss
 	if err := validate(permission); err != nil {
 		return err
 	}
-	principals, devices, tags, actions, err := encode(permission)
+	principals, devices, tags, actions, targets, err := encode(permission)
 	if err != nil {
 		return err
 	}
 	now := s.now().UTC()
 	_, err = s.db.ExecContext(ctx, `INSERT INTO oarlock_permissions
-	  (id, name, principals_json, devices_json, tags_json, actions_json, effect, reason,
-	   priority, enabled, max_duration_ns, idle_ns, ttl_ns, created_at, updated_at)
-	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		permission.ID, permission.Name, principals, devices, tags, actions, effect(permission),
+	  (id, name, principals_json, devices_json, tags_json, actions_json, targets_json, effect,
+	   reason, priority, enabled, max_duration_ns, idle_ns, ttl_ns, created_at, updated_at)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		permission.ID, permission.Name, principals, devices, tags, actions, targets, effect(permission),
 		permission.Reason, permission.Priority, boolInt(permission.Enabled), int64(permission.MaxDuration),
 		int64(permission.Idle), int64(permission.TTL), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
@@ -190,15 +202,15 @@ func (s *Store) UpdatePermission(ctx context.Context, permission *plugin.Permiss
 	if err := validate(permission); err != nil {
 		return err
 	}
-	principals, devices, tags, actions, err := encode(permission)
+	principals, devices, tags, actions, targets, err := encode(permission)
 	if err != nil {
 		return err
 	}
 	now := s.now().UTC()
 	res, err := s.db.ExecContext(ctx, `UPDATE oarlock_permissions SET name=?, principals_json=?,
-	  devices_json=?, tags_json=?, actions_json=?, effect=?, reason=?, priority=?, enabled=?,
-	  max_duration_ns=?, idle_ns=?, ttl_ns=?, updated_at=? WHERE id=?`, permission.Name,
-		principals, devices, tags, actions, effect(permission), permission.Reason, permission.Priority,
+	  devices_json=?, tags_json=?, actions_json=?, targets_json=?, effect=?, reason=?, priority=?,
+	  enabled=?, max_duration_ns=?, idle_ns=?, ttl_ns=?, updated_at=? WHERE id=?`, permission.Name,
+		principals, devices, tags, actions, targets, effect(permission), permission.Reason, permission.Priority,
 		boolInt(permission.Enabled), int64(permission.MaxDuration), int64(permission.Idle),
 		int64(permission.TTL), now.Format(time.RFC3339Nano), permission.ID)
 	if err != nil {
@@ -234,12 +246,12 @@ type scanner interface{ Scan(...any) error }
 
 func scan(row scanner) (*plugin.Permission, error) {
 	var permission plugin.Permission
-	var principals, devices, tags, actions, effectValue, created, updated string
+	var principals, devices, tags, actions, targets, effectValue, created, updated string
 	var enabled int
 	var maxDuration, idle, ttl int64
 	if err := row.Scan(&permission.ID, &permission.Name, &principals, &devices, &tags, &actions,
-		&effectValue, &permission.Reason, &permission.Priority, &enabled, &maxDuration, &idle,
-		&ttl, &created, &updated); err != nil {
+		&targets, &effectValue, &permission.Reason, &permission.Priority, &enabled, &maxDuration,
+		&idle, &ttl, &created, &updated); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(principals), &permission.Principals); err != nil {
@@ -254,6 +266,11 @@ func scan(row scanner) (*plugin.Permission, error) {
 	if err := json.Unmarshal([]byte(actions), &permission.Actions); err != nil {
 		return nil, fmt.Errorf("sqlite authorizer: decoding actions for %s: %w", permission.ID, err)
 	}
+	var narrowing targetsJSON
+	if err := json.Unmarshal([]byte(targets), &narrowing); err != nil {
+		return nil, fmt.Errorf("sqlite authorizer: decoding targets for %s: %w", permission.ID, err)
+	}
+	permission.Ports, permission.Paths, permission.Commands = narrowing.Ports, narrowing.Paths, narrowing.Commands
 	permission.Deny = effectValue == "deny"
 	permission.Enabled = enabled != 0
 	permission.MaxDuration = time.Duration(maxDuration)
@@ -264,7 +281,16 @@ func scan(row scanner) (*plugin.Permission, error) {
 	return &permission, nil
 }
 
-func encode(permission *plugin.Permission) (string, string, string, string, error) {
+// targetsJSON is the on-disk shape of the three target narrowings. One column rather
+// than three, because they are one concept and a permission almost never sets any of
+// them — an empty object costs two bytes a row.
+type targetsJSON struct {
+	Ports    []int    `json:"ports,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
+	Commands []string `json:"commands,omitempty"`
+}
+
+func encode(permission *plugin.Permission) (string, string, string, string, string, error) {
 	devices := permission.Devices
 	if devices == nil {
 		devices = []string{}
@@ -273,16 +299,17 @@ func encode(permission *plugin.Permission) (string, string, string, string, erro
 	if tags == nil {
 		tags = map[string]string{}
 	}
-	values := []any{permission.Principals, devices, tags, permission.Actions}
-	out := make([]string, 4)
+	values := []any{permission.Principals, devices, tags, permission.Actions,
+		targetsJSON{Ports: permission.Ports, Paths: permission.Paths, Commands: permission.Commands}}
+	out := make([]string, len(values))
 	for i, value := range values {
 		encoded, err := json.Marshal(value)
 		if err != nil {
-			return "", "", "", "", fmt.Errorf("sqlite authorizer: encoding permission: %w", err)
+			return "", "", "", "", "", fmt.Errorf("sqlite authorizer: encoding permission: %w", err)
 		}
 		out[i] = string(encoded)
 	}
-	return out[0], out[1], out[2], out[3], nil
+	return out[0], out[1], out[2], out[3], out[4], nil
 }
 
 func validate(permission *plugin.Permission) error {
@@ -329,10 +356,11 @@ func validate(permission *plugin.Permission) error {
 // that would bite is the device half — a console with its own copy of glob-and-tag
 // matching drifts, and it drifts towards telling somebody they cannot reach a device
 // they can.
-func matches(permission *plugin.Permission, principal *plugin.Principal, device *plugin.Device, action plugin.Action) bool {
+func matches(permission *plugin.Permission, principal *plugin.Principal, device *plugin.Device, action plugin.Action, target plugin.Target) bool {
 	return permission.MatchesPrincipal(principal.ID) &&
 		permission.AppliesTo(device) &&
-		permission.Grants(action)
+		permission.Grants(action) &&
+		permission.Covers(target)
 }
 
 var actions = []plugin.Action{

@@ -262,7 +262,7 @@ revoking that operator then means editing a file on every replica as well.
 
 ```go
 type Authorizer interface {
-    Authorize(ctx context.Context, p *Principal, dev *Device, a Action) (Decision, error)
+    Authorize(ctx context.Context, p *Principal, dev *Device, a Action, t Target) (Decision, error)
 
     // Watch streams revocations as they happen. Returning ErrUnsupported is fine —
     // the gateway falls back to polling Authorize on recheck_interval.
@@ -270,6 +270,16 @@ type Authorizer interface {
 }
 
 type Action string // shell, exec, file:read, file:write, tcp, passthrough, replay, observe
+
+// Target is the specific thing the action is aimed at, for the actions that have one.
+// A zero Target means the action names none — `shell` is a whole device either way.
+// A backend that ignores Target answers for every target, which is what every backend
+// did before the field existed, so adding it narrowed nobody's policy.
+type Target struct {
+    Port int      // tcp: the device-local port
+    Path string   // file:read / file:write: the path, as the operator wrote it
+    Argv []string // exec: the command and its arguments
+}
 
 type Decision struct {
     Allow  bool
@@ -1002,13 +1012,17 @@ func New(cfg plugin.Config) (plugin.Authorizer, error) {
 }
 
 func (a *authz) Authorize(ctx context.Context, p *plugin.Principal,
-    dev *plugin.Device, act plugin.Action) (plugin.Decision, error) {
+    dev *plugin.Device, act plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 
-    key := p.ID + "|" + dev.ID + "|" + string(act)
+    // The target belongs in the cache key. Without it the first question about a device
+    // answers every later one, so "may I forward port 3000" hands back its yes for port
+    // 22 — and the cache becomes the hole the target exists to close. It fails open, and
+    // only under load.
+    key := p.ID + "|" + dev.ID + "|" + string(act) + "|" + tgt.String()
     if d, ok := a.cache.Get(key); ok {
         return d, nil
     }
-    d, err := a.ask(ctx, p, dev, act)
+    d, err := a.ask(ctx, p, dev, act, tgt)
     if err != nil {
         // An error is not a denial. The gateway refuses NEW sessions immediately and gives
         // live ones authz.grace re-checks before closing them as authz_unavailable.

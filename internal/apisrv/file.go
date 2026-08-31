@@ -152,7 +152,9 @@ func (s *Server) fileTarget(w http.ResponseWriter, r *http.Request, p *plugin.Pr
 	}
 	// `file:read` and `file:write` are separate actions, so a grant to pull logs is not a
 	// grant to replace a configuration file.
-	if v := s.o.Authz.AtOpen(r.Context(), p, dev, action); !v.Allow() {
+	// The path as the caller wrote it, so a grant can be narrowed to part of the
+	// device's file root. The agent's own os.Root confinement still applies.
+	if v := s.o.Authz.AtOpen(r.Context(), p, dev, action, plugin.Target{Path: rel}); !v.Allow() {
 		s.refuseByAuthz(w, r, v)
 		return nil, "", false
 	}
@@ -234,6 +236,7 @@ func (s *Server) runFileSession(w http.ResponseWriter, r *http.Request, p *plugi
 		// Read and write are separate grants, so supervision has to be told which
 		// one this session is holding — ActionFor cannot derive it.
 		Action:   fileAction(op.Op),
+		Target:   plugin.Target{Path: op.Path},
 		OpenedBy: p.OpenedBy, Unattended: p.Unattended,
 		Surface: "api", Grantee: p, Device: att.Conn,
 	}

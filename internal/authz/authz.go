@@ -179,7 +179,7 @@ func (c *Checker) log() *slog.Logger {
 // An error refuses immediately, with no grace: the grace window exists to let work in
 // progress finish, and there is no work in progress yet.
 func (c *Checker) AtOpen(ctx context.Context, p *plugin.Principal, dev *plugin.Device,
-	act plugin.Action) Result {
+	act plugin.Action, tgt plugin.Target) Result {
 	if c == nil || c.Backend == nil {
 		return Result{Outcome: Allowed}
 	}
@@ -188,14 +188,14 @@ func (c *Checker) AtOpen(ctx context.Context, p *plugin.Principal, dev *plugin.D
 		// change made on the strength of a config entry rather than a policy grant is
 		// exactly the one an auditor will want to find.
 		c.log().Info("allowed by a config-declared administrator",
-			"principal", p.ID, "device", dev.ID, "action", act)
+			"principal", p.ID, "device", dev.ID, "action", act, "target", tgt)
 		return Result{Outcome: Allowed}
 	}
-	d, err := c.Backend.Authorize(ctx, p, dev, act)
+	d, err := c.Backend.Authorize(ctx, p, dev, act, tgt)
 	switch {
 	case err != nil:
 		c.log().Warn("authorization is unavailable; refusing a new session",
-			"principal", p.ID, "device", dev.ID, "action", act, "error", err)
+			"principal", p.ID, "device", dev.ID, "action", act, "target", tgt, "error", err)
 		return Result{
 			Outcome: Unavailable,
 			Code:    "authz_unavailable",
@@ -222,6 +222,10 @@ type Session struct {
 	p   *plugin.Principal
 	dev *plugin.Device
 	act plugin.Action
+	// tgt is the target the session opened with, replayed unchanged on every
+	// re-check. Re-checking a *different* target would authorise something nobody
+	// asked for; re-checking none would quietly widen a narrowed grant back out.
+	tgt plugin.Target
 
 	mu sync.Mutex
 	// failures is the consecutive-failure count. Reset by any answer, including a
@@ -231,8 +235,11 @@ type Session struct {
 }
 
 // Track begins re-checking a live session.
-func (c *Checker) Track(p *plugin.Principal, dev *plugin.Device, act plugin.Action) *Session {
-	return &Session{c: c, p: p, dev: dev, act: act}
+//
+// tgt must be the target the session was opened with. See Session.tgt.
+func (c *Checker) Track(p *plugin.Principal, dev *plugin.Device, act plugin.Action,
+	tgt plugin.Target) *Session {
+	return &Session{c: c, p: p, dev: dev, act: act, tgt: tgt}
 }
 
 // Recheck applies the contract to a live session.
@@ -244,7 +251,7 @@ func (s *Session) Recheck(ctx context.Context) Result {
 	if s == nil || s.c == nil || s.c.Backend == nil {
 		return Result{Outcome: Allowed}
 	}
-	d, err := s.c.Backend.Authorize(ctx, s.p, s.dev, s.act)
+	d, err := s.c.Backend.Authorize(ctx, s.p, s.dev, s.act, s.tgt)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
