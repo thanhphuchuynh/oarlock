@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Oarlock Security Boundaries",
+    "locale": "en",
+    "output": "security-boundaries.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "operator-leg",
+        "label": "Operator leg",
+        "focus": [
+          "operator",
+          "door",
+          "authn",
+          "authz"
+        ],
+        "note": "Who gets in, and what they are allowed to do once they are in."
+      },
+      {
+        "id": "device-leg",
+        "label": "Device leg",
+        "focus": [
+          "gateway",
+          "agent",
+          "allowlists"
+        ],
+        "note": "The device dials out. Nothing listens on it and it holds no bearer token."
+      },
+      {
+        "id": "plaintext",
+        "label": "Plaintext and evidence",
+        "focus": [
+          "gateway",
+          "recorder",
+          "tickets"
+        ],
+        "note": "The gateway reads everything. That is the cost of recording and mid-session revocation."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "untrusted until authenticated",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "authn",
+      "type": "security",
+      "label": "Authenticator",
+      "sublabel": "authorized_keys, OIDC",
+      "pos": [
+        360,
+        120
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "alg allow-list"
+    },
+    {
+      "id": "door",
+      "type": "security",
+      "label": "SSH Front Door",
+      "sublabel": "15 s pre-auth budget",
+      "pos": [
+        360,
+        300
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "1024 conns"
+    },
+    {
+      "id": "authz",
+      "type": "security",
+      "label": "Authorizer",
+      "sublabel": "action, device, target",
+      "pos": [
+        680,
+        120
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "re-check 30 s"
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "oarlockd",
+      "sublabel": "fully trusted",
+      "pos": [
+        680,
+        300
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "tickets",
+      "type": "database",
+      "label": "Tickets",
+      "sublabel": "single-use, 60 s",
+      "pos": [
+        430,
+        480
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "recorder",
+      "type": "database",
+      "label": "Recorder",
+      "sublabel": "signed, hash-chained",
+      "pos": [
+        680,
+        480
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "allowlists",
+      "type": "security",
+      "label": "Device Allow-lists",
+      "sublabel": "ports, paths, argv",
+      "pos": [
+        1000,
+        120
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "Agent",
+      "sublabel": "dials out, no listener",
+      "pos": [
+        1000,
+        300
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "Ed25519 key"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Gateway - fully trusted, and its compromise is total",
+      "wraps": [
+        "authn",
+        "door",
+        "authz",
+        "gateway",
+        "tickets",
+        "recorder"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "On the device - a target, not a participant",
+      "wraps": [
+        "allowlists",
+        "agent"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "operator-in",
+      "from": "operator",
+      "to": "door",
+      "label": "SSH / TLS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "identify",
+      "from": "door",
+      "to": "authn",
+      "label": "key or identity provider",
+      "variant": "security"
+    },
+    {
+      "id": "principal",
+      "from": "door",
+      "to": "gateway",
+      "label": "authenticated principal"
+    },
+    {
+      "id": "permit",
+      "from": "gateway",
+      "to": "authz",
+      "label": "authorize this action",
+      "variant": "security"
+    },
+    {
+      "id": "ticket",
+      "from": "gateway",
+      "to": "tickets",
+      "label": "compare-and-delete",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "top"
+    },
+    {
+      "id": "record",
+      "from": "gateway",
+      "to": "recorder",
+      "label": "the plaintext, signed",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 75
+    },
+    {
+      "id": "dial",
+      "from": "gateway",
+      "to": "agent",
+      "label": "outbound WSS :443, pinned",
+      "variant": "emphasis"
+    },
+    {
+      "id": "scope",
+      "from": "agent",
+      "to": "allowlists",
+      "label": "the last line of defence",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Trust, stated plainly",
+      "items": [
+        "The gateway reads every keystroke and every byte of output, and can inject its own",
+        "That is not a gap - it is the direct cost of recording and mid-session revocation",
+        "The agent is trusted with its own device only: it cannot open a session or address another device"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "What is checked, and when",
+      "items": [
+        "Authentication at the door: a key, or an identity provider with an algorithm allow-list",
+        "Authorization per action and per device, before any device is woken",
+        "Re-checked every 30 s for the life of the session, so a withdrawn grant closes it"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Two gates, and one is slower to change",
+      "items": [
+        "Authorize takes a target: ports, paths and argv are gateway policy",
+        "The device keeps its own list: the gateway's compromise is total",
+        "A gateway grant changes in 30 s; the device list is a fleet push"
+      ]
+    }
+  ]
+}

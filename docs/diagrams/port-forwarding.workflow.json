@@ -1,0 +1,287 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Oarlock Port Forwarding",
+    "locale": "en",
+    "output": "port-forwarding.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy",
+        "label": "The forward that works",
+        "focus": [
+          "local",
+          "chan",
+          "loopback",
+          "grant",
+          "slot",
+          "dial"
+        ],
+        "note": "One TCP connection, one channel, one session row, one dial on the device's own loopback."
+      },
+      {
+        "id": "gates",
+        "label": "Two gates, two owners",
+        "focus": [
+          "loopback",
+          "grant",
+          "dial"
+        ],
+        "note": "The gateway decides whether you may forward. The device decides what may be forwarded."
+      },
+      {
+        "id": "refusals",
+        "label": "Every way it is refused",
+        "focus": [
+          "refuse_host",
+          "refuse_grant",
+          "refuse_cap",
+          "refuse_port"
+        ],
+        "note": "Each refusal carries a distinct SSH reason code, so the operator can tell which half was wrong."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "operator",
+      "label": "Operator's machine"
+    },
+    {
+      "id": "gateway",
+      "label": "Gateway - oarlockd"
+    },
+    {
+      "id": "device",
+      "label": "Device - agent"
+    },
+    {
+      "id": "refused",
+      "label": "Refused",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "open",
+      "label": "Open",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "gate",
+      "label": "Gate",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "forward",
+      "label": "Forward",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "local",
+    "chan",
+    "loopback",
+    "grant",
+    "slot",
+    "dial"
+  ],
+  "nodes": [
+    {
+      "id": "local",
+      "lane": "operator",
+      "col": 0,
+      "type": "external",
+      "label": "ssh -L",
+      "sublabel": "8080:localhost:3000",
+      "width": 150
+    },
+    {
+      "id": "chan",
+      "lane": "gateway",
+      "col": 1,
+      "type": "backend",
+      "label": "direct-tcpip",
+      "sublabel": "one per connection",
+      "width": 150
+    },
+    {
+      "id": "loopback",
+      "lane": "gateway",
+      "col": 2,
+      "type": "security",
+      "label": "Loopback only",
+      "sublabel": "no other host",
+      "width": 150
+    },
+    {
+      "id": "grant",
+      "lane": "gateway",
+      "col": 3,
+      "type": "security",
+      "label": "Action tcp",
+      "sublabel": "action + port",
+      "tag": "not shell",
+      "width": 150
+    },
+    {
+      "id": "slot",
+      "lane": "gateway",
+      "col": 4,
+      "type": "database",
+      "label": "Session row",
+      "sublabel": "own cap",
+      "tag": "16 per device",
+      "width": 150
+    },
+    {
+      "id": "dial",
+      "lane": "device",
+      "col": 5,
+      "type": "security",
+      "label": "Dial loopback",
+      "sublabel": "port allow-list",
+      "tag": "device decides",
+      "width": 150
+    },
+    {
+      "id": "refuse_host",
+      "lane": "refused",
+      "col": 2,
+      "type": "security",
+      "label": "Not loopback",
+      "sublabel": "Prohibited",
+      "width": 150
+    },
+    {
+      "id": "refuse_grant",
+      "lane": "refused",
+      "col": 3,
+      "type": "security",
+      "label": "No tcp grant",
+      "sublabel": "Prohibited",
+      "width": 150
+    },
+    {
+      "id": "refuse_cap",
+      "lane": "refused",
+      "col": 4,
+      "type": "security",
+      "label": "Cap reached",
+      "sublabel": "ResourceShortage",
+      "width": 150
+    },
+    {
+      "id": "refuse_port",
+      "lane": "refused",
+      "col": 5,
+      "type": "security",
+      "label": "Port not listed",
+      "sublabel": "ConnectionFailed",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "from": "local",
+      "to": "chan",
+      "label": "per connection",
+      "variant": "emphasis",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "chan",
+      "to": "loopback",
+      "label": "host + port"
+    },
+    {
+      "from": "loopback",
+      "to": "grant",
+      "label": "loopback ok",
+      "variant": "emphasis"
+    },
+    {
+      "from": "grant",
+      "to": "slot",
+      "label": "row before waking"
+    },
+    {
+      "from": "slot",
+      "to": "dial",
+      "label": "DIAL names the port",
+      "variant": "emphasis"
+    },
+    {
+      "from": "loopback",
+      "to": "refuse_host",
+      "variant": "security",
+      "role": "error",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "grant",
+      "to": "refuse_grant",
+      "variant": "security",
+      "role": "error",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "slot",
+      "to": "refuse_cap",
+      "variant": "security",
+      "role": "error",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "dial",
+      "to": "refuse_port",
+      "variant": "security",
+      "role": "error",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two gates, two owners",
+      "items": [
+        "The gateway allows the forward, and can narrow it to named ports",
+        "The device chooses ports too, from a list the gateway cannot see",
+        "No list means no tcp capability, so the gateway refuses first"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "A forward is not a session",
+      "items": [
+        "One ssh -L is as many connections as the client opens",
+        "Each gets its own row, capped apart at 16 per device",
+        "None claims the device's session slot, so a shell still opens"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Where it is still thin",
+      "items": [
+        "A grant can name the port; a backend ignoring it grants them all",
+        "The device list is the backstop, and changing it is a fleet push",
+        "-R is unimplemented: the library refuses that channel type"
+      ]
+    }
+  ]
+}

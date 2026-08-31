@@ -15,6 +15,21 @@ packages/*/dist/
 cmd/oarlockd/app/ui/dist/*
 !cmd/oarlockd/app/ui/dist/.gitkeep
 
+# The rendered diagrams. The *specifications* beside them are committed and are the
+# source; the HTML is 700 KB apiece and most of those bytes are a copy of the Archify
+# viewer runtime, three times over. Built web assets are already excluded above on the
+# same reasoning — what this repository commits generated is small data (wire vectors,
+# condition tables, recording fixtures), not a vendored renderer.
+#
+# Regenerate with the commands in docs/diagrams/README.md.
+docs/diagrams/*.html
+
+# And the evidence `archify visual-check` writes beside an artifact: screenshots at four
+# viewports in both themes, plus its receipt and contact sheet. Regenerable, and the
+# receipt records a machine's Chrome rather than anything about this project.
+docs/diagrams/*.visual-check.*
+docs/diagrams/*.png
+
 # ── dependencies ─────────────────────────────────────────────────────────────────
 node_modules/
 

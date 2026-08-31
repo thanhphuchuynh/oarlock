@@ -4,9 +4,9 @@ Oarlock hands a shell on a remote device to a human over the internet. That is a
 high-value capability, so this document says plainly what it protects, what it does not,
 and which risks it accepts on purpose.
 
-Written against the design in [ARCHITECTURE.md](../ARCHITECTURE.md). It will need revising
-against the code, and every "the gateway does X" below is a claim to be tested, not yet a
-verified fact.
+Originally written against the design in [ARCHITECTURE.md](../ARCHITECTURE.md), and since
+revised against the code. **§12 says which of the mitigations below are actually built**,
+and it is the section to read first if you are deciding whether to trust any of this.
 
 ---
 
@@ -89,9 +89,9 @@ What follows from accepting it:
 |---|---|---|
 | Stolen operator SSH key | `sshca` backend issues short-lived certificates, so a stolen key expires on its own. `authorized_keys` does not — it is the default for convenience and the wrong choice past a handful of people. | A key stolen inside its validity window works. Certificate TTL is the only lever; keep it hours, not weeks. |
 | Access kept after revocation | Re-check every 30 s, plus `Authorizer.Watch` for sub-second kills, plus `admin_kill`. No credential on the device to un-deploy. | Up to `recheck_interval` of extra access when `Watch` is unavailable or broken. Shorten the interval if that matters. |
-| Privilege escalation between actions | `exec` does not imply `shell`; `passthrough` and `replay` imply nothing. Grants are per action, per device. | Coarse: `shell` is all-or-nothing on a device. Oarlock does not restrict *what you type* — see §7. |
+| Privilege escalation between actions | `exec` does not imply `shell`; `passthrough` and `replay` imply nothing. Grants are per action, per device, and — for `tcp`, `file:read`, `file:write` and `exec` — per **target**: a port, a path glob, an argv. | `shell` is still all-or-nothing on a device, because a shell has no target to narrow. Oarlock does not restrict *what you type* — see §7. A backend that ignores the target grants every target, and forgetting to read it is not a compile error. |
 | Session fixation / ticket theft on the browser leg | Tickets are single-use, 60 s, scoped to one device, one profile, one principal, and carried in a frame body rather than a URL. | An attacker who can read the ticket *and* wins the race against the legitimate browser gets one session. TLS is the control. |
-| Brute force on the SSH front door | Per-IP and per-user rate limits, exponential backoff, no distinction between "no such device" and "not authorized" in the failure timing where it can be avoided. | An enumeration oracle probably still exists somewhere in the error paths. Worth fuzzing once the code exists. |
+| Brute force on the SSH front door | A 15 s pre-authentication budget closes a connection that never authenticates, and a ceiling on concurrent connections bounds how many can be held at once. Failures do not distinguish "no such device" from "not authorized", so a valid key cannot enumerate the fleet by trying usernames. | **There is no per-IP or per-user rate limit on the SSH door.** The budget and the connection cap bound resource exhaustion, not guess rate; the per-IP limiter covers the HTTP/API surface only. An enumeration oracle may still exist in the timing of the error paths — untested. |
 | A service acting as a human it should not | `AuthDelegated` requires a signed assertion: the subject's own token, or a service-signed assertion constrained by a `may_act_for` allow-list with a sub-60 s lifetime. A bare `On-Behalf-Of` identifier is refused. | With the service-signed fallback, a compromised service can act for anyone on its allow-list. Narrow the list; prefer forwarding the subject's token. |
 | Authorisation backend outage used as a lever | An error is not a denial: new sessions are refused, live ones get a grace window and then close as `authz_unavailable`, never `revoked`. | An attacker who can take down the authz backend can still stop *new* sessions — a denial of service, deliberately chosen over admitting sessions on stale decisions. |
 | A malicious or careless operator | Every session recorded and attributed; `AuditSink` gets open, close, deny and revocation events. | Detection, not prevention. An operator with `shell` on a device owns that device. That is what a shell is. |
@@ -108,7 +108,7 @@ What follows from accepting it:
 | A compromised device attacking the *operator's terminal* | Output is raw bytes and always was — a hostile device can emit any escape sequence. The web terminal disables OSC 52 (clipboard write) and window-title reporting by default. | A local `ssh` client's terminal is outside Oarlock's control. A hostile device can garble it and, with an unlucky terminal emulator, do worse. This is true of `ssh` generally; it is not made worse here. |
 | Prefix truncation deleting the mode disclosure | Strict key exchange removes the primitive; `x/crypto` implements it from v0.17.0 and the version is asserted in CI, and a test reads the server's KEXINIT off the wire to confirm `kex-strict-s-v00@openssh.com` is advertised. Structurally, the disclosure is also **repeated at session close**, where no prefix attack can reach, and the one message inside the vulnerable window carries no security-relevant claim. | An attacker who can modify traffic can still make the *opening* line disappear on a peer that somehow negotiated without strict kex; the closing line is what makes that survivable. |
 | Escape sequences poisoning logs and audit | Non-printable bytes are escaped before anything reaches a log line or an audit event. | Whatever consumes your logs may still render them naively. |
-| `tcp` profile used for lateral movement | Allow-list of `127.0.0.1:port` only, per device, empty by default. | An allow-list that includes a proxy port turns the device into a pivot into the network it sits on. Do not allow-list broadly, and never `0.0.0.0`. |
+| `tcp` profile used for lateral movement | Two independent gates. The gateway refuses any destination that is not the device's own loopback and checks `tcp` against a per-port grant; the device refuses any port not on the allow-list it holds. Both apply, and neither is permitted to stand in for the other — the gateway's compromise is total (§4), so the device's own list is what holds when the gateway is lying. | An allow-list that includes a proxy port turns the device into a pivot into the network it sits on. Do not allow-list broadly, and never `0.0.0.0`. Changing the device-side list is still a fleet push rather than a policy edit, so the fast lever is the gateway-side grant. |
 | `file` profile path traversal | Confined to a configured root, symlinks resolved and re-checked. | Classic bug class. Test it adversarially. |
 | `exec` profile becoming a shell | Allow-listed argv, no shell interpretation, no user-supplied arguments unless the entry declares them. | An allow-listed entry that takes a filename takes whatever a shell would have. Keep entries argument-free where possible. |
 
@@ -204,18 +204,71 @@ For anyone actually deploying this:
 - [ ] Audit shipped off the gateway host, and host access audited separately.
 - [ ] Fuzzing in CI for `pkg/frame` and the `file` profile path handling.
 
-## 12. Known gaps
+## 12. What is actually built
 
-Recorded here rather than discovered later:
+The first version of this document ended with "nothing is written yet". That stopped being
+true, and a threat model that understates what exists is worse than one that overstates it:
+a reader who cannot tell which rows are real cannot tell which rows are **not**.
 
-1. **No channel binding in the `v0` agent handshake** (§6). Cert pinning is the stopgap;
-   RFC 5705 exported keying material is the fix, and it belongs in `v1`.
+So this section is the status of everything above. It is a self-review — code read by
+somebody who also wrote some of it, not an independent audit — and the statuses mean:
+
+- **tested** — implemented, and there is a test that fails when the guarantee is removed.
+- **built** — implemented and read, with no test pinning the specific property.
+- **not built** — described above, absent from the code. These are the ones that matter.
+
+| § | mitigation | status | where |
+|---|---|---|---|
+| 5 | Operator authentication by key or OIDC | tested | `internal/auth/authorizedkeys`, `internal/auth/oidc` |
+| 5 | JWT algorithm allow-list bound to the key kind, and a `kid`-flood limiter | tested | `internal/auth/oidc/verify.go`, `jwks.go` |
+| 5 | `sshca` short-lived certificates | **not built** | — the row above names a backend that does not exist |
+| 5 | Per-action, per-device authorisation | tested | `internal/authz`, `pkg/plugin/authz.go` |
+| 5 | Per-target authorisation for `tcp`, `file:*`, `exec` | tested | `plugin.Target`; `rules` and `sqlite` backends |
+| 5 | Re-check every 30 s, `Watch` as the optimisation | tested | `internal/authz/supervisor.go` |
+| 5 | Re-checks replay the target the session opened with | tested | `internal/authz/target_test.go` |
+| 5 | An outage is refused as `authz_unavailable`, never `revoked` | tested | `internal/authz`, and `plugintest` fails a backend that gets it wrong |
+| 5 | Tickets single-use, 60 s, scoped, compare-and-delete | tested | `internal/ticket` |
+| 5 | Pre-authentication budget and connection ceiling on the SSH door | tested | `internal/sshsrv/preauth.go` |
+| 5 | Per-IP rate limit on the SSH door | **not built** | the HTTP/API surface has one; SSH does not |
+| 5 | Per-IP rate limit on the HTTP/API surface | tested | `internal/apisrv` — and keyed correctly for IPv6, which it was not |
+| 5 | Delegated authority needs a signed assertion | built | `internal/auth/delegated` |
+| 5 | Audit of open, close, deny and revocation | built | `plugin.AuditSink` |
+| 6 | Ed25519 challenge-response, key generated on-device | tested | `internal/handshake` |
+| 6 | Signing input length-prefixed and domain-separated | tested | `handshake.SigningInput` |
+| 6 | Gateway certificate pinning, additive, over the SPKI | built | `pkg/transport/websocket` |
+| 6 | Channel binding on the agent handshake | **not built** | see gap 1 below |
+| 6 | No allocation from an attacker-controlled length | tested, fuzzed in CI | `pkg/frame` — there is no length field to lie about |
+| 6 | Terrapin: strict key exchange | tested | the `x/crypto` floor is asserted in CI |
+| 6 | `tcp` confined to device loopback, per-port allow-list on the device | tested | `internal/sshsrv/tcpip.go`, `agent/tcp.go` |
+| 6 | `file` confined by `os.Root`, no TOCTOU window | tested, fuzzed in CI | `agent/file.go` |
+| 6 | `exec` allow-listed argv, no shell interpretation | built | `agent/exec.go` |
+| 6 | Escape sequences escaped before reaching a log or an audit event | **unverified** | claimed above; not checked during this review |
+| 9 | `replay` is its own action | built | the action set is closed and checked |
+| 9 | Recordings signed and hash-chained | built | `internal/record` |
+| 10 | Frame and batch ceilings, coalescing, backpressure | tested | `internal/pump`, `pkg/frame` |
+| 10 | `sessions_per_device` by unique index, not check-then-act | tested | `internal/sessions` |
+| 10 | Forwarded connections capped apart, never claiming the device slot | tested | `sessions.HoldsDevice` |
+| 10 | Handshake budget on the WebSocket legs | built | `internal/handshake` (5 s) |
+| 11 | The boot gate refuses dangerous configurations rather than warning | tested | `internal/safety` |
+
+### Gaps, recorded here rather than discovered later
+
+1. **No channel binding in the `v0` agent handshake** (§6). Certificate pinning is the
+   stopgap; RFC 5705 exported keying material is the fix, and it belongs in `v1`.
 2. **`authorized_keys` as the default authenticator** is the wrong default for anything
    past a lab, and it is the default because it needs no dependencies. The README and this
    document both say so; a warning at boot would say it louder.
-3. **Nothing is written yet.** Every mitigation above is a design intention. None has been
-   implemented, none has been tested, and none has been reviewed by anyone who did not
-   write it.
+3. **`sshca` does not exist.** §5 offers it as the answer to a stolen key, and there is no
+   such backend. Until there is, the answer to a stolen key is OIDC or a short grant.
+4. **The device writes half the policy for `tcp`, `file` and `exec`.** The gateway can now
+   narrow to a port, a path or an argv, but the device's own allow-list is what holds when
+   the gateway is lying — and changing that list is a fleet push, not a policy edit. Both
+   gates are deliberate (§6); the asymmetry in how fast each can be changed is the part
+   worth knowing before an incident.
+5. **A backend that ignores `Target` grants every target**, and forgetting to read it is
+   not a compile error. The widening direction is the quiet one. Review backends for it.
+6. **None of this has been reviewed by anyone who did not write it.** The statuses above
+   say what the code does, not that the code is right.
 
 ## 13. Reporting a vulnerability
 
