@@ -129,12 +129,14 @@ func (s *Supervisor) sleep(ctx context.Context, d time.Duration) error {
 // Returns when the session's context ends or when the grant is lost, having killed it with
 // the true reason: `revoked` for a withdrawal, `authz_unavailable` for an outage past the
 // grace window. Intended to be run in a goroutine by whoever owns the session.
+// tgt must be the target the session opened with: a re-check that asked about a wider
+// target would keep a narrowed grant alive after the narrowing was withdrawn.
 func (s *Supervisor) Guard(ctx context.Context, sessionID string, p *plugin.Principal,
-	dev *plugin.Device, act plugin.Action) {
+	dev *plugin.Device, act plugin.Action, tgt plugin.Target) {
 	if s.Checker == nil || s.Checker.Backend == nil {
 		return // nothing to re-check against
 	}
-	tracked := s.Checker.Track(p, dev, act)
+	tracked := s.Checker.Track(p, dev, act, tgt)
 	interval := s.interval()
 
 	for {

@@ -103,7 +103,7 @@ func (s *Server) execOnDevice(w http.ResponseWriter, r *http.Request, p *plugin.
 	// `exec` is its own action. It does not imply `shell` and `shell` does not imply it:
 	// the point of the profile is that most support work can be granted without granting
 	// a shell, and that only works if they are authorised separately.
-	if v := s.o.Authz.AtOpen(r.Context(), p, dev, plugin.ActionExec); !v.Allow() {
+	if v := s.o.Authz.AtOpen(r.Context(), p, dev, plugin.ActionExec, plugin.Target{Argv: req.Argv}); !v.Allow() {
 		s.refuseByAuthz(w, r, v)
 		return
 	}
@@ -193,6 +193,7 @@ func (s *Server) execOnDevice(w http.ResponseWriter, r *http.Request, p *plugin.
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: "exec", Principal: p.ID,
 		Action:   plugin.ActionExec,
+		Target:   plugin.Target{Argv: req.Argv},
 		OpenedBy: p.OpenedBy, Unattended: p.Unattended,
 		Surface: "api", Grantee: p, Device: att.Conn, RecordInput: recordInput,
 	}

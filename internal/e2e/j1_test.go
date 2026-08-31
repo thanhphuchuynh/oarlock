@@ -717,7 +717,7 @@ type fallibleAuthz struct {
 }
 
 func (f *fallibleAuthz) Authorize(ctx context.Context, p *plugin.Principal,
-	dev *plugin.Device, a plugin.Action) (plugin.Decision, error) {
+	dev *plugin.Device, a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	f.calls.Add(1)
 	if f.down.Load() {
 		// What a permissions service looks like when it is down: an error, never
@@ -725,7 +725,7 @@ func (f *fallibleAuthz) Authorize(ctx context.Context, p *plugin.Principal,
 		// three-outcome contract exists to prevent — and plugintest fails one that does.
 		return plugin.Decision{}, errors.New("authz: the permissions API is unreachable")
 	}
-	return f.inner.Authorize(ctx, p, dev, a)
+	return f.inner.Authorize(ctx, p, dev, a, tgt)
 }
 
 // Watch streams revocations.

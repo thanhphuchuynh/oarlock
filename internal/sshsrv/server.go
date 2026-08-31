@@ -307,8 +307,12 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// each worth a sentence rather than a second copy of two hundred lines.
 	profile, action := "shell", plugin.ActionShell
 	argv := sess.Command()
+	// The target is the argv for `exec` and nothing for `shell`: a shell is the whole
+	// device however you narrow it, which is why it is its own action.
+	target := plugin.Target{}
 	if len(argv) > 0 {
 		profile, action = "exec", plugin.ActionExec
+		target = plugin.Target{Argv: argv}
 	}
 	log = log.With("profile", profile)
 
@@ -347,7 +351,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	// refused-at-open session is a 403 and not a row — while an *outage* refuses too,
 	// but says something different, because "you don't have access" and "we couldn't
 	// check" send somebody to entirely different places.
-	if verdict := s.o.Authz.AtOpen(ctx, p, dev, action); !verdict.Allow() {
+	if verdict := s.o.Authz.AtOpen(ctx, p, dev, action, target); !verdict.Allow() {
 		c, _ := condition.Lookup(verdict.Code)
 		text := c.Text()
 		if verdict.Reason != "" {
@@ -474,6 +478,7 @@ func (s *Server) handleSession(sess gssh.Session) {
 	params := sessionrun.Params{
 		SessionID: sessionID, DeviceID: dev.ID, Profile: profile, Principal: p.ID,
 		Action:  action,
+		Target:  target,
 		Surface: "ssh", Grantee: p, Device: att.Conn, RecordInput: recordInput,
 	}
 	if profile == "shell" {

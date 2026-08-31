@@ -18,6 +18,33 @@ rules:
     idle: 2m
     ttl: 10s
 
+  # Narrowed to a target. `tcp`, `file:read`, `file:write` and `exec` name a specific
+  # thing, so a grant can too: this one forwards the app's own port and nothing else,
+  # and reads log files without reaching the rest of the file root.
+  #
+  # The device still holds its own allow-list underneath, and it has to — the gateway's
+  # compromise is total, so the device's list is what holds when the gateway is lying.
+  # What this buys is the fast lever: editing a rule here takes effect on the next
+  # re-check, while changing the device's list is a fleet rollout.
+  - principals: ["support@example.com"]
+    devices: ["treadmill-*"]
+    actions: ["tcp"]
+    ports: [3000]
+  - principals: ["support@example.com"]
+    actions: ["file:read"]
+    paths: ["logs/*"]
+  - principals: ["support@example.com"]
+    actions: ["exec"]
+    commands: ["/bin/echo", "/usr/bin/uptime"]
+
+  # A target constraint narrows a deny the same way it narrows an allow: this refuses
+  # port 22 specifically, and says nothing about any other port.
+  - principals: ["*"]
+    actions: ["tcp"]
+    ports: [22]
+    deny: true
+    reason: "the device's own sshd is not a forwarding target"
+
   # Auditors read recordings and watch live sessions. They never get a keyboard.
   - principals: ["auditor@example.com"]
     actions: ["replay", "observe"]

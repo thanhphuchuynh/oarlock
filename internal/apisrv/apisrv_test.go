@@ -112,7 +112,7 @@ func (sqlStub) Query(_ context.Context, query string, _ int) (sqlexplore.Result,
 
 type sqlAuthorizer struct{ allow bool }
 
-func (a sqlAuthorizer) Authorize(_ context.Context, _ *plugin.Principal, dev *plugin.Device, action plugin.Action) (plugin.Decision, error) {
+func (a sqlAuthorizer) Authorize(_ context.Context, _ *plugin.Principal, dev *plugin.Device, action plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	return plugin.Decision{Allow: a.allow && dev.ID == "gateway" && action == plugin.ActionSQLRead}, nil
 }
 
@@ -1171,7 +1171,7 @@ type stubAuthz struct {
 }
 
 func (s *stubAuthz) Authorize(context.Context, *plugin.Principal, *plugin.Device,
-	plugin.Action) (plugin.Decision, error) {
+	plugin.Action, plugin.Target) (plugin.Decision, error) {
 	if s.err != nil {
 		return plugin.Decision{}, s.err
 	}

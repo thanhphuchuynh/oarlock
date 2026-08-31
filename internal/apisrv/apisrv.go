@@ -466,7 +466,9 @@ var gatewayDevice = &plugin.Device{ID: "gateway", Platform: plugin.PlatformOther
 // `sql:read` could grant itself `sql:read`.
 func (s *Server) authorizeAdmin(w http.ResponseWriter, r *http.Request, p *plugin.Principal,
 	dev *plugin.Device, act plugin.Action) bool {
-	v := s.o.Authz.AtOpen(r.Context(), p, dev, act)
+	// Administrative actions name no target: they are about the gateway's own
+	// configuration, not about a port, a path or an argv on a device.
+	v := s.o.Authz.AtOpen(r.Context(), p, dev, act, plugin.Target{})
 	if v.Allow() {
 		return true
 	}
@@ -536,7 +538,7 @@ func (s *Server) auditAdmin(ctx context.Context, p *plugin.Principal, deviceID s
 }
 
 func (s *Server) sqlSchema(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
-	if v := s.o.Authz.AtOpen(r.Context(), p, gatewayDevice, plugin.ActionSQLRead); !v.Allow() {
+	if v := s.o.Authz.AtOpen(r.Context(), p, gatewayDevice, plugin.ActionSQLRead, plugin.Target{}); !v.Allow() {
 		s.refuseByAuthz(w, r, v)
 		return
 	}
@@ -555,7 +557,7 @@ type sqlQueryRequest struct {
 }
 
 func (s *Server) sqlQuery(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
-	if v := s.o.Authz.AtOpen(r.Context(), p, gatewayDevice, plugin.ActionSQLRead); !v.Allow() {
+	if v := s.o.Authz.AtOpen(r.Context(), p, gatewayDevice, plugin.ActionSQLRead, plugin.Target{}); !v.Allow() {
 		s.auditSQL(r.Context(), p, "denied", "", 0, false)
 		s.refuseByAuthz(w, r, v)
 		return
@@ -1432,7 +1434,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 	// Authorisation, before a row exists or a device is woken. A denial is a 403 with
 	// no session row; an outage is a 503 — and the two are different screens because
 	// "you don't have access" and "we couldn't check" send somebody to different places.
-	if v := s.o.Authz.AtOpen(r.Context(), p, dev, plugin.ActionShell); !v.Allow() {
+	if v := s.o.Authz.AtOpen(r.Context(), p, dev, plugin.ActionShell, plugin.Target{}); !v.Allow() {
 		s.refuseByAuthz(w, r, v)
 		return
 	}
@@ -1669,7 +1671,7 @@ func (s *Server) observeSession(w http.ResponseWriter, r *http.Request, p *plugi
 	// not a grant to read other people's. Checked against the *session's* device, which
 	// is what a rules file scopes on.
 	if v := s.o.Authz.AtOpen(r.Context(), p,
-		&plugin.Device{ID: row.DeviceID}, plugin.ActionObserve); !v.Allow() {
+		&plugin.Device{ID: row.DeviceID}, plugin.ActionObserve, plugin.Target{}); !v.Allow() {
 		s.refuseByAuthz(w, r, v)
 		return
 	}
@@ -1751,7 +1753,7 @@ func (s *Server) getRecording(w http.ResponseWriter, r *http.Request, p *plugin.
 	// Reading a recording is its own action. A grant to open sessions on a device is not
 	// a grant to read what other people did on it.
 	if v := s.o.Authz.AtOpen(r.Context(), p,
-		&plugin.Device{ID: row.DeviceID}, plugin.ActionReplay); !v.Allow() {
+		&plugin.Device{ID: row.DeviceID}, plugin.ActionReplay, plugin.Target{}); !v.Allow() {
 		s.refuseByAuthz(w, r, v)
 		return
 	}

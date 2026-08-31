@@ -31,7 +31,7 @@ type correct struct {
 }
 
 func (c *correct) Authorize(ctx context.Context, p *plugin.Principal, _ *plugin.Device,
-	_ plugin.Action) (plugin.Decision, error) {
+	_ plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if err := ctx.Err(); err != nil {
 		return plugin.Decision{}, err
 	}
@@ -156,14 +156,14 @@ func TestACorrectBackendWithWatchPasses(t *testing.T) {
 type deniesOnError struct{ correct }
 
 func (d *deniesOnError) Authorize(ctx context.Context, p *plugin.Principal,
-	dev *plugin.Device, a plugin.Action) (plugin.Decision, error) {
+	dev *plugin.Device, a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	d.mu.Lock()
 	broken := d.broken
 	d.mu.Unlock()
 	if broken {
 		return plugin.Decision{Allow: false, Reason: "denied"}, nil
 	}
-	return d.correct.Authorize(ctx, p, dev, a)
+	return d.correct.Authorize(ctx, p, dev, a, tgt)
 }
 
 func TestABackendThatDeniesOnErrorFails(t *testing.T) {
@@ -190,14 +190,14 @@ func TestABackendThatDeniesOnErrorFails(t *testing.T) {
 type allowsOnError struct{ correct }
 
 func (d *allowsOnError) Authorize(ctx context.Context, p *plugin.Principal,
-	dev *plugin.Device, a plugin.Action) (plugin.Decision, error) {
+	dev *plugin.Device, a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	d.mu.Lock()
 	broken := d.broken
 	d.mu.Unlock()
 	if broken {
 		return plugin.Decision{Allow: true}, nil
 	}
-	return d.correct.Authorize(ctx, p, dev, a)
+	return d.correct.Authorize(ctx, p, dev, a, tgt)
 }
 
 func TestABackendThatAllowsOnErrorFails(t *testing.T) {
@@ -217,11 +217,11 @@ func TestABackendThatAllowsOnErrorFails(t *testing.T) {
 type erroringDenial struct{ correct }
 
 func (d *erroringDenial) Authorize(ctx context.Context, p *plugin.Principal,
-	dev *plugin.Device, a plugin.Action) (plugin.Decision, error) {
+	dev *plugin.Device, a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if p.ID != alice.ID {
 		return plugin.Decision{}, errors.New("not allowed")
 	}
-	return d.correct.Authorize(ctx, p, dev, a)
+	return d.correct.Authorize(ctx, p, dev, a, tgt)
 }
 
 func TestABackendThatErrorsInsteadOfDenyingFails(t *testing.T) {
@@ -239,7 +239,7 @@ func TestABackendThatErrorsInsteadOfDenyingFails(t *testing.T) {
 type silentDenial struct{ correct }
 
 func (d *silentDenial) Authorize(_ context.Context, p *plugin.Principal, _ *plugin.Device,
-	_ plugin.Action) (plugin.Decision, error) {
+	_ plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if p.ID == alice.ID {
 		return plugin.Decision{Allow: true}, nil
 	}
@@ -258,7 +258,7 @@ func TestABackendThatDeniesWithoutAReasonFails(t *testing.T) {
 type ignoresCancellation struct{ correct }
 
 func (d *ignoresCancellation) Authorize(_ context.Context, _ *plugin.Principal,
-	_ *plugin.Device, _ plugin.Action) (plugin.Decision, error) {
+	_ *plugin.Device, _ plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	return plugin.Decision{Allow: true}, nil
 }
 
@@ -291,11 +291,11 @@ type inconsistent struct {
 }
 
 func (d *inconsistent) Authorize(ctx context.Context, p *plugin.Principal,
-	dev *plugin.Device, a plugin.Action) (plugin.Decision, error) {
+	dev *plugin.Device, a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if d.counter.Add(1)%3 == 0 {
 		return plugin.Decision{Allow: p.ID != alice.ID, Reason: "cache says so"}, nil
 	}
-	return d.correct.Authorize(ctx, p, dev, a)
+	return d.correct.Authorize(ctx, p, dev, a, tgt)
 }
 
 func TestABackendThatIsNotConcurrencySafeFails(t *testing.T) {
@@ -404,13 +404,13 @@ type slow struct {
 }
 
 func (d *slow) Authorize(ctx context.Context, p *plugin.Principal, dev *plugin.Device,
-	a plugin.Action) (plugin.Decision, error) {
+	a plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	select {
 	case <-time.After(d.delay):
 	case <-ctx.Done():
 		return plugin.Decision{}, ctx.Err()
 	}
-	return d.correct.Authorize(ctx, p, dev, a)
+	return d.correct.Authorize(ctx, p, dev, a, tgt)
 }
 
 func TestASlowButCorrectBackendPasses(t *testing.T) {

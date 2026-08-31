@@ -85,6 +85,12 @@ type Params struct {
 	// prevent.
 	Action plugin.Action
 
+	// Target is the specific thing the action was aimed at — the forwarded port, the
+	// file path, the argv. Supervision replays it unchanged, because a re-check that
+	// asked about a wider target would keep a narrowed grant alive past its withdrawal.
+	// Zero for `shell`, which names no target.
+	Target plugin.Target
+
 	// Surface names where the operator came from — "ssh" or "browser" — for logs
 	// and for the audit trail. Two surfaces reaching one device is worth being able
 	// to tell apart afterwards.
@@ -333,7 +339,7 @@ func (r *Runner) Run(ctx context.Context, p Params, rw plugin.RecordingWriter,
 			act = ActionFor(p.Profile)
 		}
 		go r.Authz.Guard(runCtx, p.SessionID, grantee,
-			&plugin.Device{ID: p.DeviceID}, act)
+			&plugin.Device{ID: p.DeviceID}, act, p.Target)
 	}
 
 	res, err := ps.Run(runCtx)

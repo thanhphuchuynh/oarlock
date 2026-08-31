@@ -67,7 +67,7 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 	r.run("allows what it should", func(r reporter) {
 		a := h.New(r.t())
 		p, dev, act := h.Allowed()
-		d, err := a.Authorize(context.Background(), p, dev, act)
+		d, err := a.Authorize(context.Background(), p, dev, act, plugin.Target{})
 		if err != nil {
 			r.errorf("an allowed request returned an error: %v", err)
 			return
@@ -80,7 +80,7 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 	r.run("denies what it should, without an error", func(r reporter) {
 		a := h.New(r.t())
 		p, dev, act := h.Denied()
-		d, err := a.Authorize(context.Background(), p, dev, act)
+		d, err := a.Authorize(context.Background(), p, dev, act, plugin.Target{})
 		// A denial is an answer. Returning an error alongside it makes the gateway
 		// treat a decision as an outage and hold the session open through a grace
 		// window that should never have started.
@@ -117,8 +117,8 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 			// answer, and answer the same way twice.
 			a := h.New(r.t())
 			p, dev, act := h.Allowed()
-			first, err1 := a.Authorize(context.Background(), p, dev, act)
-			second, err2 := a.Authorize(context.Background(), p, dev, act)
+			first, err1 := a.Authorize(context.Background(), p, dev, act, plugin.Target{})
+			second, err2 := a.Authorize(context.Background(), p, dev, act, plugin.Target{})
 			if err1 != nil || err2 != nil {
 				r.errorf("NoDependencyToBreak is set, but Authorize errored: %v / %v",
 					err1, err2)
@@ -136,7 +136,7 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 			return
 		}
 		p, dev, act := h.Allowed()
-		d, err := a.Authorize(context.Background(), p, dev, act)
+		d, err := a.Authorize(context.Background(), p, dev, act, plugin.Target{})
 		restore()
 
 		switch {
@@ -164,7 +164,7 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		p, dev, act := h.Allowed()
-		d, err := a.Authorize(ctx, p, dev, act)
+		d, err := a.Authorize(ctx, p, dev, act, plugin.Target{})
 		// Either answer is defensible — a cached decision needs no I/O — but an
 		// *allow* on a cancelled context is not: the gateway cancels when it has
 		// stopped caring, and a backend that keeps working and returns a grant is one
@@ -191,12 +191,12 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 				var d plugin.Decision
 				var err error
 				if i%2 == 0 {
-					d, err = a.Authorize(context.Background(), p, dev, act)
+					d, err = a.Authorize(context.Background(), p, dev, act, plugin.Target{})
 					if err == nil && !d.Allow {
 						errs <- errors.New("an allowed request was denied under concurrency")
 					}
 				} else {
-					d, err = a.Authorize(context.Background(), dp, ddev, dact)
+					d, err = a.Authorize(context.Background(), dp, ddev, dact, plugin.Target{})
 					if err == nil && d.Allow {
 						errs <- errors.New("a denied request was allowed under concurrency")
 					}
@@ -216,7 +216,7 @@ func runAuthorizer(r reporter, h AuthorizerHarness) {
 	r.run("a per-grant limit only tightens", func(r reporter) {
 		a := h.New(r.t())
 		p, dev, act := h.Allowed()
-		d, err := a.Authorize(context.Background(), p, dev, act)
+		d, err := a.Authorize(context.Background(), p, dev, act, plugin.Target{})
 		if err != nil || !d.Allow || d.Limits == nil {
 			return // nothing to check; not every backend returns limits
 		}

@@ -14,12 +14,22 @@ var (
 
 // Permission is one durable authorization rule managed through the admin API.
 type Permission struct {
-	ID          string
-	Name        string
-	Principals  []string
-	Devices     []string
-	Tags        map[string]string
-	Actions     []string
+	ID         string
+	Name       string
+	Principals []string
+	Devices    []string
+	Tags       map[string]string
+	Actions    []string
+	// Ports, Paths and Commands narrow the grant to specific targets: device-local
+	// ports for `tcp`, path globs for `file:read` and `file:write`, argv[0] values for
+	// `exec`. Empty means the permission covers every target of that kind, which is
+	// what every permission written before these fields existed does.
+	//
+	// A target constraint narrows the permission for deny as well as allow — see
+	// Covers — and none of it replaces the device's own allow-list. See Target.
+	Ports       []int
+	Paths       []string
+	Commands    []string
 	Deny        bool
 	Reason      string
 	Priority    int
@@ -29,6 +39,50 @@ type Permission struct {
 	TTL         time.Duration
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// Covers reports whether this permission is about the thing being asked for.
+//
+// Unconstrained fields cover everything, so a permission that names no ports is about
+// every port. A permission that *does* name ports is about those ports and nothing else,
+// and that reading holds for a deny as much as for an allow: `deny ... ports: [22]` means
+// "not port 22", not "deny everything, and 22 is also mentioned".
+//
+// A permission constrained on a target the request does not carry does not cover it. So
+// one with Ports set never covers `shell`, which names no port — which matters because a
+// permission with `actions: ["*"]` and a port list would otherwise read as a grant of
+// everything to whoever was writing something narrow.
+//
+// Here on the type, beside AppliesTo and Grants, for the same reason they are: the
+// backend and the admin API both need this predicate, and a second copy of it — in the
+// console, one network hop away — would drift into a UI that says somebody cannot reach
+// a port they can.
+func (p *Permission) Covers(t Target) bool {
+	if p == nil {
+		return false
+	}
+	if len(p.Ports) > 0 {
+		if t.Port == 0 {
+			return false
+		}
+		found := false
+		for _, port := range p.Ports {
+			if port == t.Port {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if len(p.Paths) > 0 && (t.Path == "" || !matchesAny(p.Paths, t.Path)) {
+		return false
+	}
+	if len(p.Commands) > 0 && (len(t.Argv) == 0 || !matchesAny(p.Commands, t.Argv[0])) {
+		return false
+	}
+	return true
 }
 
 // AppliesTo reports whether this permission is written about this device.

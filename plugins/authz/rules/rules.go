@@ -74,6 +74,28 @@ type entry struct {
 	// spelled out rather than implied by an empty list — an empty `actions:` is much
 	// more likely to be an unfinished rule than an intent to grant everything.
 	Actions []string `yaml:"actions"`
+	// Ports narrows a `tcp` grant to these device-local ports. Paths narrows
+	// `file:read` and `file:write` to these globs, matched against the path exactly as
+	// the operator wrote it. Commands narrows `exec` to these argv[0] values.
+	//
+	// # A target constraint narrows the rule, for allow and deny alike
+	//
+	// A rule that lists no ports covers every port; one that lists 3000 covers port
+	// 3000 and nothing else — and that reading is the same whether the rule allows or
+	// denies, because `deny ... ports: [22]` plainly means "not port 22" and not "deny
+	// everything, and also 22 is mentioned". An author who means all of it writes no
+	// constraint.
+	//
+	// A rule that constrains a target the request does not carry does not match. So a
+	// rule with `ports:` never grants `shell`, which names no port — which matters
+	// because `actions: ["*"]` alongside `ports:` would otherwise read as a grant of
+	// everything to somebody who was writing a narrow one.
+	//
+	// None of this replaces the device's own allow-list. See plugin.Target.
+	Ports    []int    `yaml:"ports"`
+	Paths    []string `yaml:"paths"`
+	Commands []string `yaml:"commands"`
+
 	// Deny inverts the rule. A matching deny beats every allow, so a broad grant can be
 	// carved out without rewriting it.
 	Deny bool `yaml:"deny"`
@@ -213,7 +235,7 @@ func (a *Authorizer) watch(every time.Duration) {
 // the package comment: having no dependency that can fail is what makes this a safe
 // default rather than an accident.
 func (a *Authorizer) Authorize(ctx context.Context, p *plugin.Principal, dev *plugin.Device,
-	act plugin.Action) (plugin.Decision, error) {
+	act plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
 	if err := ctx.Err(); err != nil {
 		return plugin.Decision{}, err
 	}
@@ -228,7 +250,7 @@ func (a *Authorizer) Authorize(ctx context.Context, p *plugin.Principal, dev *pl
 	var granted *entry
 	for i := range rs.entries {
 		e := &rs.entries[i]
-		if !e.matches(p, dev, act) {
+		if !e.matches(p, dev, act, tgt) {
 			continue
 		}
 		if e.Deny {
@@ -278,7 +300,8 @@ func (a *Authorizer) Watch(context.Context) (<-chan plugin.RevocationEvent, erro
 	return nil, plugin.ErrUnsupported
 }
 
-func (e *entry) matches(p *plugin.Principal, dev *plugin.Device, act plugin.Action) bool {
+func (e *entry) matches(p *plugin.Principal, dev *plugin.Device, act plugin.Action,
+	tgt plugin.Target) bool {
 	if !matchAny(e.Principals, p.ID) {
 		return false
 	}
@@ -290,7 +313,41 @@ func (e *entry) matches(p *plugin.Principal, dev *plugin.Device, act plugin.Acti
 			return false
 		}
 	}
-	return matchAction(e.Actions, act)
+	if !matchAction(e.Actions, act) {
+		return false
+	}
+	return e.matchesTarget(tgt)
+}
+
+// matchesTarget reports whether this rule covers the thing being asked about.
+//
+// An unconstrained rule covers every target, which is what every rule written before
+// these fields existed does — so adding the fields narrowed nobody's policy.
+func (e *entry) matchesTarget(t plugin.Target) bool {
+	if len(e.Ports) > 0 && !containsPort(e.Ports, t.Port) {
+		return false
+	}
+	if len(e.Paths) > 0 && (t.Path == "" || !matchAny(e.Paths, t.Path)) {
+		return false
+	}
+	if len(e.Commands) > 0 && (len(t.Argv) == 0 || !matchAny(e.Commands, t.Argv[0])) {
+		return false
+	}
+	return true
+}
+
+// containsPort is deliberately not a glob: a port is a number, and "80*" matching 8080
+// is the kind of clever that ends up granting a port nobody read in the rule.
+func containsPort(ports []int, port int) bool {
+	if port == 0 {
+		return false // the request names no port; a port-constrained rule is not about it
+	}
+	for _, p := range ports {
+		if p == port {
+			return true
+		}
+	}
+	return false
 }
 
 func matchAny(patterns []string, s string) bool {

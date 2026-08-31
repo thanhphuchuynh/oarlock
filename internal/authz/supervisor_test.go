@@ -147,7 +147,7 @@ func TestARevocationClosesTheSessionWithoutWatch(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell)
+		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 	}()
 
 	// The grant is withdrawn while the stream is dead.
@@ -185,7 +185,7 @@ func TestAnOutagePastTheGraceWindowClosesAsUnavailable(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell)
+		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 	}()
 
 	b.set(false, "", errors.New("the permissions API is down"))
@@ -212,7 +212,7 @@ func TestAHealthySessionIsNeverClosed(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell)
+	sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 
 	if k.count() != 0 {
 		t.Errorf("%d sessions closed while the grant held", k.count())
@@ -235,7 +235,7 @@ func TestAGrantMayAskToBeRecheckedSoonerButNotLater(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
-		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell)
+		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 		return b.calls.Load()
 	}
 
@@ -262,7 +262,7 @@ type ttlBackend struct {
 }
 
 func (b *ttlBackend) Authorize(context.Context, *plugin.Principal, *plugin.Device,
-	plugin.Action) (plugin.Decision, error) {
+	plugin.Action, plugin.Target) (plugin.Decision, error) {
 	b.calls.Add(1)
 	return plugin.Decision{Allow: true, TTL: b.ttl}, nil
 }
@@ -283,7 +283,7 @@ func TestGuardStopsWhenTheSessionEnds(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell)
+		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 	}()
 	cancel()
 	select {
@@ -298,7 +298,7 @@ func TestGuardWithNoBackendReturnsImmediately(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sup.Guard(context.Background(), "sess_1", phuc, tread, plugin.ActionShell)
+		sup.Guard(context.Background(), "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 	}()
 	select {
 	case <-done:
@@ -487,7 +487,7 @@ func TestTheIntervalStillWorksWhileWatchIsBroken(t *testing.T) {
 	guard := make(chan struct{})
 	go func() {
 		defer close(guard)
-		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell)
+		sup.Guard(ctx, "sess_1", phuc, tread, plugin.ActionShell, plugin.Target{})
 	}()
 
 	// The stream dies, and *stays* dead for the rest of the test.

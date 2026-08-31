@@ -75,7 +75,7 @@ func TestGrantsWhatItSays(t *testing.T) {
 		{"auditor@example.com", "rower-7", plugin.ActionReplay, true},
 		{"auditor@example.com", "rower-7", plugin.ActionShell, false},
 	} {
-		d, err := a.Authorize(ctx, who(tc.p), dev(tc.d, nil), tc.act)
+		d, err := a.Authorize(ctx, who(tc.p), dev(tc.d, nil), tc.act, plugin.Target{})
 		if err != nil {
 			t.Fatalf("%s/%s/%s: %v", tc.p, tc.d, tc.act, err)
 		}
@@ -89,7 +89,7 @@ func TestGrantsWhatItSays(t *testing.T) {
 func TestADenialNamesWhatItRefused(t *testing.T) {
 	a := open(t, basic)
 	d, _ := a.Authorize(context.Background(), who("nobody@example.com"),
-		dev("treadmill-4821", nil), plugin.ActionShell)
+		dev("treadmill-4821", nil), plugin.ActionShell, plugin.Target{})
 	// "denied" tells an operator nothing they can take to whoever manages access.
 	for _, want := range []string{"shell", "treadmill-4821", "nobody@example.com"} {
 		if !strings.Contains(d.Reason, want) {
@@ -119,7 +119,7 @@ rules:
 		{nil, false},
 	}
 	for _, tc := range cases {
-		d, _ := a.Authorize(ctx, who("pci-team@example.com"), dev("d1", tc.tags), plugin.ActionShell)
+		d, _ := a.Authorize(ctx, who("pci-team@example.com"), dev("d1", tc.tags), plugin.ActionShell, plugin.Target{})
 		if d.Allow != tc.allow {
 			t.Errorf("tags %v: allow=%v, want %v", tc.tags, d.Allow, tc.allow)
 		}
@@ -147,7 +147,7 @@ func TestADenyBeatsEveryAllow(t *testing.T) {
 		ctx := context.Background()
 
 		d, _ := a.Authorize(ctx, who("phuc@example.com"),
-			dev("pos-1", map[string]string{"scope": "pci"}), plugin.ActionShell)
+			dev("pos-1", map[string]string{"scope": "pci"}), plugin.ActionShell, plugin.Target{})
 		if d.Allow {
 			t.Errorf("%s: a deny was overridden by an allow", order)
 		}
@@ -156,7 +156,7 @@ func TestADenyBeatsEveryAllow(t *testing.T) {
 		}
 		// And the broad grant still works everywhere else.
 		if d, _ := a.Authorize(ctx, who("phuc@example.com"), dev("treadmill-4821", nil),
-			plugin.ActionShell); !d.Allow {
+			plugin.ActionShell, plugin.Target{}); !d.Allow {
 			t.Errorf("%s: the carve-out removed the grant entirely", order)
 		}
 	}
@@ -172,7 +172,7 @@ rules:
     ttl: 10s
 `)
 	d, _ := a.Authorize(context.Background(), who("contractor@example.com"),
-		dev("treadmill-4821", nil), plugin.ActionShell)
+		dev("treadmill-4821", nil), plugin.ActionShell, plugin.Target{})
 	if !d.Allow {
 		t.Fatal("denied")
 	}
@@ -241,7 +241,7 @@ func TestABrokenReloadKeepsTheOldRules(t *testing.T) {
 	}
 
 	d, err := a.Authorize(context.Background(), who("phuc@example.com"),
-		dev("treadmill-4821", nil), plugin.ActionShell)
+		dev("treadmill-4821", nil), plugin.ActionShell, plugin.Target{})
 	if err != nil {
 		t.Fatalf("Authorize failed after a broken reload: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestADeletedFileKeepsTheOldRules(t *testing.T) {
 		t.Error("reloading a deleted file succeeded")
 	}
 	if d, _ := a.Authorize(context.Background(), who("phuc@example.com"),
-		dev("treadmill-4821", nil), plugin.ActionShell); !d.Allow {
+		dev("treadmill-4821", nil), plugin.ActionShell, plugin.Target{}); !d.Allow {
 		t.Error("deleting the file revoked everybody's access")
 	}
 }
@@ -290,11 +290,11 @@ rules:
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if d, _ := a.Authorize(ctx, who("newcomer@example.com"), dev("d", nil), plugin.ActionShell); !d.Allow {
+	if d, _ := a.Authorize(ctx, who("newcomer@example.com"), dev("d", nil), plugin.ActionShell, plugin.Target{}); !d.Allow {
 		t.Error("the new rule did not take effect")
 	}
 	if d, _ := a.Authorize(ctx, who("phuc@example.com"), dev("treadmill-4821", nil),
-		plugin.ActionShell); d.Allow {
+		plugin.ActionShell, plugin.Target{}); d.Allow {
 		t.Error("the old rule survived the reload")
 	}
 }
