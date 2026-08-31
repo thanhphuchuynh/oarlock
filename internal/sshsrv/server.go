@@ -256,7 +256,6 @@ func (s *Server) handleKeyboardInteractive(ctx gssh.Context,
 		return false
 	}
 	ctx.SetValue(principalKey{}, p)
-	authenticated(ctx)
 	s.log.Info("ssh keyboard-interactive auth succeeded",
 		"principal", p.ID, "remote", ctx.RemoteAddr().String())
 	return true
@@ -275,7 +274,6 @@ func (s *Server) handlePublicKey(ctx gssh.Context, key gssh.PublicKey) bool {
 		return false
 	}
 	ctx.SetValue(principalKey{}, p)
-	authenticated(ctx)
 	return true
 }
 

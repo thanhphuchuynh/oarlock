@@ -2,11 +2,14 @@ package sshsrv_test
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	xssh "golang.org/x/crypto/ssh"
 )
 
 // TestUnauthenticatedConnectionIsClosed is the slowloris case: a peer that opens a
@@ -101,5 +104,62 @@ func TestAuthenticatedConnectionSurvivesTheBudget(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "hello" {
 		t.Errorf("output %q, want %q", got, "hello")
+	}
+}
+
+// slowSigner answers the "would you accept this key?" query immediately — that costs no
+// signature — and then takes its time producing one.
+//
+// A public key is not a secret. It sits in `authorized_keys`, usually in a `.pub` file
+// beside it, sometimes on a profile page. Offering one costs an attacker nothing.
+type slowSigner struct {
+	inner xssh.Signer
+	delay time.Duration
+}
+
+func (s slowSigner) PublicKey() xssh.PublicKey { return s.inner.PublicKey() }
+
+func (s slowSigner) Sign(r io.Reader, data []byte) (*xssh.Signature, error) {
+	time.Sleep(s.delay)
+	return s.inner.Sign(r, data)
+}
+
+// TestAPublicKeyQueryDoesNotDisarmTheBudget is the case the first version of this budget
+// failed, and it failed in the direction that removed the control entirely.
+//
+// Every OpenSSH client asks "would you accept this key?" before it signs anything, and
+// x/crypto answers by calling PublicKeyCallback — *before* it looks at whether the request
+// carried a signature at all. Disarming from that callback meant merely knowing an
+// authorised public key was enough to hold a connection open indefinitely.
+//
+// So: offer a real authorised key, answer the query, then dawdle past the budget before
+// signing. A gateway that disarmed on the query lets the late signature through and the
+// handshake completes. One that did not has already hung up.
+func TestAPublicKeyQueryDoesNotDisarmTheBudget(t *testing.T) {
+	budget := 300 * time.Millisecond
+	s := newStackBudget(t, budget)
+
+	done := make(chan error, 1)
+	go func() {
+		c, err := xssh.Dial("tcp", s.sshAddr, &xssh.ClientConfig{
+			User:            deviceID,
+			Auth:            []xssh.AuthMethod{xssh.PublicKeys(slowSigner{inner: s.client, delay: 3 * budget})},
+			HostKeyCallback: xssh.InsecureIgnoreHostKey(),
+			Timeout:         10 * time.Second,
+		})
+		if c != nil {
+			_ = c.Close()
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a connection that had signed nothing by the budget completed the " +
+				"handshake — knowing an authorised public key was enough to disarm it")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client never finished; the front door neither closed nor completed")
 	}
 }
