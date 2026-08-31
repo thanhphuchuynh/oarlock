@@ -98,6 +98,22 @@ type SSH struct {
 	GenerateHostKey bool `yaml:"generate_host_key"`
 	// AuthorizedKeys is the operator key file for the authorized_keys authenticator.
 	AuthorizedKeys string `yaml:"authorized_keys"`
+	// HandshakeBudget bounds the interval between a connection arriving at the front
+	// door and an operator authenticating on it. Zero means the sshsrv default (15s);
+	// negative disables the bound, which no deployment should want.
+	//
+	// This is not a latency target. Keyboard-interactive authentication asks a human to
+	// approve a login in a browser, so raise it rather than lower it if your identity
+	// provider is slow — what it exists to stop is a peer holding a goroutine and a file
+	// descriptor open forever without proving anything about who it is.
+	HandshakeBudget time.Duration `yaml:"handshake_budget"`
+	// MaxConnections caps concurrent connections on the SSH listener, authenticated or
+	// not. Zero means DefaultMaxSSHConnections; negative means no cap.
+	//
+	// A backstop, not the primary control — HandshakeBudget is what makes slots come
+	// back. Set generously: this is an operator front door, and a limit low enough to
+	// bite under real use is a limit that locks out the person handling the incident.
+	MaxConnections int `yaml:"max_connections"`
 }
 
 // Store configures the gateway's operational database.

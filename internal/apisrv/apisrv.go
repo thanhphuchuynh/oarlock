@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -391,9 +392,20 @@ func (s *Server) delegatedPrincipal(w http.ResponseWriter, r *http.Request,
 	return &out
 }
 
+// clientIP is the rate-limit key for a caller who has not authenticated.
+//
+// net.SplitHostPort, not a cut at the first colon: RemoteAddr for an IPv6 peer is
+// `[2001:db8::1]:51234`, and cutting at the first colon yields `[2001` — one bucket
+// shared by a whole hextet, and `[` for anything in `::/16`. A shared bucket is not a
+// tighter limit, it is a lever: one caller exhausts the window for every stranger who
+// happens to share the prefix, on the surface where the limit exists to bound token
+// guessing.
 func clientIP(r *http.Request) string {
-	host, _, found := strings.Cut(r.RemoteAddr, ":")
-	if !found {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// Not host:port at all. Key on the whole string rather than a prefix of it:
+		// over-specific costs an attacker one bucket, over-broad costs bystanders
+		// theirs.
 		return "ip:" + r.RemoteAddr
 	}
 	return "ip:" + host

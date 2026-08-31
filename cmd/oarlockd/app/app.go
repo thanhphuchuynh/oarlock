@@ -45,6 +45,7 @@ import (
 
 	gssh "github.com/gliderlabs/ssh"
 	xssh "golang.org/x/crypto/ssh"
+	"golang.org/x/net/netutil"
 
 	"github.com/oarlock/oarlock/cmd/oarlockd/app/ui"
 	"github.com/oarlock/oarlock/internal/apisrv"
@@ -442,9 +443,10 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		AuthzSupervisor: g.supervisor, Registry: reg, Inviter: g.inviter,
 		Sessions: ledger, Live: g.live, Recorder: recorder,
 		Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
-		RecordInput: cfg.Policy.RecordInput,
-		Audit:       g.audit,
-		HostKey:     hostKey, Log: log,
+		RecordInput:     cfg.Policy.RecordInput,
+		Audit:           g.audit,
+		HandshakeBudget: cfg.SSH.HandshakeBudget,
+		HostKey:         hostKey, Log: log,
 	})
 	if err != nil {
 		return nil, err
@@ -643,6 +645,16 @@ func (g *Gateway) Listen() error {
 	if err != nil {
 		return fmt.Errorf("oarlockd: listening on %s: %w", g.Cfg.Listen.SSH, err)
 	}
+	// A ceiling on concurrent connections at the front door, authenticated or not.
+	//
+	// The pre-authentication budget in internal/sshsrv is what actually bounds this —
+	// it is what makes a slot come back — but a budget alone still lets a peer hold
+	// budget×rate connections at once, and each one is a goroutine and a descriptor.
+	// LimitListener stops accepting past the cap and leaves the rest in the kernel's
+	// accept queue, so the cost of the surplus is the queue rather than the process.
+	if n := maxSSHConnections(g.Cfg); n > 0 {
+		sl = netutil.LimitListener(sl, n)
+	}
 	hl, err := net.Listen("tcp", g.Cfg.Listen.HTTP)
 	if err != nil {
 		_ = sl.Close()
@@ -650,6 +662,25 @@ func (g *Gateway) Listen() error {
 	}
 	g.sshListener, g.httpListener = sl, hl
 	return nil
+}
+
+// DefaultMaxSSHConnections is the ceiling when the configuration does not set one.
+//
+// Deliberately generous. The SSH front door serves operators, not the public: a fleet
+// with a hundred people on call does not approach this, and a limit that bites during
+// an incident locks out the person handling it. Combined with the 15s handshake
+// budget, saturating it requires sustaining roughly seventy new connections a second.
+const DefaultMaxSSHConnections = 1024
+
+func maxSSHConnections(cfg *config.Config) int {
+	switch {
+	case cfg.SSH.MaxConnections < 0:
+		return 0 // explicitly uncapped
+	case cfg.SSH.MaxConnections == 0:
+		return DefaultMaxSSHConnections
+	default:
+		return cfg.SSH.MaxConnections
+	}
 }
 
 // Addrs are the bound addresses, for tests and for logging.

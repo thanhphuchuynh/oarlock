@@ -85,9 +85,14 @@ jobs:
             echo "x/crypto $have is below $min (Terrapin, CVE-2023-48795)"; exit 1
           fi
 
+      # Pinned, not @latest. §4 of the threat model says every deploy is a supply-chain
+      # event and to pin dependencies; a scanner installed from a moving reference is a
+      # binary nobody reviewed, running in CI, with the whole tree in front of it. The
+      # vulnerability database is fetched at run time, so pinning the tool does not pin
+      # what it knows — bump this deliberately.
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
 
   # J1 is the journey the product exists for, and it runs over both reachability

@@ -34,6 +34,18 @@ ssh:
   # changes on restart warns every operator every time.
   generate_host_key: true
   authorized_keys: ./authorized_keys
+  # How long a connection may sit at the front door without an operator authenticating
+  # on it. Both defaults are shown; neither normally needs changing.
+  #
+  # Raise the budget if your identity provider is slow — keyboard-interactive auth waits
+  # on a human approving a login in a browser. Lower it only if you know every operator
+  # uses a key. What it exists to stop is a peer holding a goroutine and a descriptor
+  # open forever without proving who it is.
+  handshake_budget: 15s
+  # A ceiling on concurrent connections at the front door, authenticated or not. Set
+  # generously: this is an operator door, and a cap that bites during an incident locks
+  # out the person handling it. Negative disables the cap.
+  max_connections: 1024
 
 # The historical form reads a YAML registry and keeps session metadata beside recordings.
 devices: ./devices.yaml
