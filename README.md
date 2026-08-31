@@ -343,16 +343,42 @@ stream, the MQTT dispatcher, delegated authority, device key rotation and retire
 `record_input` policy, the SQLite device registry and authorizer with an admin UI, and the
 authorisation gate on that admin surface.
 
-Also working: the `exec` profile — one allow-listed command, no shell, over `ssh device
-some command` or `POST /api/v1/devices/{id}/exec`. It is the capability most support work
-needs, and it can be granted where a shell should not be.
+**Three profiles besides `shell` now work**, and each exists so that support work can be
+granted without granting a shell:
 
-Missing: the SSH-CA authenticator. Operator identity can now come from an identity
-provider on all three surfaces — a bearer JWT for the API, a sign-in redirect for the
-console, a device code at an SSH prompt. Epics 5 to 8 (the rest of the profiles, passthrough, multi-replica operation, the generated
-SDKs and the supply-chain work) are planned and unbuilt. No releases and no API stability:
-the protocol in `docs/protocol.md` is `v0` and will change without ceremony until it is
-tagged.
+- **`exec`** — one allow-listed command, no shell interpretation, over `ssh device some
+  command` or `POST /api/v1/devices/{id}/exec`.
+- **`file`** — read and write under one configured root, confined by `os.Root` so a path
+  that leaves the root fails in the kernel rather than in a string check.
+- **`tcp`** — `ssh -L 8080:localhost:3000 device@gateway`, to the device's own loopback
+  only, from a port allow-list the device holds.
+
+**Authorisation is per action, per device, and per target.** A grant can name the port, the
+path or the argv, so `tcp` is not all-or-nothing on a device. The device keeps its own
+allow-list underneath, because the gateway's compromise is total and that list is what
+holds when the gateway is lying — see [the threat model](docs/threat-model.md) § 6.
+
+Missing, and worth naming rather than leaving to be discovered:
+
+- **The SSH-CA authenticator.** Operator identity can come from an identity provider on all
+  three surfaces — a bearer JWT for the API, a sign-in redirect for the console, a device
+  code at an SSH prompt — but there is no `sshca` backend, and the threat model used to
+  imply otherwise.
+- **Mode A passthrough.** It is expressible as an action, every authorizer will answer
+  about it, and a device can carry the `allow_passthrough` flag — but nothing serves such
+  a session. A policy granting `passthrough` today grants something with no implementation
+  behind it.
+- **Epic 5 is half-landed**: the three profiles above are its, and passthrough is the rest
+  of it. **Epics 6 to 8** — multi-replica operation, the generated SDKs, and the
+  supply-chain work — are planned and unbuilt.
+
+[`docs/threat-model.md`](docs/threat-model.md) § 12 is the authoritative list of what is
+built, what is tested, and what is only described. It is the section to read before
+trusting any of the rest.
+
+No releases and no API stability: the protocol in `docs/protocol.md` is `v0` and will
+change without ceremony until it is tagged. `pkg/plugin` is public API and changed as
+recently as the per-target work above.
 
 ## Licence
 
