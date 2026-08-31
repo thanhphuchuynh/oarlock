@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Oarlock Authentication Flow",
+    "locale": "en",
+    "output": "authentication.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "operator-leg",
+        "label": "Operator identity",
+        "focus": [
+          "operator",
+          "gateway",
+          "authn"
+        ],
+        "note": "The SSH user names the device; the operator comes from the key."
+      },
+      {
+        "id": "policy",
+        "label": "Authorization",
+        "focus": [
+          "gateway",
+          "authz"
+        ],
+        "note": "Authentication is not authorization. Three outcomes, not two."
+      },
+      {
+        "id": "device-leg",
+        "label": "Device identity",
+        "focus": [
+          "gateway",
+          "agent",
+          "tickets"
+        ],
+        "note": "Ed25519 challenge-response. The private key never leaves the device."
+      }
+    ],
+    "column_fit": "spread"
+  },
+  "participants": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "ssh client + key"
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "oarlockd",
+      "sublabel": "SSH door + /ws/session"
+    },
+    {
+      "id": "authn",
+      "type": "security",
+      "label": "Authenticator",
+      "sublabel": "authorized_keys, OIDC"
+    },
+    {
+      "id": "authz",
+      "type": "security",
+      "label": "Authorizer",
+      "sublabel": "per action, per device"
+    },
+    {
+      "id": "tickets",
+      "type": "database",
+      "label": "Ticket Store",
+      "sublabel": "single-use, 60 s"
+    },
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "Agent",
+      "sublabel": "on the device, dials out"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 262,
+      "label": "1 - Operator authentication"
+    },
+    {
+      "from": 272,
+      "to": 337,
+      "label": "2 - Authorization"
+    },
+    {
+      "from": 347,
+      "to": 417,
+      "label": "3 - Ticket and invitation"
+    },
+    {
+      "from": 427,
+      "to": 562,
+      "label": "4 - Device authentication"
+    },
+    {
+      "from": 572,
+      "to": 672,
+      "label": "5 - Session and continuous re-check"
+    }
+  ],
+  "messages": [
+    {
+      "id": "connect",
+      "from": "operator",
+      "to": "gateway",
+      "y": 175,
+      "label": "TCP connect",
+      "variant": "default",
+      "note": "A 15 s pre-authentication budget arms here and closes the socket if nobody authenticates."
+    },
+    {
+      "id": "auth-key",
+      "from": "gateway",
+      "to": "authn",
+      "y": 210,
+      "label": "AuthPublicKey(ssh user, key)",
+      "variant": "security",
+      "note": "The SSH user names the device, not the operator. The operator comes from the key."
+    },
+    {
+      "id": "principal",
+      "from": "authn",
+      "to": "gateway",
+      "y": 245,
+      "label": "principal",
+      "variant": "return",
+      "note": "The pre-authentication budget disarms here, not at channel open, so ssh -N keeps working."
+    },
+    {
+      "id": "authorize",
+      "from": "gateway",
+      "to": "authz",
+      "y": 285,
+      "label": "Authorize(principal, device, shell)",
+      "variant": "security"
+    },
+    {
+      "id": "verdict",
+      "from": "authz",
+      "to": "gateway",
+      "y": 320,
+      "label": "allow / deny / unavailable",
+      "variant": "return",
+      "note": "Three outcomes, not two. A backend outage refuses, but it never reports itself as a denial."
+    },
+    {
+      "id": "mint",
+      "from": "gateway",
+      "to": "tickets",
+      "y": 360,
+      "label": "Mint(claims, 60 s)",
+      "variant": "default",
+      "note": "256 bits of randomness, scoped to one session, one device, one profile, one principal, one leg."
+    },
+    {
+      "id": "invite",
+      "from": "gateway",
+      "to": "agent",
+      "y": 400,
+      "label": "DIAL invitation + ticket",
+      "variant": "emphasis",
+      "note": "Delivered by a doorbell (MQTT, webhook, exec) or down a control channel the device already holds."
+    },
+    {
+      "id": "hello",
+      "from": "agent",
+      "to": "gateway",
+      "y": 440,
+      "label": "HELLO device_id, nonce_c",
+      "variant": "security",
+      "note": "The device dials out. Nothing listens on it, and a 5 s handshake budget applies."
+    },
+    {
+      "id": "challenge",
+      "from": "gateway",
+      "to": "agent",
+      "y": 475,
+      "label": "CHALLENGE nonce_s, gateway_id",
+      "variant": "security"
+    },
+    {
+      "id": "sign",
+      "from": "agent",
+      "to": "gateway",
+      "y": 510,
+      "label": "AUTH Ed25519 signature",
+      "variant": "security",
+      "note": "Signed over both nonces, device_id and gateway_id - length-prefixed and domain-separated."
+    },
+    {
+      "id": "redeem",
+      "from": "gateway",
+      "to": "tickets",
+      "y": 545,
+      "label": "Redeem(token) - compare-and-delete",
+      "variant": "security",
+      "note": "Atomic compare-and-delete. A second redemption finds nothing, so an intercepted ticket cannot be replayed."
+    },
+    {
+      "id": "welcome",
+      "from": "gateway",
+      "to": "agent",
+      "y": 585,
+      "label": "WELCOME version, limits",
+      "variant": "return"
+    },
+    {
+      "id": "shell",
+      "from": "gateway",
+      "to": "operator",
+      "y": 620,
+      "label": "shell",
+      "variant": "return",
+      "note": "The gateway is in the plaintext. That is what makes recording and mid-session revocation possible."
+    },
+    {
+      "id": "recheck",
+      "from": "gateway",
+      "to": "authz",
+      "y": 655,
+      "label": "re-check every 30 s, plus Watch",
+      "variant": "dashed",
+      "note": "The interval is the guarantee; Watch is the optimisation. A broken Watch costs staleness, not the grant."
+    }
+  ],
+  "activations": [
+    {
+      "participant": "gateway",
+      "from": 170,
+      "to": 662,
+      "type": "backend"
+    },
+    {
+      "participant": "authn",
+      "from": 205,
+      "to": 250,
+      "type": "security"
+    },
+    {
+      "participant": "authz",
+      "from": 280,
+      "to": 325,
+      "type": "security"
+    },
+    {
+      "participant": "tickets",
+      "from": 353,
+      "to": 372,
+      "type": "database"
+    },
+    {
+      "participant": "agent",
+      "from": 395,
+      "to": 625,
+      "type": "external"
+    },
+    {
+      "participant": "tickets",
+      "from": 538,
+      "to": 557,
+      "type": "database"
+    },
+    {
+      "participant": "authz",
+      "from": 648,
+      "to": 662,
+      "type": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two authentications, not one",
+      "items": [
+        "The operator proves who they are with a key or an identity provider",
+        "The device proves who it is with an Ed25519 key generated on-device",
+        "Neither one authenticates the operator to the device: the agent trusts the gateway and cannot verify a principal"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Authentication is not authorization",
+      "items": [
+        "A token that proves identity says nothing about what may be done with it",
+        "Grants are checked per action and per device, before any device is woken",
+        "A denial produces no session row; an outage refuses too, but says something different"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What bounds an unauthenticated peer",
+      "items": [
+        "15 s pre-authentication budget on the SSH door, disarmed at auth",
+        "5 s handshake budget and a fixed-size buffer on the WebSocket leg",
+        "Tickets are single-use, expire in 60 s, and are redeemed by compare-and-delete"
+      ]
+    }
+  ]
+}
