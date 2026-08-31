@@ -3,16 +3,15 @@
 Oarlock hands a shell on a remote device to a human over the internet. A vulnerability here
 is not an inconvenience, so this policy is deliberate about what we promise and when.
 
-> **Contact not yet set.** The primary channel below (GitHub private vulnerability
-> reporting) works today and needs no address. The email fallback is a placeholder:
-> `<SECURITY-CONTACT — must be a monitored address before the first release>`. Do not
-> publish a release with this line still in it.
-
 ## Reporting a vulnerability
 
 **Use GitHub's private vulnerability reporting** on this repository — the *Security* tab,
 then *Report a vulnerability*. It gives us a private thread, keeps the report out of public
 issues, and produces an advisory we can publish with a fix.
+
+**If you cannot use GitHub**, email <nguoigiaumat100@gmail.com>. That reaches one
+person rather than a rota, so GitHub is the better route if you have the choice — but a
+report by email is worth far more than a report you did not send.
 
 Please **do not** open a public issue, a pull request, or a discussion for a security report.
 A public report on a project like this one hands a working technique to anyone reading, before
