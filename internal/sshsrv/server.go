@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -94,6 +95,11 @@ type Options struct {
 	// this nil generates an ephemeral key and says so, loudly.
 	HostKey xssh.Signer
 
+	// HandshakeBudget bounds the interval between a connection arriving at the front
+	// door and an operator authenticating on it. Zero means DefaultHandshakeBudget;
+	// negative disables the bound, which is for tests that drive a handshake by hand.
+	HandshakeBudget time.Duration
+
 	// NewSessionID mints session ids. Injectable so tests are deterministic.
 	NewSessionID func() string
 
@@ -126,6 +132,9 @@ func New(o Options) (*Server, error) {
 	if o.NewSessionID == nil {
 		o.NewSessionID = randomSessionID
 	}
+	if o.HandshakeBudget == 0 {
+		o.HandshakeBudget = DefaultHandshakeBudget
+	}
 	if o.Deadlines == (pump.Deadlines{}) {
 		o.Deadlines = pump.DefaultDeadlines()
 	}
@@ -139,6 +148,12 @@ func New(o Options) (*Server, error) {
 		Handler:          s.handleSession,
 		PublicKeyHandler: s.handlePublicKey,
 		Version:          "Oarlock",
+		// The pre-authentication budget. See preauth.go for why this is a timer here
+		// rather than MaxTimeout, IdleTimeout, or a read deadline — all three are the
+		// wrong shape, and the deadline is silently erased by gliderlabs' own wrapper.
+		ConnCallback: func(ctx gssh.Context, conn net.Conn) net.Conn {
+			return armPreauth(ctx, conn, s.o.HandshakeBudget)
+		},
 		// Capture the PTY here rather than in the handler, because
 		// gliderlabs/ssh v0.3.8 has a data race between Session.Pty(), which copies
 		// the pty struct, and its own request loop, which writes pty.Window when a
@@ -241,6 +256,7 @@ func (s *Server) handleKeyboardInteractive(ctx gssh.Context,
 		return false
 	}
 	ctx.SetValue(principalKey{}, p)
+	authenticated(ctx)
 	s.log.Info("ssh keyboard-interactive auth succeeded",
 		"principal", p.ID, "remote", ctx.RemoteAddr().String())
 	return true
@@ -259,6 +275,7 @@ func (s *Server) handlePublicKey(ctx gssh.Context, key gssh.PublicKey) bool {
 		return false
 	}
 	ctx.SetValue(principalKey{}, p)
+	authenticated(ctx)
 	return true
 }
 

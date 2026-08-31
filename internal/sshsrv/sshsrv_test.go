@@ -101,6 +101,21 @@ var authzSupervisor *authz.Supervisor
 // advertises no "tcp" capability either, which is what an unconfigured device does.
 var forwardPorts []int
 
+// handshakeBudget overrides the front door's pre-authentication budget, in the same
+// style as authzChecker above. Zero for every test that is not about it, which means
+// they get the fifteen-second default and never notice it.
+var handshakeBudget time.Duration
+
+// newStackBudget wires a front door whose pre-authentication budget is short enough
+// for a test to wait out.
+func newStackBudget(t *testing.T, budget time.Duration) *stack {
+	t.Helper()
+	prev := handshakeBudget
+	handshakeBudget = budget
+	t.Cleanup(func() { handshakeBudget = prev })
+	return newStackWith(t, []string{"/bin/sh"}, fastLimits(), 0, false)
+}
+
 // newStackForwarding wires an agent that will forward the named device-local ports.
 func newStackForwarding(t *testing.T, ports []int) *stack {
 	t.Helper()
@@ -241,6 +256,7 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 		Sessions:        sessions.NewMemory(sessions.Limits{}, nil),
 		Recorder:        recorder,
 		Limits:          limits,
+		HandshakeBudget: handshakeBudget,
 		Log:             quiet(),
 	})
 	if err != nil {
