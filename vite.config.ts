@@ -11,6 +11,16 @@ import tailwind from "@tailwindcss/vite";
 // Neither is a library build: the packages ship as TypeScript source and each consumer
 // bundles them with their own toolchain.
 export default defineConfig(({ mode }) => {
+  if (mode === "landing") {
+    // The marketing sheet. Static HTML and CSS, no framework: it inherits the toolchain
+    // rather than the runtime, and nothing it ships is embedded in the gateway binary.
+    return {
+      root: "landing",
+      base: "./",
+      build: { outDir: "dist", emptyOutDir: true },
+      server: { port: 5180, strictPort: true },
+    };
+  }
   if (mode === "harness") {
     return {
       root: "tests/harness",
