@@ -70,14 +70,14 @@ export function SSHAccess({ client, device }: { client: Client; device: string }
                 </label>
                 <div>
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">Command</div>
-                  <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 text-xs"><code>{command}</code></pre>
+                  <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 text-sm"><code>{command}</code></pre>
                 </div>
-                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-xs">
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
                   <dt className="text-fg-faint">Principal</dt><dd className="mono truncate">{info.principal}</dd>
                   <dt className="text-fg-faint">Gateway</dt><dd className="mono">{info.host}:{info.port}</dd>
                   <dt className="text-fg-faint">Fingerprint</dt><dd className="mono break-all">{info.fingerprint}</dd>
                 </dl>
-                <p className="text-xs text-fg-muted">The download contains the gateway public host key. Your operator private key remains on this computer.</p>
+                <p className="text-sm text-fg-muted">The download contains the gateway public host key. Your operator private key remains on this computer.</p>
                 <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
                   <button className="btn" onClick={downloadHostKey}>Download host key</button>
                   <button className="btn btn-primary" onClick={() => void copyCommand()}>{copied ? "Copied" : "Copy command"}</button>

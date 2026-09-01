@@ -16,9 +16,9 @@ function relative(iso: string): string {
 function Badge({ children, tone }: { children: React.ReactNode; tone: string }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${tone}`}
+      className={`inline-flex items-center gap-1.5 border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] ${tone}`}
     >
-      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+      <span className="size-1.5 bg-current" aria-hidden="true" />
       {children}
     </span>
   );
@@ -58,7 +58,7 @@ export function SessionList({
   return (
     <div className="overflow-x-auto border-t border-border">
       <table className="w-full border-collapse text-left">
-        <thead className="bg-bg-raised text-xs uppercase tracking-wider text-fg-faint">
+        <thead className="bg-bg-raised text-sm uppercase tracking-wider text-fg-faint">
           <tr>
             {/* Header and cell breakpoints have to agree. They did not: `State` was
                 always shown while its cell was hidden below `sm`, so on a phone the
@@ -89,7 +89,7 @@ export function SessionList({
                       "treadmill-4821" reads as an em-dash, which makes a device id look
                       like a different device id. The table scrolls instead. */}
                   <div className="mono whitespace-nowrap font-medium">{s.device_id}</div>
-                  <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-xs text-fg-muted">
+                  <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-sm text-fg-muted">
                     <span className="mono">{s.principal}</span>
                     {/* Relative at rest, absolute on hover: an auditor needs the instant,
                         an operator needs "recently". */}
@@ -104,7 +104,7 @@ export function SessionList({
                       "opened over ssh" rather than left blank, because an empty cell
                       reads as missing data and this is not missing, it is not
                       applicable. */}
-                  <div className="mt-1 max-w-[48ch] text-xs text-fg-muted">
+                  <div className="mt-1 max-w-[48ch] text-sm text-fg-muted">
                     {s.reason || <span className="text-fg-faint">opened over ssh</span>}
                   </div>
                 </td>
@@ -120,7 +120,7 @@ export function SessionList({
                           and the code beside it, because somebody reporting a problem
                           should be able to say which one. */}
                       {cond && (
-                        <span className="text-xs text-fg-muted" title={s.close_reason}>
+                        <span className="text-sm text-fg-muted" title={s.close_reason}>
                           {cond.headline}
                         </span>
                       )}

@@ -440,9 +440,19 @@ export function App() {
   return (
     <div className="min-h-screen bg-bg lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)]">
       <aside className="hidden border-r border-border bg-bg-raised lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:p-4">
-        <div className="flex items-center gap-2 px-2 py-2">
-          <span className="grid size-7 place-items-center rounded-md bg-fg text-xs font-bold text-fg-inverse">O</span>
-          <span className="text-base font-semibold">Oarlock</span>
+        <div className="border-b border-border-strong px-2 pb-3">
+          <div className="flex items-center gap-2.5">
+            <span className="grid size-8 shrink-0 place-items-center border border-border-strong text-[11px] font-semibold leading-none tracking-[0.08em]">
+              A<br />O
+            </span>
+            {/* Two lines, the way a title block stacks a name: one line of letterspaced
+                caps does not fit a 13.5rem rail beside the monogram, and the product's
+                own name arriving truncated is the worst thing on the sheet. */}
+            <span className="text-[13px] font-semibold uppercase leading-tight tracking-[0.1em]">
+              Oarlock
+            </span>
+          </div>
+          <p className="label mt-2">gateway-terminated ssh</p>
         </div>
         <nav className="mt-5 grid gap-1 text-sm" aria-label="Admin navigation">
           {pages.map((page) => (
@@ -456,8 +466,8 @@ export function App() {
           ))}
         </nav>
         <div className="mt-auto border-t border-border px-2 pt-4">
-          <p className="mono truncate text-xs text-fg-muted">{me || "operator"}</p>
-          <button className="mt-2 text-xs font-medium text-fg-muted hover:text-fg" onClick={signOut}>
+          <p className="mono truncate text-sm text-fg-muted">{me || "operator"}</p>
+          <button className="mt-2 text-sm font-medium text-fg-muted hover:text-fg" onClick={signOut}>
             Sign out
           </button>
         </div>
@@ -466,9 +476,13 @@ export function App() {
       <main className="min-w-0">
         <div className="border-b border-border bg-bg-raised lg:hidden">
           <div className="flex items-center justify-between px-4 py-3">
-            <div className="flex items-center gap-2 font-semibold">
-              <span className="grid size-7 place-items-center rounded-md bg-fg text-xs font-bold text-fg-inverse">O</span>
-              Oarlock
+            <div className="flex items-center gap-2.5">
+              <span className="grid size-8 shrink-0 place-items-center border border-border-strong text-[11px] font-semibold leading-none tracking-[0.08em]">
+                A<br />O
+              </span>
+              <span className="text-[13px] font-semibold uppercase tracking-[0.14em]">
+                Oarlock
+              </span>
             </div>
             <button className="btn" onClick={signOut}>Sign out</button>
           </div>
@@ -488,8 +502,8 @@ export function App() {
         <div className="mx-auto flex max-w-[90rem] flex-col gap-6 p-4 sm:p-6 lg:p-8">
           {/* One header per page. The panels below used to repeat it, so every screen
               said the same thing twice in two type sizes. */}
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div>
+          <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border-strong pb-4">
+            <div className="min-w-0">
               <h1 className="text-xl font-semibold">
                 {view.kind === "list" ? current.label : "Oarlock"}
               </h1>
@@ -497,6 +511,17 @@ export function App() {
                 <p className="mt-1 text-sm text-fg-muted">{current.blurb}</p>
               )}
             </div>
+            {/* The title block. A sheet says which one it is out of how many, and the
+                navigation on the left is that index — so the number is wayfinding rather
+                than an ornament counting sections. */}
+            {view.kind === "list" && (
+              <p className="label shrink-0 text-right leading-relaxed">
+                <span className="block text-fg">
+                  Sheet {pages.findIndex((p) => p.id === adminPage) + 1} of {pages.length}
+                </span>
+                File no. OARLOCK-v0
+              </p>
+            )}
             {view.kind === "list" && adminPage === "fleet" && (
               <div className="flex gap-2">
                 <button
@@ -653,7 +678,7 @@ export function App() {
           {view.condition.nextAction && (
             <p className="pb-3 text-fg-muted">{view.condition.nextAction}</p>
           )}
-          <dl className="mono grid grid-cols-[auto_1fr] gap-x-3 text-xs text-fg-faint">
+          <dl className="mono grid grid-cols-[auto_1fr] gap-x-3 text-sm text-fg-faint">
             <dt className="not-mono">Reason</dt>
             <dd className="select-all">{view.condition.id}</dd>
             {view.reference && (
@@ -825,7 +850,7 @@ function DeviceFormEditor({
           value={form.keys}
           onChange={(e) => setForm({ ...form, keys: e.target.value })}
         />
-        <span className="text-xs text-fg-faint">Comma-separated authorized public keys.</span>
+        <span className="text-sm text-fg-faint">Comma-separated authorized public keys.</span>
       </FieldLabel>
       <FieldLabel label="Retired keys">
         <textarea
@@ -855,7 +880,7 @@ function DeviceFormEditor({
       <label className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
         <span>
           <span className="block text-sm font-medium">Enabled</span>
-          <span className="block text-xs text-fg-muted">Allow agent authentication and new sessions.</span>
+          <span className="block text-sm text-fg-muted">Allow agent authentication and new sessions.</span>
         </span>
         <input
           type="checkbox"
@@ -867,7 +892,7 @@ function DeviceFormEditor({
       <label className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
         <span>
           <span className="block text-sm font-medium">Allow passthrough</span>
-          <span className="block text-xs text-fg-muted">Permit explicitly unrecorded sessions for this device.</span>
+          <span className="block text-sm text-fg-muted">Permit explicitly unrecorded sessions for this device.</span>
         </span>
         <input
           type="checkbox"

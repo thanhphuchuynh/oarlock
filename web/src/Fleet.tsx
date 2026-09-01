@@ -76,6 +76,9 @@ export function Fleet(props: FleetProps) {
 
   return (
     <section className="panel" data-testid="fleet">
+      {/* The plate's own heading. Without it the page jumps h1 to h3 at the first
+          expanded row, which is a real gap for anyone navigating by headings. */}
+      <h2 className="sr-only">Devices</h2>
       <div className="panel-header flex-wrap">
         {/* The counts, as a sentence in the header rather than four numbers in large
             type. They are context for the list, not the point of the page. */}
@@ -209,15 +212,15 @@ function DeviceRow({
               "treadmill-4821" reads as an em-dash, and a device id that looks like a
               different device id is the one typo that matters here. */}
           <span className="mono block truncate font-medium">{device.id}</span>
-          <span className="block truncate text-xs text-fg-muted">
+          <span className="block truncate text-sm text-fg-muted">
             {device.platform} · {device.resolved_mode}
             {device.profiles?.length ? ` · ${device.profiles.join(" ")}` : ""}
           </span>
         </span>
         {/* Never colour alone: the dot has a word beside it at every width. */}
-        <span className="shrink-0 text-xs text-fg-muted">{stateWord(device)}</span>
+        <span className="shrink-0 text-sm text-fg-muted">{stateWord(device)}</span>
         {liveHere.length > 0 && (
-          <span className="rounded-full border border-state-recorded/40 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-state-recorded">
+          <span className="border border-state-recorded px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-state-recorded">
             {liveHere.length} live
           </span>
         )}
@@ -316,13 +319,20 @@ function stateWord(device: Device): string {
 function StateDot({ device }: { device: Device }) {
   const tone =
     device.enabled === false
-      ? "bg-fg-faint"
+      ? "text-state-refused"
       : device.connected
         ? "bg-state-recorded"
-        : "bg-fg-faint";
+        : "text-fg-faint";
+  // A square mark, not a dot: nothing on a drawing sheet is round, and a filled versus
+  // hollow square is a second channel the colour does not have to carry alone.
+  const filled = device.enabled !== false && device.connected;
   return (
     <span className="grid size-6 shrink-0 place-items-center" aria-hidden="true">
-      <span className={`size-2.5 rounded-full ${tone}`} />
+      <span
+        className={`size-2.5 border ${filled ? tone : "border-current bg-transparent"} ${
+          filled ? "border-transparent" : ""
+        }`}
+      />
     </span>
   );
 }
@@ -443,14 +453,14 @@ function AccessRule({
         {deny ? "Denied" : "Allowed"}
       </span>
       <span className="mono min-w-0 break-all">{rule.principals.join(", ")}</span>
-      <span className="mono text-xs text-fg-muted">
+      <span className="mono text-sm text-fg-muted">
         {shown.includes("*") ? "every action" : shown.join(" ")}
       </span>
-      {limitsOf(rule) && <span className="text-xs text-fg-faint">{limitsOf(rule)}</span>}
+      {limitsOf(rule) && <span className="text-sm text-fg-faint">{limitsOf(rule)}</span>}
       {deny && rule.reason && (
-        <span className="text-xs text-state-refused">— {rule.reason}</span>
+        <span className="text-sm text-state-refused">— {rule.reason}</span>
       )}
-      {off && <span className="text-xs text-fg-faint">— rule disabled, not consulted</span>}
+      {off && <span className="text-sm text-fg-faint">— rule disabled, not consulted</span>}
     </li>
   );
 }
@@ -499,7 +509,7 @@ function DeviceSessions({
           className="flex flex-col gap-1 border-b border-border/60 pb-1.5 last:border-b-0 last:pb-0 sm:flex-row sm:items-baseline sm:gap-x-2"
         >
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="shrink-0 text-xs text-fg-faint" title={s.created_at}>
+            <span className="shrink-0 text-sm text-fg-faint" title={s.created_at}>
               {relative(s.created_at)}
             </span>
             <span className="mono min-w-0 break-all text-sm text-fg-muted">{s.principal}</span>
@@ -515,7 +525,7 @@ function DeviceSessions({
           </span>
           {/* The reason wraps rather than truncating to three characters. It is the field
               that says why somebody was on this machine. */}
-          <span className="min-w-0 flex-1 text-xs text-fg-muted sm:truncate">
+          <span className="min-w-0 flex-1 text-sm text-fg-muted sm:truncate">
             {s.reason || <span className="text-fg-faint">opened over ssh</span>}
           </span>
           <span className="flex shrink-0 gap-1">
