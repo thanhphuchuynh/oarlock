@@ -85,14 +85,14 @@ export function SQLExplorer({ client }: { client: Client }) {
               className="w-full rounded-md px-2 py-2 text-left hover:bg-bg-raised"
               onClick={() => selectTable(table)}
             >
-              <span className="mono block truncate text-xs font-semibold">{table.name}</span>
+              <span className="mono block truncate text-sm font-semibold">{table.name}</span>
               <span className="mt-1 block truncate text-[11px] text-fg-faint">
                 {table.columns.length} columns
               </span>
             </button>
           ))}
           {visibleTables.length === 0 && (
-            <p className="p-2 text-xs text-fg-muted">No matching tables.</p>
+            <p className="p-2 text-sm text-fg-muted">No matching tables.</p>
           )}
         </div>
       </aside>
@@ -102,14 +102,14 @@ export function SQLExplorer({ client }: { client: Client }) {
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold">Query</h2>
-              <p className="text-xs text-fg-muted">Read-only operational data</p>
+              <p className="text-sm text-fg-muted">Read-only operational data</p>
             </div>
             <button className="btn btn-primary" disabled={running || !query.trim()} onClick={() => void run()} data-testid="run-sql">
               {running ? "Running" : "Run"}
             </button>
           </div>
           <textarea
-            className="field mono min-h-36 resize-y text-xs leading-5"
+            className="field mono min-h-36 resize-y text-sm leading-5"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -153,7 +153,7 @@ export function SQLExplorer({ client }: { client: Client }) {
 
         {history.length > 0 && (
           <details className="border-t border-border px-4 py-3">
-            <summary className="cursor-pointer text-xs font-semibold text-fg-muted">Recent in this tab</summary>
+            <summary className="cursor-pointer text-sm font-semibold text-fg-muted">Recent in this tab</summary>
             <div className="mt-2 grid gap-1">
               {history.map((item) => (
                 <button key={item} className="mono truncate rounded px-2 py-1.5 text-left text-[11px] hover:bg-bg" onClick={() => setQuery(item)}>
@@ -170,7 +170,7 @@ export function SQLExplorer({ client }: { client: Client }) {
 
 function ResultTable({ result }: { result: SQLResult }) {
   return (
-    <table className="w-max min-w-full border-collapse text-left text-xs">
+    <table className="w-max min-w-full border-collapse text-left text-sm">
       <thead className="sticky top-0 z-10 bg-bg">
         <tr>
           {result.columns.map((column, index) => (

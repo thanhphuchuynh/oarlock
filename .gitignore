@@ -5,6 +5,8 @@
 packages/*/dist/
 # A stale console build lands here when vite is run without the outDir override.
 /web/dist/
+# The landing sheet is a static build, same reasoning.
+/landing/dist/
 
 # TypeScript's incremental build metadata: a cache, and it names absolute paths.
 *.tsbuildinfo
@@ -29,6 +31,13 @@ docs/diagrams/*.html
 # receipt records a machine's Chrome rather than anything about this project.
 docs/diagrams/*.visual-check.*
 docs/diagrams/*.png
+
+# Impeccable's per-run scratch: the decision-page transcripts and the build-phase state
+# machine. The durable half of that directory — config.json and surfaces/, which carry the
+# recorded build path and each surface's direction contract — is committed, because a later
+# session reloads them to know what this design already decided.
+.impeccable/questions/
+.impeccable/build/
 
 # ── dependencies ─────────────────────────────────────────────────────────────────
 node_modules/

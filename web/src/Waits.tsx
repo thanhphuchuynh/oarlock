@@ -71,7 +71,7 @@ export function Waits({ steps, reference }: { steps: readonly Step[]; reference?
                     <span className="block text-fg-muted">{s.failure.nextAction}</span>
                   )}
                   {s.detail && (
-                    <span className="mono block pt-1 text-xs text-fg-faint">{s.detail}</span>
+                    <span className="mono block pt-1 text-sm text-fg-faint">{s.detail}</span>
                   )}
                 </>
               ) : (
@@ -81,13 +81,13 @@ export function Waits({ steps, reference }: { steps: readonly Step[]; reference?
               )}
             </span>
             {s.state === "waiting" && s.budget && (
-              <span className="shrink-0 text-xs text-fg-faint">{s.budget}</span>
+              <span className="shrink-0 text-sm text-fg-faint">{s.budget}</span>
             )}
           </li>
         ))}
       </ol>
       {reference && (
-        <p className="mono pt-3 text-xs text-fg-faint">
+        <p className="mono pt-3 text-sm text-fg-faint">
           {/* Present for the report, not shouted at the operator. */}
           <span className="not-mono">Reference (for support): </span>
           {reference}

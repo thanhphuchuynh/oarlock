@@ -8,20 +8,52 @@
  * The one rule that spans both: **a colour is never written twice.** tokens.css is
  * generated from tokens/tokens.json and defines the palette once, as CSS custom
  * properties and as a Tailwind theme; CI fails if it is stale.
+ *
+ * # The world
+ *
+ * The console is a drawing sheet: ruled borders, hairline rules, letterspaced small-caps
+ * labels, section hatching where a shape must read as unavailable, and one carmine ink for
+ * whatever is under examination — the selected row, and the refused state. Nothing is
+ * rounded and nothing casts a shadow, because a sheet has neither; depth is rule weight.
+ *
+ * Where this differs from the landing page, it differs on purpose. That surface persuades
+ * and can spend a Didone display face on a headline. This one is operated: one family
+ * carries labels, data and controls, and the drawing's character survives in the details —
+ * the rules, the numerals, the small caps — rather than in the type. A display face in a
+ * table header would be the world wearing the wrong clothes.
  */
 @import "tailwindcss";
 @import "./tokens.css";
 @import "@oarlock/terminal/oarlock.css";
 @import "@oarlock/terminal/player.css";
 
+@theme {
+  /* One scale, four steps that each do a job: 11 labels, 13 controls and secondary text,
+     15 body, 20 the sheet heading. Ratios of 1.18 / 1.15 / 1.33.
+     Deliberately tighter than the 1.25 a marketing surface wants — product UI carries far
+     more type elements, and exaggerated contrast between a label and its value reads as
+     noise. Declared here so Tailwind's own `text-sm` / `text-xs` land on the scale instead
+     of reintroducing 12px and 14px beside it. */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+
+  --font-sans:
+    "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, "Menlo", monospace;
+}
+
 @layer base {
   body {
     /* An explicit ground: the page must not inherit a colour from whatever is behind it. */
     background: var(--oarlock-bg);
     color: var(--oarlock-fg);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px;
+    font-family: var(--font-sans);
+    font-size: 15px;
     line-height: 1.5;
+    font-variant-numeric: tabular-nums;
   }
 
   html {
@@ -30,88 +62,151 @@
 
   button,
   input,
-  select {
+  select,
+  textarea {
     font: inherit;
+  }
+
+  /* The parts nobody draws still carry the sheet. Colour only: the geometry of a
+     scrollbar is a standard affordance and reinventing it costs more than it returns. */
+  ::selection {
+    background: var(--oarlock-state-refused);
+    color: var(--oarlock-fg-inverse);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--oarlock-state-refused);
+    outline-offset: 2px;
   }
 
   /* Machine values are monospaced everywhere, so they read as values rather than prose. */
   .mono {
-    font-family: "JetBrains Mono", "SF Mono", ui-monospace, "Menlo", monospace;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
 }
 
 @layer components {
-  .btn {
-    @apply inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md border
-      border-border-strong bg-bg px-3 text-sm font-medium text-fg shadow-sm transition-colors
-      hover:bg-bg-raised disabled:pointer-events-none disabled:opacity-50;
+  /* ── the sheet ─────────────────────────────────────────────────────────────── */
+
+  /* A plate: the ruled rectangle everything lives inside. Replaces the rounded, shadowed
+     card. The border is the drawn edge, so it is the strong token and not the hairline. */
+  .panel {
+    @apply overflow-hidden border border-border-strong bg-bg-raised;
   }
 
-  .btn:focus-visible {
-    @apply outline-2 outline-offset-2 outline-state-observed;
+  /* A plate's title block. Ruled off from its contents rather than floated above them. */
+  .panel-header {
+    @apply flex min-h-14 items-center justify-between gap-3 border-b border-border-strong
+      px-4 py-3;
+  }
+
+  /* The letterspaced small caps that label everything on a sheet. 11px is the floor: any
+     smaller and the mannerism costs the reader more than it gives. */
+  .label {
+    @apply text-[11px] font-medium uppercase tracking-[0.14em] text-fg-muted;
+  }
+
+  .row-section-title {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-fg-faint;
+  }
+
+  /* A reference numeral. On the sheet these hang off leader lines; in a table they head
+     the row, and they are how a device is named in prose elsewhere in the console. */
+  .numeral {
+    @apply text-[11px] tabular-nums text-fg-faint;
+    font-family: var(--font-mono);
+  }
+
+  /* ── controls ──────────────────────────────────────────────────────────────── */
+
+  .btn {
+    @apply inline-flex min-h-9 items-center justify-center gap-2 whitespace-nowrap border
+      border-border-strong bg-bg-raised px-3 text-[13px] font-medium tracking-[0.02em] text-fg
+      transition-colors duration-150 hover:bg-bg
+      disabled:pointer-events-none;
+  }
+
+  /* Disabled is hatched, not faded. Opacity makes a control look like it failed to load;
+     hatching is how a drawing says a region is not available. */
+  .btn:disabled {
+    @apply text-fg-faint;
+    background-image: repeating-linear-gradient(
+      45deg,
+      color-mix(in srgb, var(--oarlock-fg-faint) 22%, transparent) 0 1px,
+      transparent 1px 5px
+    );
   }
 
   .btn-primary {
-    @apply border-fg bg-fg font-semibold text-fg-inverse hover:opacity-90;
+    @apply border-fg bg-fg font-semibold text-fg-inverse hover:bg-fg hover:opacity-90;
   }
 
-  /* Destructive actions state the consequence rather than asking a question, so the
-     button says what happens and the confirmation says what it costs. */
   /* The low-emphasis tier. Routine row actions are not decisions, and giving Edit the
-   * same weight as Delete made every table read as a wall of buttons. Referenced in
-   * Permissions before it existed, which is why every button there looked identical. */
+   * same weight as Delete made every table read as a wall of buttons. */
   .btn-quiet {
-    @apply border-transparent bg-transparent text-fg-muted shadow-none hover:bg-bg
-      hover:text-fg;
+    @apply border-transparent bg-transparent text-fg-muted hover:bg-bg hover:text-fg;
   }
 
+  /* Destructive actions state the consequence rather than asking a question. */
   .btn-danger {
-    @apply border-state-refused/40 text-state-refused hover:bg-bg-raised;
+    @apply border-state-refused text-state-refused hover:bg-state-refused hover:text-fg-inverse;
   }
+
+  .field {
+    @apply min-h-9 w-full border border-border-strong bg-bg-raised px-3 py-2 text-fg
+      placeholder:text-fg-faint;
+  }
+
+  .icon-btn {
+    @apply grid size-9 shrink-0 place-items-center border border-border bg-bg-raised
+      text-fg-muted transition-colors duration-150 hover:bg-bg hover:text-fg;
+  }
+
+  /* ── rows ──────────────────────────────────────────────────────────────────── */
 
   /* A row that opens. The whole summary is the control, so the hit area is the row and
    * not a chevron somebody has to aim at. */
   .row-toggle {
-    @apply flex w-full items-center gap-3 px-4 py-3 text-left transition-colors
-      hover:bg-bg focus-visible:outline-2 focus-visible:-outline-offset-2
-      focus-visible:outline-state-observed;
+    @apply flex w-full items-center gap-3 border-l-2 border-transparent px-4 py-3 text-left
+      transition-colors duration-150 hover:bg-bg;
   }
 
-  /* Section headings inside an expanded row: quieter than a panel header, because the
-   * row is already the thing you chose. */
-  .row-section-title {
-    @apply text-[11px] font-semibold uppercase tracking-wider text-fg-faint;
+  /* Under examination. Carmine marks exactly one thing at a time, the way the red
+     annotation ink does on a drawing — here, the row whose detail plate is open. The left
+     rule carries it as well as the ink, so selection survives a colour-vision difference. */
+  .row-toggle[aria-expanded="true"],
+  .row-selected {
+    @apply border-l-state-refused bg-bg;
   }
 
-  .field {
-    @apply min-h-9 w-full rounded-md border border-border-strong bg-bg px-3 py-2 text-fg shadow-sm
-      placeholder:text-fg-faint focus-visible:outline-2 focus-visible:outline-offset-2
-      focus-visible:outline-state-observed;
-  }
-
-  .panel {
-    @apply overflow-hidden rounded-lg border border-border bg-bg-raised shadow-sm;
-  }
-
-  .panel-header {
-    @apply flex min-h-16 items-center justify-between gap-3 px-4 py-3;
-  }
+  /* ── navigation: the sheet index ───────────────────────────────────────────── */
 
   .nav-item {
-    @apply rounded-md px-3 py-2 font-medium text-fg-muted transition-colors hover:bg-bg hover:text-fg;
+    @apply flex items-center gap-2 border-l-2 border-transparent px-3 py-2 text-[13px]
+      font-medium text-fg-muted transition-colors duration-150 hover:bg-bg hover:text-fg;
   }
 
   .nav-item-active {
-    @apply bg-bg text-fg shadow-sm;
+    @apply border-l-state-refused bg-bg text-fg;
   }
 
-  .icon-btn {
-    @apply grid size-9 shrink-0 place-items-center rounded-md border border-border bg-bg text-lg
-      text-fg-muted transition-colors hover:bg-bg-raised hover:text-fg;
+  /* ── state ─────────────────────────────────────────────────────────────────── */
+
+  /* Six states, and colour is never the only channel: each carries a letter as well, so
+     the set survives a colour-vision difference and a bad screen in a plant room. */
+  .state {
+    @apply inline-flex items-center gap-1.5 text-[11px] font-medium uppercase
+      tracking-[0.1em];
+  }
+
+  .state::before {
+    @apply grid size-4 place-items-center border text-[9px] font-semibold not-italic;
+    content: attr(data-mark);
+    border-color: currentColor;
   }
 
   .not-mono {
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: var(--font-sans);
   }
 }

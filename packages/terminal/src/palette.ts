@@ -12,7 +12,7 @@ export interface XtermPalette {
 export const palette: { readonly light: XtermPalette; readonly dark: XtermPalette } = {
   light: {
     background: "#1a1a1e",
-    foreground: "#eceaeb",
+    foreground: "#dfe7ee",
     selectionBackground: "#3d5a80",
     "black": "#1a1a1e",
     "red": "#c0473f",
@@ -34,7 +34,7 @@ export const palette: { readonly light: XtermPalette; readonly dark: XtermPalett
   },
   dark: {
     background: "#0e0e11",
-    foreground: "#eceaeb",
+    foreground: "#dfe7ee",
     selectionBackground: "#33507a",
     "black": "#0e0e11",
     "red": "#e8706e",

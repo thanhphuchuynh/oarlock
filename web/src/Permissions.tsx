@@ -195,7 +195,7 @@ export function Permissions({ client }: { client: Client }) {
           <p className="mt-1 text-sm text-fg-muted">
             {refused.detail || refused.condition.nextAction}
           </p>
-          <p className="mt-2 text-xs text-fg-faint">
+          <p className="mt-2 text-sm text-fg-faint">
             Reading the policy needs the <span className="mono">admin:permissions</span> action
             on <span className="mono">gateway</span>.
           </p>
@@ -203,7 +203,7 @@ export function Permissions({ client }: { client: Client }) {
       ) : (
       <div className="overflow-x-auto border-t border-border">
         <table className="w-full border-collapse text-left">
-          <thead className="bg-bg-raised text-xs uppercase tracking-wider text-fg-faint">
+          <thead className="bg-bg-raised text-sm uppercase tracking-wider text-fg-faint">
             <tr>
               <th className="px-3 py-2 font-medium">Effect</th>
               <th className="px-3 py-2 font-medium">Permission</th>
@@ -238,22 +238,22 @@ export function Permissions({ client }: { client: Client }) {
                 </td>
                 <td className="px-3 py-3">
                   <div className="font-medium">{permission.name || permission.id}</div>
-                  <div className="mono mt-0.5 text-xs text-fg-faint">{permission.id}</div>
+                  <div className="mono mt-0.5 text-sm text-fg-faint">{permission.id}</div>
                   {/* One word for the state, next to the thing it is the state of. It
                       used to be a column reading "Enabled" beside a button reading
                       "Disable" — two words a foot apart meaning the same thing. */}
                   {!permission.enabled && (
-                    <div className="mt-1 text-xs text-fg-faint">Disabled — not consulted</div>
+                    <div className="mt-1 text-sm text-fg-faint">Disabled — not consulted</div>
                   )}
                   {deny && permission.reason && (
-                    <div className="mt-1 max-w-[40ch] text-xs text-state-refused">{permission.reason}</div>
+                    <div className="mt-1 max-w-[40ch] text-sm text-state-refused">{permission.reason}</div>
                   )}
                 </td>
-                <td className="mono max-w-64 px-3 py-3 text-xs text-fg-muted">{permission.principals.join(", ")}</td>
-                <td className="mono hidden max-w-64 px-3 py-3 text-xs text-fg-muted md:table-cell">
+                <td className="mono max-w-64 px-3 py-3 text-sm text-fg-muted">{permission.principals.join(", ")}</td>
+                <td className="mono hidden max-w-64 px-3 py-3 text-sm text-fg-muted md:table-cell">
                   {permission.devices.length ? permission.devices.join(", ") : "*"}
                 </td>
-                <td className="mono hidden px-3 py-3 text-xs text-fg-muted lg:table-cell">{permission.actions.join(", ")}</td>
+                <td className="mono hidden px-3 py-3 text-sm text-fg-muted lg:table-cell">{permission.actions.join(", ")}</td>
                 <td className="px-3 py-3 text-right">
                   {/* Routine actions read as text; the destructive one is separated from
                       them and is the only coloured control in the row. */}
@@ -351,7 +351,7 @@ function PermissionDrawer({ permission, onClose, onSave }: {
             value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></Label>
           <label className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
             <span><span className="block text-sm font-medium">Enabled</span>
-              <span className="block text-xs text-fg-muted">Include this permission in authorization decisions.</span></span>
+              <span className="block text-sm text-fg-muted">Include this permission in authorization decisions.</span></span>
             <input type="checkbox" className="mt-1 size-4 accent-current" checked={form.enabled}
               onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />
           </label>
