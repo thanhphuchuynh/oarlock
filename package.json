@@ -12,7 +12,9 @@
     "test:component": "playwright test --project=component",
     "harness": "vite dev --mode harness",
     "build:ui": "vite build --mode console --outDir ../cmd/oarlockd/app/ui/dist --emptyOutDir && node tokens/keep-dist.mjs",
-    "dev:ui": "vite dev --mode console"
+    "dev:ui": "vite dev --mode console",
+    "landing": "vite --mode landing",
+    "build:landing": "vite build --mode landing"
   },
   "devDependencies": {
     "@oarlock/react": "workspace:*",

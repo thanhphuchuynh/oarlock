@@ -1,0 +1,724 @@
+/* The sheet.
+ *
+ * A utility patent drawing sheet: india-ink line on warm bond, one ruled border, section
+ * hatching as the only fill, and one carmine ink reserved for what is under examination.
+ * Here what is under examination is what is NOT BUILT — so the page's own honesty is a
+ * colour rule rather than a paragraph somebody has to reach.
+ *
+ * Three inks, no tint ramp. Lightness comes from line weight and hatch density, the way it
+ * does on a real sheet, never from a grey scale.
+ *
+ * This world commits to paper. There is no dark variant: a drawing sheet inverted is not a
+ * drawing sheet, and every colour below is painted explicitly so the page never borrows a
+ * ground from the browser.
+ */
+
+:root {
+  --bond: #fbfaf6;
+  --bond-sunk: #f4f2eb; /* the field inside a ruled panel, one shade down from the sheet */
+  --ink: #14161a;
+  --hatch: #5f646a; /* rules, hatching, secondary text — 5.7:1 on bond, 5.3:1 on the sunk ground */
+  --carmine: #b3231c;
+
+  --rule-hair: 0.5px;
+  --rule: 1px;
+  --rule-heavy: 1.5px;
+
+  --sheet-margin: clamp(0.75rem, 1.6vw, 1.5rem);
+  --gutter: clamp(1.25rem, 2.5vw, 2.5rem);
+
+  --face-display: "Bodoni Moda", "Didot", "Bodoni MT", Georgia, serif;
+  --face-label: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --face-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bond);
+  color: var(--ink);
+  font-family: var(--face-label);
+  font-size: 15px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  /* The tooth of the stock. Two hairline grids at different scales, so the ground reads as
+     laid paper rather than as flat #fbfaf6. */
+  background-image:
+    repeating-linear-gradient(0deg, rgba(20, 22, 26, 0.022) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(90deg, rgba(20, 22, 26, 0.014) 0 1px, transparent 1px 4px);
+}
+
+/* ── browser surfaces: the parts not drawn still carry the sheet ─────────────── */
+
+::selection {
+  background: var(--carmine);
+  color: var(--bond);
+}
+
+:focus-visible {
+  outline: var(--rule-heavy) solid var(--carmine);
+  outline-offset: 3px;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bond-sunk);
+  border-left: var(--rule-hair) solid var(--hatch);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--hatch);
+  border: 3px solid var(--bond-sunk);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink);
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--hatch);
+  text-underline-offset: 0.22em;
+  text-decoration-thickness: from-font;
+}
+a:hover {
+  text-decoration-color: var(--carmine);
+}
+
+/* ── the sheet frame ─────────────────────────────────────────────────────────── */
+
+.sheet {
+  border: var(--rule) solid var(--ink);
+  margin: var(--sheet-margin);
+  background: var(--bond);
+}
+
+/* ── sheet head: monogram, title, navigation, title block ────────────────────── */
+
+.head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: stretch;
+  border-bottom: var(--rule) solid var(--ink);
+}
+
+.monogram {
+  display: grid;
+  place-items: center;
+  padding: 0.7rem 0.95rem;
+  border-right: var(--rule) solid var(--ink);
+  font-family: var(--face-display);
+  font-size: 1.35rem;
+  line-height: 0.92;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.head-mid {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem var(--gutter);
+  padding: 0.7rem 1rem;
+}
+
+.wordmark {
+  font-family: var(--face-label);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  margin: 0;
+}
+.wordmark span {
+  display: block;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  color: var(--hatch);
+  font-size: 0.78rem;
+}
+
+.sheet-nav {
+  min-width: 0;
+  flex-wrap: wrap;
+  display: flex;
+  gap: clamp(0.9rem, 2vw, 2rem);
+  margin-left: auto;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.sheet-nav a {
+  text-decoration: none;
+  padding-bottom: 2px;
+  border-bottom: var(--rule) solid transparent;
+}
+.sheet-nav a:hover,
+.sheet-nav a[aria-current="true"] {
+  border-bottom-color: var(--carmine);
+}
+
+.titleblock {
+  border-left: var(--rule) solid var(--ink);
+  padding: 0.7rem 1rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hatch);
+  white-space: nowrap;
+}
+.titleblock b {
+  display: block;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* ── the body of sheet 1: rail | field | numerals ────────────────────────────── */
+
+.plate {
+  display: grid;
+  grid-template-columns:
+    minmax(118px, 0.52fr)
+    minmax(0, 1.55fr)
+    minmax(0, 1.5fr)
+    minmax(178px, 0.78fr);
+}
+
+.rail {
+  border-right: var(--rule) solid var(--ink);
+  padding: var(--gutter) 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+}
+
+.rail dl {
+  margin: 0;
+}
+.rail dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hatch);
+}
+.rail dd {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+}
+
+/* A registration mark. Drawn, never a glyph. */
+.reg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  color: var(--hatch);
+}
+
+.field {
+  padding: calc(var(--gutter) * 1.15) var(--gutter);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.claim {
+  font-family: var(--face-display);
+  font-weight: 400;
+  font-size: clamp(1.85rem, 3.05vw, 3.05rem);
+  line-height: 1.04;
+  letter-spacing: 0.012em;
+  text-transform: uppercase;
+  text-wrap: balance;
+  margin: 0;
+}
+
+.cost {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.62;
+  color: var(--ink);
+  border-left: var(--rule-heavy) solid var(--carmine);
+  padding-left: 0.9rem;
+}
+.cost b {
+  font-weight: 600;
+}
+
+.lede {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--hatch);
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+/* ── ruled buttons ───────────────────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.btn {
+  --btn-ink: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.62rem 1.05rem;
+  border: var(--rule) solid var(--btn-ink);
+  box-shadow: 0 0 0 var(--rule-hair) var(--bond) inset, 0 0 0 calc(var(--rule-hair) * 3) var(--btn-ink) inset;
+  color: var(--btn-ink);
+  background: var(--bond);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 180ms cubic-bezier(0.22, 1, 0.36, 1), color 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.btn:hover {
+  background: var(--btn-ink);
+  color: var(--bond);
+}
+.btn svg {
+  flex: none;
+}
+.btn--quiet {
+  --btn-ink: var(--hatch);
+  box-shadow: none;
+  /* hatched fill, the sheet's own way of filling a shape */
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(110, 115, 121, 0.16) 0 1px,
+    transparent 1px 5px
+  );
+}
+.btn--quiet:hover {
+  background-image: none;
+  --btn-ink: var(--ink);
+}
+
+/* ── figure ──────────────────────────────────────────────────────────────────── */
+
+.figure {
+  border-left: var(--rule) solid var(--ink);
+  border-right: var(--rule) solid var(--ink);
+  padding: var(--gutter);
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.figure-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+}
+.figure-no {
+  white-space: nowrap;
+  font-family: var(--face-display);
+  font-size: 1.55rem;
+  letter-spacing: 0.06em;
+}
+.figure-cap {
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hatch);
+}
+
+.figure svg {
+  width: 100%;
+  height: auto;
+  max-height: 62vh;
+  display: block;
+  margin: auto 0;
+}
+
+/* Leader lines and part outlines. Weight, not colour, carries emphasis. */
+.ln {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.ln-hair {
+  fill: none;
+  stroke: var(--hatch);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+.ln-axis {
+  fill: none;
+  stroke: var(--hatch);
+  stroke-width: 0.6;
+  stroke-dasharray: 7 3 1.5 3;
+  vector-effect: non-scaling-stroke;
+}
+.numeral {
+  font-family: var(--face-label);
+  font-size: 15px;
+  fill: var(--ink);
+  letter-spacing: 0.04em;
+}
+.part {
+  fill: var(--bond);
+  stroke: var(--ink);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transition: fill 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.hatched {
+  fill: url(#hatch);
+  stroke: var(--ink);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The one thing under examination. Numeral, leader and outline light together — the
+   discipline the reference sheet holds and the reason this ink exists. */
+.g-part.is-lit .part,
+.g-part.is-lit .hatched {
+  stroke: var(--carmine);
+  stroke-width: 1.6;
+}
+.g-part.is-lit .ln,
+.g-part.is-lit .ln-hair {
+  stroke: var(--carmine);
+  stroke-width: 1.2;
+}
+.g-part.is-lit .numeral {
+  fill: var(--carmine);
+  font-weight: 600;
+}
+.g-part {
+  cursor: pointer;
+}
+
+/* ── reference numerals ──────────────────────────────────────────────────────── */
+
+.numerals {
+  padding: var(--gutter) 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.numerals h2,
+.band h2,
+.section h2 {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  color: var(--hatch);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.numerals table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.numerals th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hatch);
+  padding: 0 0 0.35rem;
+  border-bottom: var(--rule) solid var(--ink);
+}
+.numerals td {
+  padding: 0.28rem 0;
+  border-bottom: var(--rule-hair) solid rgba(110, 115, 121, 0.35);
+  vertical-align: baseline;
+}
+.numerals td:first-child {
+  width: 2.6em;
+  color: var(--hatch);
+}
+.numerals tr {
+  transition: background 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.numerals tr[data-part] {
+  cursor: pointer;
+}
+.numerals tr.is-lit td,
+.numerals tr[data-part]:hover td {
+  background: var(--bond-sunk);
+}
+.numerals tr.is-lit td,
+.numerals tr.is-lit td:first-child {
+  color: var(--carmine);
+  font-weight: 600;
+}
+
+/* Not built. The carmine row is not decoration: it is the § 12 column. */
+.numerals tr.absent td,
+.numerals tr.absent td:first-child {
+  color: var(--carmine);
+}
+.numerals tr.absent td:last-child::after {
+  content: " · not built";
+  color: var(--carmine);
+  font-size: 0.86em;
+  letter-spacing: 0.04em;
+}
+
+.numerals figcaption {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--hatch);
+  margin: 0;
+}
+
+/* ── the seal ────────────────────────────────────────────────────────────────── */
+
+.seal {
+  margin-top: auto;
+  width: 126px;
+  height: 126px;
+  color: var(--carmine);
+  opacity: 0.92;
+}
+.seal svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ── bands and sections below the first sheet ────────────────────────────────── */
+
+.band {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  border-top: var(--rule) solid var(--ink);
+}
+.band > * {
+  padding: 1.15rem 1rem;
+  border-right: var(--rule-hair) solid var(--hatch);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+.band > *:last-child {
+  border-right: 0;
+}
+
+.doc {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.82rem;
+  text-decoration: none;
+  padding: 0.24rem 0;
+  border-bottom: var(--rule-hair) solid rgba(110, 115, 121, 0.35);
+}
+.doc:last-child {
+  border-bottom: 0;
+}
+.doc span {
+  color: var(--hatch);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.doc:hover {
+  color: var(--carmine);
+}
+
+.section {
+  border-top: var(--rule) solid var(--ink);
+  padding: calc(var(--gutter) * 1.3) var(--gutter);
+  display: grid;
+  grid-template-columns: minmax(140px, 0.62fr) minmax(0, 1fr);
+  gap: var(--gutter);
+}
+.section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  min-width: 0;
+}
+.section h3 {
+  font-family: var(--face-display);
+  font-weight: 400;
+  font-size: clamp(1.5rem, 3vw, 2.4rem);
+  line-height: 1.08;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  margin: 0;
+  text-wrap: balance;
+}
+.section p {
+  margin: 0;
+  max-width: 68ch;
+  line-height: 1.68;
+}
+.section p.muted {
+  color: var(--hatch);
+}
+
+/* ── transcript ──────────────────────────────────────────────────────────────── */
+
+.transcript {
+  border: var(--rule) solid var(--ink);
+  background: var(--bond-sunk);
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  font-family: var(--face-mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  margin: 0;
+}
+.transcript .cmd {
+  color: var(--ink);
+}
+.transcript .out {
+  color: var(--hatch);
+}
+.transcript .lit {
+  color: var(--carmine);
+}
+
+/* ── two-column spec list ────────────────────────────────────────────────────── */
+
+.spec {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0 var(--gutter);
+  margin: 0;
+}
+.spec div {
+  padding: 0.7rem 0;
+  border-top: var(--rule-hair) solid rgba(110, 115, 121, 0.4);
+}
+.spec dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--hatch);
+}
+.spec dd {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+/* ── foot ────────────────────────────────────────────────────────────────────── */
+
+.foot {
+  border-top: var(--rule) solid var(--ink);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem var(--gutter);
+  align-items: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hatch);
+}
+.foot a {
+  text-decoration: none;
+}
+.foot a:hover {
+  color: var(--carmine);
+}
+
+/* ── responsive: the sheet stacks figure-by-figure, leaders redrawn to fit ───── */
+
+@media (max-width: 1180px) {
+  .plate {
+    grid-template-columns: minmax(118px, 0.6fr) minmax(0, 2.1fr) minmax(178px, 0.9fr);
+  }
+  .figure {
+    grid-column: 2 / 3;
+    border-right: 0;
+    border-bottom: var(--rule) solid var(--ink);
+  }
+}
+
+@media (max-width: 980px) {
+  .plate {
+    grid-template-columns: 1fr;
+  }
+  .figure {
+    grid-column: auto;
+  }
+  .rail {
+    border-right: 0;
+    border-bottom: var(--rule) solid var(--ink);
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+  }
+  .seal {
+    margin-top: 0;
+    width: 76px;
+    height: 76px;
+  }
+  .figure {
+    border-left: 0;
+    border-right: 0;
+    border-top: var(--rule) solid var(--ink);
+    border-bottom: var(--rule) solid var(--ink);
+  }
+  .section {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .head {
+    grid-template-columns: auto 1fr;
+  }
+  .titleblock {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: var(--rule) solid var(--ink);
+    white-space: normal;
+  }
+  .sheet-nav {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}

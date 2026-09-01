@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oarlock — an SSH gateway for machines you cannot dial</title>
+    <meta
+      name="description"
+      content="A real ssh prompt on a device behind NAT, without a listener, a host key, or an open port on that device. The gateway is the SSH server; the device only dials out."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./sheet.css" />
+  </head>
+  <body>
+    <main class="sheet">
+      <!-- ── sheet head ────────────────────────────────────────────────────── -->
+      <header class="head">
+        <div class="monogram" aria-hidden="true">A<br />O</div>
+        <div class="head-mid">
+          <h1 class="wordmark">Oarlock<span>gateway-terminated ssh</span></h1>
+          <nav class="sheet-nav" aria-label="Sheet">
+            <a href="#overview" aria-current="true">Overview</a>
+            <a href="#reach">Reach</a>
+            <a href="#security">Security</a>
+            <a href="#quickstart">Quickstart</a>
+            <a href="#documents">Documents</a>
+          </nav>
+        </div>
+        <div class="titleblock">
+          <b>Sheet 1 of 3</b>
+          File no. OARLOCK-v0
+        </div>
+      </header>
+
+      <!-- ── plate: rail | field | numerals ────────────────────────────────── -->
+      <div class="plate" id="overview">
+        <aside class="rail">
+          <dl>
+            <dt>Licence</dt>
+            <dd>Apache 2.0</dd>
+          </dl>
+          <dl>
+            <dt>Protocol</dt>
+            <dd>v0 — unstable</dd>
+          </dl>
+          <dl>
+            <dt>Status</dt>
+            <dd>Runnable, unreleased</dd>
+          </dl>
+          <dl>
+            <dt>Termination</dt>
+            <dd>Gateway (mode C)</dd>
+          </dl>
+          <dl>
+            <dt>Device leg</dt>
+            <dd>Outbound only, :443</dd>
+          </dl>
+          <svg class="reg" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1" />
+            <path d="M12 0v24M0 12h24" stroke="currentColor" stroke-width="1" />
+          </svg>
+
+          <div class="seal" role="img" aria-label="Apache 2.0, wire version 0, unstable">
+            <svg viewBox="0 0 200 200">
+              <defs>
+                <path id="sealArc" d="M100,100 m-74,0 a74,74 0 1,1 148,0 a74,74 0 1,1 -148,0" fill="none" />
+              </defs>
+              <circle cx="100" cy="100" r="86" fill="none" stroke="currentColor" stroke-width="2.5" />
+              <circle cx="100" cy="100" r="79" fill="none" stroke="currentColor" stroke-width="1" />
+              <text font-family="Archivo, sans-serif" font-size="15.5" letter-spacing="3.4" fill="currentColor">
+                <textPath href="#sealArc" startOffset="2%">
+                  APACHE 2.0 · WIRE VERSION 0 · UNSTABLE ·
+                </textPath>
+              </text>
+              <text
+                x="100" y="88" text-anchor="middle"
+                font-family="Bodoni Moda, Georgia, serif" font-size="30" fill="currentColor"
+              >v0</text>
+              <path d="M52 100h96" stroke="currentColor" stroke-width="1.5" />
+              <text
+                x="100" y="122" text-anchor="middle"
+                font-family="Archivo, sans-serif" font-size="12.5" letter-spacing="2" fill="currentColor"
+              >NO RELEASES</text>
+            </svg>
+          </div>
+        </aside>
+
+        <section class="field">
+          <h2 class="claim">An SSH gateway for machines you cannot dial</h2>
+
+          <p class="cost">
+            <b>The gateway reads every keystroke and every byte of output, and can inject its
+            own.</b>
+            That is not a gap. It is the direct cost of the one decision this is built on, and
+            it is stated here before anything else it makes possible.
+          </p>
+
+          <p class="lede">
+            A real <code>ssh</code> prompt on a device behind NAT, on a cellular APN, or on a
+            customer's LAN — without putting a listener, a host key, or an open port on that
+            device. The gateway is the SSH server. The device only ever dials out. Because the
+            gateway sits in the plaintext, every session can be recorded, and authorisation can
+            be withdrawn while the session is still open.
+          </p>
+
+          <div class="actions">
+            <a class="btn" href="#quickstart">
+              Run the quickstart
+              <svg width="15" height="9" viewBox="0 0 15 9" fill="none" aria-hidden="true">
+                <path d="M0 4.5h13M9.5 1 13 4.5 9.5 8" stroke="currentColor" stroke-width="1.2" />
+              </svg>
+            </a>
+            <a class="btn btn--quiet" href="#security">
+              Read the threat model
+              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+                <path d="M2 1h6l3 3v8H2z" stroke="currentColor" stroke-width="1.1" />
+                <path d="M8 1v3h3" stroke="currentColor" stroke-width="1.1" />
+              </svg>
+            </a>
+          </div>
+        </section>
+
+        <!-- ── Fig. 1 ─────────────────────────────────────────────────────── -->
+        <figure class="figure">
+          <figcaption class="figure-head">
+            <span class="figure-no">Fig. 1</span>
+            <span class="figure-cap">Exploded view: one session, end to end</span>
+          </figcaption>
+          <svg viewBox="0 0 500 560" role="img" aria-labelledby="figTitle">
+            <title id="figTitle">
+              An exploded assembly of one Oarlock session: the operator's client, the gateway
+              and its parts, the outbound session connection, and the agent on the device.
+            </title>
+            <defs>
+              <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <line x1="0" y1="0" x2="0" y2="6" stroke="#5f646a" stroke-width="0.8" />
+              </pattern>
+            </defs>
+
+            <!-- assembly axis -->
+            <path class="ln-axis" d="M250 14V546" />
+
+            <g id="parts">
+              <g class="g-part" data-part="10">
+                <ellipse class="part" cx="250" cy="38" rx="46" ry="13" />
+                <ellipse class="ln-hair" cx="250" cy="38" rx="24" ry="7" />
+                <path class="ln-hair" d="M204 38C160 38 140 26 104 26" />
+                <text class="numeral" x="96" y="30" text-anchor="end">10</text>
+              </g>
+              <g class="g-part" data-part="12">
+                <ellipse class="hatched" cx="250" cy="84" rx="78" ry="21" />
+                <ellipse class="part" cx="250" cy="84" rx="38" ry="10" />
+                <path class="ln-hair" d="M328 84C368 84 384 72 416 72" />
+                <text class="numeral" x="424" y="76">12</text>
+              </g>
+              <g class="g-part" data-part="14">
+                <ellipse class="part" cx="250" cy="126" rx="54" ry="15" />
+                <path class="ln-hair" d="M196 126C158 126 140 116 108 116" />
+                <text class="numeral" x="100" y="120" text-anchor="end">14</text>
+              </g>
+              <g class="g-part" data-part="19">
+                <ellipse class="part" cx="250" cy="166" rx="54" ry="15" />
+                <ellipse class="ln-hair" cx="250" cy="166" rx="28" ry="8" />
+                <path class="ln-hair" d="M304 166C344 166 360 158 392 158" />
+                <text class="numeral" x="400" y="162">19</text>
+              </g>
+              <g class="g-part" data-part="21">
+                <ellipse class="part" cx="250" cy="204" rx="38" ry="11" />
+                <path class="ln-hair" d="M212 204C178 204 162 198 132 198" />
+                <text class="numeral" x="124" y="202" text-anchor="end">21</text>
+              </g>
+              <g class="g-part" data-part="23">
+                <ellipse class="hatched" cx="250" cy="242" rx="44" ry="13" />
+                <path class="ln-hair" d="M294 242C332 242 348 236 378 236" />
+                <text class="numeral" x="386" y="240">23</text>
+              </g>
+
+              <g class="g-part" data-part="27">
+                <ellipse class="part" cx="250" cy="300" rx="98" ry="27" />
+                <ellipse class="ln-hair" cx="250" cy="300" rx="66" ry="18" />
+                <ellipse class="ln-hair" cx="250" cy="300" rx="34" ry="9" />
+                <path class="ln-hair" d="M152 300C114 300 96 286 64 286" />
+                <text class="numeral" x="56" y="290" text-anchor="end">27</text>
+              </g>
+
+              <g class="g-part" data-part="31">
+                <ellipse class="part" cx="250" cy="360" rx="58" ry="16" />
+                <path class="ln-axis" d="M250 328v16M250 377v16" />
+                <path class="ln-hair" d="M308 360C346 360 362 352 392 352" />
+                <text class="numeral" x="400" y="356">31</text>
+              </g>
+
+              <g class="g-part" data-part="34">
+                <ellipse class="hatched" cx="250" cy="414" rx="78" ry="21" />
+                <ellipse class="part" cx="250" cy="414" rx="38" ry="10" />
+                <path class="ln-hair" d="M172 414C136 414 118 404 88 404" />
+                <text class="numeral" x="80" y="408" text-anchor="end">34</text>
+              </g>
+              <g class="g-part" data-part="36">
+                <ellipse class="part" cx="250" cy="462" rx="46" ry="13" />
+                <path class="ln-hair" d="M296 462C334 462 350 456 380 456" />
+                <text class="numeral" x="388" y="460">36</text>
+              </g>
+              <g class="g-part" data-part="40">
+                <ellipse class="part" cx="250" cy="506" rx="34" ry="10" />
+                <ellipse class="ln-hair" cx="250" cy="506" rx="17" ry="5" />
+                <path class="ln-hair" d="M216 506C184 506 168 500 138 500" />
+                <text class="numeral" x="130" y="504" text-anchor="end">40</text>
+              </g>
+            </g>
+          </svg>
+        </figure>
+
+        <!-- ── reference numerals ─────────────────────────────────────────── -->
+        <aside class="numerals">
+          <h2>
+            Reference numerals
+            <svg class="reg" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="1" />
+              <path d="M12 0v24M0 12h24" stroke="currentColor" stroke-width="1" />
+            </svg>
+          </h2>
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">No.</th>
+                <th scope="col">Component</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr data-part="10"><td>10</td><td>Operator's ssh client</td></tr>
+              <tr data-part="12"><td>12</td><td>SSH front door</td></tr>
+              <tr data-part="14"><td>14</td><td>Authenticator</td></tr>
+              <tr data-part="19"><td>19</td><td>Authorizer</td></tr>
+              <tr data-part="21"><td>21</td><td>Ticket store</td></tr>
+              <tr data-part="23"><td>23</td><td>Recorder</td></tr>
+              <tr data-part="27"><td>27</td><td>Gateway core</td></tr>
+              <tr data-part="31"><td>31</td><td>Session connection</td></tr>
+              <tr data-part="34"><td>34</td><td>Agent</td></tr>
+              <tr data-part="36"><td>36</td><td>Pseudoterminal</td></tr>
+              <tr data-part="40"><td>40</td><td>Device loopback</td></tr>
+              <tr class="absent"><td>44</td><td>SSH-CA authenticator</td></tr>
+              <tr class="absent"><td>46</td><td>Mode A passthrough</td></tr>
+              <tr class="absent"><td>48</td><td>Channel binding</td></tr>
+            </tbody>
+          </table>
+          <figcaption>
+            Carmine marks what is under examination. Here that is what is
+            <em>not built</em> — read the same way in the threat model, which keeps the full
+            list of what is implemented, what is tested, and what is only described.
+          </figcaption>
+        </aside>
+      </div>
+
+      <!-- ── reach ─────────────────────────────────────────────────────────── -->
+      <section class="section" id="reach">
+        <h2>Reach</h2>
+        <div class="section-body">
+          <h3>The machine is in somebody's living room</h3>
+          <p>
+            A treadmill in a customer's home. A rower on a gym floor behind a router nobody
+            controls. It is Android, frequently on cellular, frequently asleep, and it will
+            never accept an inbound connection. Support still has to reach it, and the usual
+            answers (a VPN on the device, a reverse tunnel nobody audits, a listener on a port
+            somebody will eventually find) all put something on the device that has to be
+            defended.
+          </p>
+          <p class="muted">
+            Two ways to reach one. In <b>persistent</b> mode the agent holds a single outbound
+            connection open and the gateway rings it. In <b>dispatch</b> mode a doorbell — MQTT,
+            a webhook, an exec — wakes the agent, which then dials out for that session only.
+            Both converge on the same code the moment a session opens; the mode only decides how
+            the two ends find each other.
+          </p>
+          <dl class="spec">
+            <div>
+              <dt>Listeners added to the device</dt>
+              <dd>None</dd>
+            </div>
+            <div>
+              <dt>Host keys on the device</dt>
+              <dd>None</dd>
+            </div>
+            <div>
+              <dt>Credential held by the device</dt>
+              <dd>An Ed25519 key it generated itself and never sends</dd>
+            </div>
+            <div>
+              <dt>Inbound ports opened anywhere</dt>
+              <dd>None — the device dials out to :443</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <!-- ── security ──────────────────────────────────────────────────────── -->
+      <section class="section" id="security">
+        <h2>Security</h2>
+        <div class="section-body">
+          <h3>Stated before it is claimed</h3>
+          <p>
+            Terminating SSH at the gateway is what makes recording and mid-session revocation
+            possible, and it is also what puts the plaintext somewhere an attacker could reach.
+            An attacker with code execution in the gateway can read live sessions, replay
+            recordings, mint tickets and open a shell on any device in the fleet. Anyone
+            evaluating this should decide whether that is acceptable before reading anything
+            else.
+          </p>
+          <p class="muted">
+            What follows from accepting it is written down rather than implied: the gateway is
+            treated as the most sensitive service in the deployment, authorisation is checked per
+            action, per device and per target, and it is re-checked every thirty seconds for the
+            life of the session — so a withdrawn grant closes a shell that is already open.
+          </p>
+          <dl class="spec">
+            <div>
+              <dt>Operator identity</dt>
+              <dd>A key, or an identity provider, on all three surfaces</dd>
+            </div>
+            <div>
+              <dt>Device identity</dt>
+              <dd>Ed25519 challenge–response, key generated on the device</dd>
+            </div>
+            <div>
+              <dt>Grant scope</dt>
+              <dd>Action, device, and target — a port, a path, an argv</dd>
+            </div>
+            <div>
+              <dt>Recording</dt>
+              <dd>asciicast v3, hash-chained, signed manifest</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <!-- ── quickstart ────────────────────────────────────────────────────── -->
+      <section class="section" id="quickstart">
+        <h2>Quickstart</h2>
+        <div class="section-body">
+          <h3>A transcript, not a plan</h3>
+          <p class="muted">
+            The gateway and the agent on one machine, an operator key, and a shell. What is
+            printed below is what the terminal prints.
+          </p>
+          <pre class="transcript"><code><span class="cmd">$ ssh -p 2222 -i ./operator_key treadmill-4821@127.0.0.1</span>
+<span class="out">oarlock: waking treadmill-4821…</span>
+<span class="out">oarlock: treadmill-4821 · gateway-terminated · <span class="lit">this session is recorded</span></span>
+<span class="cmd">sh-3.2$</span> </code></pre>
+          <p class="muted">
+            The agent refuses to start without either a pinned gateway certificate or an explicit
+            <code>-insecure-skip-pin</code>. Wire version v0 has no channel binding, so pinning is
+            what stands between the handshake and a TLS-terminating middlebox relaying it. An
+            agent that connects unpinned because nobody passed a flag is an agent nobody decided
+            about.
+          </p>
+        </div>
+      </section>
+
+      <!-- ── documents ─────────────────────────────────────────────────────── -->
+      <div class="band" id="documents">
+        <div>
+          <h2>Documents</h2>
+          <a class="doc" href="../docs/protocol.md">Protocol <span>v0</span></a>
+          <a class="doc" href="../docs/threat-model.md">Threat model <span>§ 12 status</span></a>
+          <a class="doc" href="../docs/plugins.md">Plugins <span>authorizer api</span></a>
+          <a class="doc" href="../docs/sdk.md">SDK <span>agents</span></a>
+        </div>
+        <div>
+          <h2>Figures</h2>
+          <a class="doc" href="../docs/diagrams/security-boundaries.html">Fig. 2 <span>trust boundaries</span></a>
+          <a class="doc" href="../docs/diagrams/port-forwarding.html">Fig. 3 <span>port forwarding</span></a>
+          <a class="doc" href="../docs/diagrams/authentication.html">Fig. 4 <span>authentication</span></a>
+          <a class="doc" href="../docs/diagrams/">Drawing index <span>readme</span></a>
+        </div>
+        <div>
+          <h2>Profiles</h2>
+          <a class="doc" href="../docs/protocol.md">shell <span>a pty</span></a>
+          <a class="doc" href="../docs/protocol.md">exec <span>allow-listed argv</span></a>
+          <a class="doc" href="../docs/protocol.md">file <span>confined root</span></a>
+          <a class="doc" href="../docs/protocol.md">tcp <span>ssh -L, loopback</span></a>
+        </div>
+        <div>
+          <h2>Not built</h2>
+          <p class="lede" style="font-size: 0.8rem">
+            The SSH-CA authenticator, mode A passthrough, channel binding for the agent
+            handshake, multi-replica operation, and the generated SDKs. Named here so nobody has
+            to find out later.
+          </p>
+        </div>
+      </div>
+
+      <footer class="foot">
+        <span>Oarlock</span>
+        <span>Apache 2.0</span>
+        <span>Wire version 0 — unstable</span>
+        <a href="../README.md" style="margin-left: auto">Repository</a>
+        <a href="../SECURITY.md">Report a vulnerability</a>
+      </footer>
+    </main>
+
+    <script type="module">
+      // The sheet's one authored interaction: a reference numeral, its leader, its outline
+      // and its row in the table light together. It is the discipline the drawing already
+      // has — one thing under examination at a time — made answerable.
+      const parts = new Map();
+      for (const g of document.querySelectorAll(".g-part")) parts.set(g.dataset.part, g);
+
+      const rows = new Map();
+      for (const tr of document.querySelectorAll("tr[data-part]")) rows.set(tr.dataset.part, tr);
+
+      let lit = null;
+      function light(no) {
+        if (lit === no) return;
+        if (lit) {
+          parts.get(lit)?.classList.remove("is-lit");
+          rows.get(lit)?.classList.remove("is-lit");
+        }
+        lit = no;
+        if (no) {
+          parts.get(no)?.classList.add("is-lit");
+          rows.get(no)?.classList.add("is-lit");
+        }
+      }
+
+      for (const [no, g] of parts) {
+        g.addEventListener("pointerenter", () => light(no));
+        g.addEventListener("pointerleave", () => light(null));
+      }
+      for (const [no, tr] of rows) {
+        tr.addEventListener("pointerenter", () => light(no));
+        tr.addEventListener("pointerleave", () => light(null));
+        tr.tabIndex = 0;
+        tr.addEventListener("focus", () => light(no));
+        tr.addEventListener("blur", () => light(null));
+      }
+    </script>
+  </body>
+</html>
