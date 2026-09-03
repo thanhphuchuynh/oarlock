@@ -263,6 +263,18 @@ func (s *Server) ListenAndServe() error {
 // Close stops the server.
 func (s *Server) Close() error { return s.srv.Close() }
 
+// StopAccepting closes the listeners and waits for live connections to finish.
+//
+// Not Close, and the difference is the whole of a drain. Close shuts the listeners *and*
+// closes every active connection, so a caller that used it before telling live sessions
+// why they are ending would have torn them down first — and the ledger would record a
+// dropped socket for what was actually a deploy. That is the bug this method exists to
+// make impossible to write.
+//
+// The wait is bounded by ctx. Something that ignores its kill must not hold a deploy open
+// forever, and Close is the caller's next move when this returns an error.
+func (s *Server) StopAccepting(ctx context.Context) error { return s.srv.Shutdown(ctx) }
+
 // handleKeyboardInteractive authenticates by conversation, when the backend can.
 //
 // This is how an operator logs in with no key and no password: the backend prints a URL

@@ -24,6 +24,20 @@ import (
 // TestJ6_AnOutageDoesNotKillWorkInProgress is E4.S4's acceptance criterion, from outside
 // the gateway: zero sessions closed in a 60 s outage.
 func TestJ6_AnOutageDoesNotKillWorkInProgress(t *testing.T) {
+	// A window wider than this test can possibly take.
+	//
+	// The grace is counted in re-checks and the harness re-checks every 50 ms, so the
+	// default of three is 150 ms — less than one shell round-trip, and this test does six
+	// of them. It was therefore racing shell latency against the grace window and losing
+	// on a busy machine, reporting `authz_unavailable` as though the product were wrong
+	// when the product was doing exactly what a 150 ms window says.
+	//
+	// Four hundred re-checks is twenty seconds. Every read below has its own 20 s budget,
+	// so a run slow enough to exhaust this fails on those first and says something useful
+	// instead. That an outage *does* eventually close a session is
+	// TestJ6_AnOutageIsNotARevocationInTheLedger's job, with the short window it wants.
+	withAuthzGrace(t, 400)
+
 	g := build(t, plugin.ModePersistent)
 
 	session, attach := g.openSession(t, g.device.ID, "ticket AV-9190")

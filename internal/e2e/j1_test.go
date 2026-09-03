@@ -101,6 +101,21 @@ type gateway struct {
 	live      *sessions.Registry
 }
 
+// authzGrace is how many consecutive authorisation failures a live session survives in
+// this harness. Nil means authz.DefaultGrace.
+//
+// A package variable in the same style as the rest of this file's knobs, set by the one
+// journey that needs a window wider than its own runtime.
+var authzGrace *int
+
+// withAuthzGrace runs the rest of a test with a stated grace window.
+func withAuthzGrace(t *testing.T, rechecks int) {
+	t.Helper()
+	prev := authzGrace
+	authzGrace = &rechecks
+	t.Cleanup(func() { authzGrace = prev })
+}
+
 // build stands up a whole gateway and one agent, in the given reachability mode.
 //
 // Nothing is stubbed out except the wall clock and, in dispatch mode, the doorbell —
@@ -180,7 +195,15 @@ func build(t *testing.T, mode plugin.Mode) *gateway {
 	}
 	t.Cleanup(func() { _ = authorizer.Close() })
 	fallible := &fallibleAuthz{inner: authorizer}
-	checker := &authz.Checker{Backend: fallible, Log: quiet()}
+	// The grace window is stated by the test rather than inherited.
+	//
+	// It is counted in re-checks, and the interval below is 50 ms — so the default of
+	// three is a **150 millisecond** window, which is shorter than a single shell
+	// round-trip. Two journeys here want opposite things from it: J6's first wants an
+	// outage *not* to end a session while an operator is working through it, and its
+	// second wants an outage to end one. Sharing one number meant the first was racing
+	// shell latency against 150 ms and losing whenever the machine was busy.
+	checker := &authz.Checker{Backend: fallible, Log: quiet(), Grace: authzGrace}
 	// A short interval, so a test can watch a revocation land without waiting out the
 	// production default. The interval being the guarantee is the point of E4.S5, so the
 	// journeys run with it switched on rather than mocked away.
