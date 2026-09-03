@@ -81,7 +81,7 @@ func cmdSessionsGet(ctx context.Context, g globals, args []string) error {
 		"state", row.State,
 		"mode", row.Mode,
 		"recording", row.RecordingState,
-		"started", row.StartedAt,
+		"created", row.CreatedAt,
 		"attached", row.AttachedAt,
 		"closed", row.ClosedAt,
 		"close reason", row.CloseReason,
@@ -200,9 +200,9 @@ func cmdAgentsList(ctx context.Context, g globals, args []string) error {
 		fmt.Println("no agents are holding a control channel")
 		return nil
 	}
-	t := newTable("DEVICE", "SINCE", "VERSION", "CAPS")
+	t := newTable("DEVICE", "CONNECTED")
 	for _, a := range list.Agents {
-		t.row(a.DeviceID, a.Since, a.Version, strings.Join(a.Caps, " "))
+		t.row(a.DeviceID, yesNo(a.Connected))
 	}
 	t.print()
 	return nil

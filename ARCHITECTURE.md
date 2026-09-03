@@ -970,7 +970,10 @@ latency and error rate, documented in [docs/metrics.md](docs/metrics.md) with a 
 alert set. What is left: Redis ownership, node-to-node forwarding, and the load test that
 says how many idle agents one replica actually holds.
 
-**M6 — integration.** OpenAPI generated in CI, the Go and TypeScript SDKs,
+**M6 — integration.** OpenAPI has landed (E7.S1): `docs/openapi.yaml` is generated from
+`internal/apisrv`'s route table — which is also what builds the mux — so the document
+cannot describe an endpoint the gateway does not serve, and a test fails the build when
+they diverge. What is left: the Go and TypeScript SDKs,
 `@oarlock/terminal` and `@oarlock/react`, signed webhooks with a dead-letter list, and the
 agent library extracted with a Kotlin binding. This is the milestone that decides whether
 anyone else can use the project, so it is a milestone rather than a footnote — but it needs

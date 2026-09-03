@@ -145,63 +145,20 @@ func New(o Options) (*Server, error) {
 	s := &Server{o: o, log: o.Log, nowFn: o.Now,
 		rate: newLimiter(o.RatePerMinute, o.Now)}
 
+	// Registered from the route table, so the OpenAPI document generated from it cannot
+	// describe an API this gateway does not serve. See routes.go.
+	//
+	// A route whose deployment did not configure what it needs is simply absent, and the
+	// mux answers 404 — which is the right answer: an API replica serving renewals but
+	// not opens is a deployment shape this supports on purpose, and pretending the
+	// endpoint exists in order to refuse it would be a worse lie than not having it.
 	s.mux = http.NewServeMux()
-	// Opening a session needs a device registry to look the device up in; renewing an
-	// attach ticket for a session that already exists does not. Keeping them on
-	// separate conditions is what lets an API replica serve renewals without being
-	// able to open anything.
-	if o.Registry != nil && o.Inviter != nil {
-		s.mux.HandleFunc("POST "+Prefix+"/sessions", s.wrap(s.openSession))
-		// Runs the session itself rather than handing back a ticket: there is no
-		// terminal to attach to, so a caller wanting one command should not have to
-		// speak the session protocol to get it.
-		s.mux.HandleFunc("POST "+Prefix+"/devices/{id}/exec", s.wrap(s.execOnDevice))
-		// Read and write one file under the device's configured root. Streamed rather
-		// than buffered: holding a whole log per concurrent request is a memory profile
-		// nobody asked for.
-		s.mux.HandleFunc("GET "+Prefix+"/devices/{id}/file", s.wrap(s.readFileOnDevice))
-		s.mux.HandleFunc("PUT "+Prefix+"/devices/{id}/file", s.wrap(s.writeFileOnDevice))
+	for _, r := range routes() {
+		if !r.available(o) {
+			continue
+		}
+		s.mux.HandleFunc(r.Method+" "+Prefix+r.Path, s.wrap(r.handler(s)))
 	}
-	if o.Registry != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/devices", s.wrap(s.listDevices))
-		s.mux.HandleFunc("GET "+Prefix+"/devices/{id}", s.wrap(s.getDevice))
-	}
-	if o.RegistryAdmin != nil {
-		s.mux.HandleFunc("POST "+Prefix+"/devices", s.wrap(s.createDevice))
-		s.mux.HandleFunc("PUT "+Prefix+"/devices/{id}", s.wrap(s.updateDevice))
-		s.mux.HandleFunc("DELETE "+Prefix+"/devices/{id}", s.wrap(s.deleteDevice))
-	}
-	if o.Permissions != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/permissions", s.wrap(s.listPermissions))
-		s.mux.HandleFunc("GET "+Prefix+"/permissions/{id}", s.wrap(s.getPermission))
-		s.mux.HandleFunc("POST "+Prefix+"/permissions", s.wrap(s.createPermission))
-		s.mux.HandleFunc("PUT "+Prefix+"/permissions/{id}", s.wrap(s.updatePermission))
-		s.mux.HandleFunc("DELETE "+Prefix+"/permissions/{id}", s.wrap(s.deletePermission))
-	}
-	if o.Permissions != nil && o.Registry != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/devices/{id}/access", s.wrap(s.deviceAccess))
-	}
-	if o.SSH != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/ssh", s.wrap(s.sshConnection))
-	}
-	if o.Inviter != nil {
-		s.mux.HandleFunc("POST "+Prefix+"/sessions/{id}/attach", s.wrap(s.renewAttach))
-		s.mux.HandleFunc("POST "+Prefix+"/sessions/{id}/observe", s.wrap(s.observeSession))
-	}
-	if o.Agents != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/agents", s.wrap(s.listAgents))
-		s.mux.HandleFunc("DELETE "+Prefix+"/agents/{id}", s.wrap(s.disconnectAgent))
-	}
-	if o.Replays != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/recordings/{id}", s.wrap(s.getRecording))
-	}
-	if o.SQL != nil {
-		s.mux.HandleFunc("GET "+Prefix+"/sql/schema", s.wrap(s.sqlSchema))
-		s.mux.HandleFunc("POST "+Prefix+"/sql/query", s.wrap(s.sqlQuery))
-	}
-	s.mux.HandleFunc("GET "+Prefix+"/sessions", s.wrap(s.listSessions))
-	s.mux.HandleFunc("GET "+Prefix+"/sessions/{id}", s.wrap(s.getSession))
-	s.mux.HandleFunc("DELETE "+Prefix+"/sessions/{id}", s.wrap(s.killSession))
 	return s, nil
 }
 

@@ -367,8 +367,11 @@ Missing, and worth naming rather than leaving to be discovered:
   unbuilt because nothing asks for it — not because it was forgotten.
 - **Epic 6 is part-landed**: `oarlockctl` is here (list, inspect, kill, fetch, verify),
   so is drain, and so are [metrics](docs/metrics.md). Multi-replica ownership and
-  cross-replica invitations are not. **Epics 7 and
-  8** — the generated SDKs and the supply-chain work — are planned and unbuilt.
+  cross-replica invitations are not.
+- **Epic 7 has started**: the API is described by
+  [`docs/openapi.yaml`](docs/openapi.yaml), generated from the gateway's route table and
+  checked by a test, so it cannot describe an endpoint the gateway does not serve. The
+  SDKs on top of it are unbuilt. **Epic 8** — the supply-chain work — is planned.
 
 [`docs/threat-model.md`](docs/threat-model.md) § 12 is the authoritative list of what is
 built, what is tested, and what is only described. It is the section to read before

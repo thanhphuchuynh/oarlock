@@ -139,14 +139,18 @@ type sessionRow struct {
 	RecordingState string `json:"recording_state"`
 	Mode           string `json:"mode"`
 	CloseReason    string `json:"close_reason"`
-	StartedAt      string `json:"started_at"`
+	CreatedAt      string `json:"created_at"`
 	AttachedAt     string `json:"attached_at"`
 	ClosedAt       string `json:"closed_at"`
 }
 
 type sessionList struct {
 	Sessions []sessionRow `json:"sessions"`
-	Next     string       `json:"next"`
+	// next_cursor, which is what the API actually sends. The first version of this said
+	// `next`, so paging silently stopped after one page — and the test that was supposed
+	// to catch it used a fake server built from the same wrong assumption. Writing the
+	// OpenAPI document against the real response types is what found it.
+	NextCursor string `json:"next_cursor"`
 }
 
 type deviceRow struct {
@@ -161,15 +165,17 @@ type deviceRow struct {
 }
 
 type deviceList struct {
-	Devices []deviceRow `json:"devices"`
-	Next    string      `json:"next"`
+	Devices    []deviceRow `json:"devices"`
+	NextCursor string      `json:"next_cursor"`
 }
 
+// agentRow is what GET /agents returns, which is less than it sounds: the device id and
+// whether it is connected. An earlier version of this struct expected `since`, `version`
+// and `caps`, which the API does not send — so the table rendered three columns of dashes
+// for fields that were never going to arrive.
 type agentRow struct {
-	DeviceID string   `json:"device_id"`
-	Since    string   `json:"since"`
-	Version  string   `json:"version"`
-	Caps     []string `json:"caps"`
+	DeviceID  string `json:"device_id"`
+	Connected bool   `json:"connected"`
 }
 
 type agentList struct {
@@ -214,10 +220,10 @@ func (c *client) listSessions(ctx context.Context, q url.Values, limit int) ([]s
 		if limit > 0 && len(out) >= limit {
 			return out[:limit], nil
 		}
-		if page.Next == "" {
+		if page.NextCursor == "" {
 			return out, nil
 		}
-		q.Set("cursor", page.Next)
+		q.Set("cursor", page.NextCursor)
 	}
 }
 
@@ -234,10 +240,10 @@ func (c *client) listDevices(ctx context.Context) ([]deviceRow, error) {
 			return nil, err
 		}
 		out = append(out, page.Devices...)
-		if page.Next == "" {
+		if page.NextCursor == "" {
 			return out, nil
 		}
-		q.Set("cursor", page.Next)
+		q.Set("cursor", page.NextCursor)
 	}
 }
 
