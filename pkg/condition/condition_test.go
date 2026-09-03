@@ -189,6 +189,9 @@ func TestNoCodeIsEmittedThatHasNoScreen(t *testing.T) {
 		"session_id":     true,
 		"scrollback_len": true, "max_frame": true, "ping_interval": true,
 		"dropped_input": true, "read_only": true,
+		// A log field on the SSH door's rate-limit refusal, not a wire code: the peer
+		// is told nothing at all, it is simply hung up on.
+		"connections_this_minute": true,
 	}
 
 	for _, dir := range dirs {

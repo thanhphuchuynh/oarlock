@@ -443,10 +443,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		AuthzSupervisor: g.supervisor, Registry: reg, Inviter: g.inviter,
 		Sessions: ledger, Live: g.live, Recorder: recorder,
 		Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
-		RecordInput:     cfg.Policy.RecordInput,
-		Audit:           g.audit,
-		HandshakeBudget: cfg.SSH.HandshakeBudget,
-		HostKey:         hostKey, Log: log,
+		RecordInput:       cfg.Policy.RecordInput,
+		Audit:             g.audit,
+		HandshakeBudget:   cfg.SSH.HandshakeBudget,
+		ConnRatePerMinute: cfg.SSH.ConnRatePerMinute,
+		HostKey:           hostKey, Log: log,
 	})
 	if err != nil {
 		return nil, err

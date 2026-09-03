@@ -91,7 +91,7 @@ What follows from accepting it:
 | Access kept after revocation | Re-check every 30 s, plus `Authorizer.Watch` for sub-second kills, plus `admin_kill`. No credential on the device to un-deploy. | Up to `recheck_interval` of extra access when `Watch` is unavailable or broken. Shorten the interval if that matters. |
 | Privilege escalation between actions | `exec` does not imply `shell`; `passthrough` and `replay` imply nothing. Grants are per action, per device, and — for `tcp`, `file:read`, `file:write` and `exec` — per **target**: a port, a path glob, an argv. | `shell` is still all-or-nothing on a device, because a shell has no target to narrow. Oarlock does not restrict *what you type* — see §7. A backend that ignores the target grants every target, and forgetting to read it is not a compile error. |
 | Session fixation / ticket theft on the browser leg | Tickets are single-use, 60 s, scoped to one device, one profile, one principal, and carried in a frame body rather than a URL. | An attacker who can read the ticket *and* wins the race against the legitimate browser gets one session. TLS is the control. |
-| Brute force on the SSH front door | A 15 s pre-authentication budget closes a connection that never authenticates, and a ceiling on concurrent connections bounds how many can be held at once. Failures do not distinguish "no such device" from "not authorized", so a valid key cannot enumerate the fleet by trying usernames. | **There is no per-IP or per-user rate limit on the SSH door.** The budget and the connection cap bound resource exhaustion, not guess rate; the per-IP limiter covers the HTTP/API surface only. An enumeration oracle may still exist in the timing of the error paths — untested. |
+| Brute force on the SSH front door | A 15 s pre-authentication budget closes a connection that never authenticates; a ceiling on concurrent connections bounds how many can be held at once; and a per-client connection rate limit (default 30/min, keyed by IPv4 address or IPv6 /64) bounds how fast one source may try. Failures do not distinguish "no such device" from "not authorized", so a valid key cannot enumerate the fleet by trying usernames. | **The rate limit counts connections, not attempts.** `MaxAuthTries` is the x/crypto default of six, so the real budget is six times the configured number — and a distributed attempt from many sources is not slowed at all. **There is no per-*user* limit**, so an attacker who spreads across sources gets an unthrottled guess rate against a single account. **A deployment behind a TCP load balancer without PROXY protocol sees one client for the whole world** and must disable the limit rather than inherit it. An enumeration oracle may still exist in the timing of the error paths — untested. |
 | A service acting as a human it should not | `AuthDelegated` requires a signed assertion: the subject's own token, or a service-signed assertion constrained by a `may_act_for` allow-list with a sub-60 s lifetime. A bare `On-Behalf-Of` identifier is refused. | With the service-signed fallback, a compromised service can act for anyone on its allow-list. Narrow the list; prefer forwarding the subject's token. |
 | Authorisation backend outage used as a lever | An error is not a denial: new sessions are refused, live ones get a grace window and then close as `authz_unavailable`, never `revoked`. | An attacker who can take down the authz backend can still stop *new* sessions — a denial of service, deliberately chosen over admitting sessions on stale decisions. |
 | A malicious or careless operator | Every session recorded and attributed; `AuditSink` gets open, close, deny and revocation events. | Detection, not prevention. An operator with `shell` on a device owns that device. That is what a shell is. |
@@ -179,7 +179,7 @@ routinely the least-protected asset in a deployment like this, so:
 | One session stalling another on the same connection | **Not possible:** a connection carries one session (ADR-024), so socket backpressure slows exactly the session that is not keeping up. This is what removing multiplexing bought — there is no head-of-line class to defend against. |
 | An operator opening many sessions | `sessions_per_principal`, enforced atomically in `SessionStore`. |
 | Many sessions per device | `sessions_per_device` (default 1), enforced by a unique index, not a check-then-act. |
-| Unauthenticated connection flood on `/ws/control` or `/ws/session` | 5 s handshake budget, per-IP connection rate limit, and the handshake does no allocation on behalf of an unauthenticated peer beyond a fixed-size buffer. |
+| Unauthenticated connection flood on `/ws/control` or `/ws/session` | 5 s handshake budget, and the handshake does no allocation on behalf of an unauthenticated peer beyond a fixed-size buffer. **No rate limit** — see § 12, gap 6: this row claimed one until the SSH door's was built and the claim was checked. |
 | Idle sessions accumulating | `limits.idle` (5 min) and `limits.max_duration` (4 h). |
 | A malformed length forcing an allocation | There is no length field. The WebSocket message boundary is the frame boundary, and messages over `limits.frame` are rejected by the transport. |
 | Thundering-herd reconnect after a restart (`persistent`) | Jittered backoff in the agent, and `GOAWAY` carries a per-agent `reconnect_after_ms` during a drain. |
@@ -229,8 +229,9 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 | 5 | An outage is refused as `authz_unavailable`, never `revoked` | tested | `internal/authz`, and `plugintest` fails a backend that gets it wrong |
 | 5 | Tickets single-use, 60 s, scoped, compare-and-delete | tested | `internal/ticket` |
 | 5 | Pre-authentication budget and connection ceiling on the SSH door | tested | `internal/sshsrv/preauth.go` |
-| 5 | Per-IP rate limit on the SSH door | **not built** | the HTTP/API surface has one; SSH does not |
+| 5 | Per-client connection rate limit on the SSH door | tested | `internal/sshsrv/ratelimit.go` — keyed by IPv4 address or IPv6 /64 |
 | 5 | Per-IP rate limit on the HTTP/API surface | tested | `internal/apisrv` — and keyed correctly for IPv6, which it was not |
+| 6 | Connection rate limit on the WebSocket legs | **not built** | the limiter is `internal/sshsrv`-private; `/ws/*` mounts straight on the mux |
 | 5 | Delegated authority needs a signed assertion | built | `internal/auth/delegated` |
 | 5 | Audit of open, close, deny and revocation | built | `plugin.AuditSink` |
 | 6 | Ed25519 challenge-response, key generated on-device | tested | `internal/handshake` |
@@ -267,7 +268,16 @@ somebody who also wrote some of it, not an independent audit — and the statuse
    worth knowing before an incident.
 5. **A backend that ignores `Target` grants every target**, and forgetting to read it is
    not a compile error. The widening direction is the quiet one. Review backends for it.
-6. **None of this has been reviewed by anyone who did not write it.** The statuses above
+6. **The WebSocket legs have no connection rate limit.** § 6 claimed one until the SSH
+   door's limiter was built and the claim was checked against the mux: `/api/` is wrapped
+   by the API limiter, and `/ws/control`, `/ws/session` and `/ws/attach` are not. Their
+   5 s handshake budget bounds holding, not trying — the same gap the SSH door had.
+   Closing it means lifting the limiter out of `internal/sshsrv`, and the device leg needs
+   a number chosen for a fleet reconnecting after an outage rather than for one operator.
+7. **The SSH rate limit counts connections, not authentication attempts**, at six tries
+   each, and does nothing about an attempt spread across many sources. It makes a single
+   source useless, which is all a per-client limit can honestly claim.
+8. **None of this has been reviewed by anyone who did not write it.** The statuses above
    say what the code does, not that the code is right.
 
 ## 13. Reporting a vulnerability

@@ -100,6 +100,20 @@ type Options struct {
 	// negative disables the bound, which is for tests that drive a handshake by hand.
 	HandshakeBudget time.Duration
 
+	// ConnRatePerMinute caps how many connections one client may open in a minute.
+	// Zero means DefaultConnRatePerMinute; negative disables the limit.
+	//
+	// This is the door's only answer to somebody *trying* keys — the budget above bounds
+	// how long a connection may be held, and MaxConnections bounds how many exist at
+	// once, but neither costs an attacker anything for connecting, failing fast and
+	// reconnecting. See ratelimit.go, including why a deployment behind a TCP load
+	// balancer must disable this rather than inherit it.
+	ConnRatePerMinute int
+
+	// Now is the clock the rate limiter reads. Injectable so a test can cross a window
+	// boundary without sleeping through it.
+	Now func() time.Time
+
 	// NewSessionID mints session ids. Injectable so tests are deterministic.
 	NewSessionID func() string
 
@@ -109,9 +123,10 @@ type Options struct {
 
 // Server is the SSH front door.
 type Server struct {
-	o   Options
-	srv *gssh.Server
-	log *slog.Logger
+	o    Options
+	srv  *gssh.Server
+	log  *slog.Logger
+	rate *connLimiter
 }
 
 // New builds the server.
@@ -142,7 +157,7 @@ func New(o Options) (*Server, error) {
 		o.Live = sessions.NewRegistry()
 	}
 
-	s := &Server{o: o, log: o.Log}
+	s := &Server{o: o, log: o.Log, rate: newConnLimiter(o.ConnRatePerMinute, o.Now)}
 	s.srv = &gssh.Server{
 		Addr:             o.Addr,
 		Handler:          s.handleSession,
@@ -152,6 +167,12 @@ func New(o Options) (*Server, error) {
 		// rather than MaxTimeout, IdleTimeout, or a read deadline — all three are the
 		// wrong shape, and the deadline is silently erased by gliderlabs' own wrapper.
 		ConnCallback: func(ctx gssh.Context, conn net.Conn) net.Conn {
+			// The rate limit comes first: refusing here costs one map lookup, and
+			// everything after it costs a goroutine and a key exchange. Returning nil is
+			// how gliderlabs is told to close the connection.
+			if !s.admit(conn) {
+				return nil
+			}
 			return armPreauth(ctx, conn, s.o.HandshakeBudget)
 		},
 		// Capture the PTY here rather than in the handler, because

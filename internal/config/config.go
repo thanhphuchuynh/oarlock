@@ -114,6 +114,20 @@ type SSH struct {
 	// back. Set generously: this is an operator front door, and a limit low enough to
 	// bite under real use is a limit that locks out the person handling the incident.
 	MaxConnections int `yaml:"max_connections"`
+	// ConnRatePerMinute caps how many connections one client may open in a minute,
+	// keyed by IPv4 address or IPv6 /64. Zero means sshsrv.DefaultConnRatePerMinute
+	// (30); negative disables it.
+	//
+	// This is the door's answer to somebody *trying* keys: MaxConnections bounds how
+	// many connections exist at once and HandshakeBudget bounds how long one may be
+	// held, but an attacker who connects, fails fast and reconnects pays neither. Note
+	// that a connection carries up to six key attempts, so the real attempt budget is
+	// six times this.
+	//
+	// **Set this to -1 if a TCP load balancer without PROXY protocol fronts the
+	// listener.** SSH has no X-Forwarded-For, so every connection would arrive from the
+	// balancer, and one counter would cover every operator you have.
+	ConnRatePerMinute int `yaml:"conn_rate_per_minute"`
 }
 
 // Store configures the gateway's operational database.

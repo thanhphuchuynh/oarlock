@@ -106,6 +106,22 @@ var forwardPorts []int
 // they get the fifteen-second default and never notice it.
 var handshakeBudget time.Duration
 
+// connRate overrides the front door's per-client connection rate limit, in the same
+// style as handshakeBudget above. Zero for every test that is not about it — and since
+// every test connects from 127.0.0.1, they would all share one key if the default of 30
+// ever bit. It does not: each stack builds its own server, and therefore its own counter.
+var connRate int
+
+// newStackRateLimited wires a front door that admits `perMinute` connections from one
+// client before refusing.
+func newStackRateLimited(t *testing.T, perMinute int) *stack {
+	t.Helper()
+	prev := connRate
+	connRate = perMinute
+	t.Cleanup(func() { connRate = prev })
+	return newStackWith(t, []string{"/bin/sh"}, fastLimits(), 0, false)
+}
+
 // newStackBudget wires a front door whose pre-authentication budget is short enough
 // for a test to wait out.
 func newStackBudget(t *testing.T, budget time.Duration) *stack {
@@ -248,16 +264,17 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 	}
 
 	srv, err := sshsrv.New(sshsrv.Options{
-		Authenticator:   authn,
-		Authz:           authzChecker,
-		AuthzSupervisor: authzSupervisor,
-		Registry:        registry,
-		Inviter:         inviter,
-		Sessions:        sessions.NewMemory(sessions.Limits{}, nil),
-		Recorder:        recorder,
-		Limits:          limits,
-		HandshakeBudget: handshakeBudget,
-		Log:             quiet(),
+		Authenticator:     authn,
+		Authz:             authzChecker,
+		AuthzSupervisor:   authzSupervisor,
+		Registry:          registry,
+		Inviter:           inviter,
+		Sessions:          sessions.NewMemory(sessions.Limits{}, nil),
+		Recorder:          recorder,
+		Limits:            limits,
+		HandshakeBudget:   handshakeBudget,
+		ConnRatePerMinute: connRate,
+		Log:               quiet(),
 	})
 	if err != nil {
 		t.Fatal(err)
