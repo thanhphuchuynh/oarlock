@@ -25,6 +25,7 @@ import (
 	"github.com/oarlock/oarlock/internal/authz"
 	"github.com/oarlock/oarlock/internal/invite"
 	"github.com/oarlock/oarlock/internal/pump"
+	"github.com/oarlock/oarlock/internal/ratelimit"
 	"github.com/oarlock/oarlock/internal/recordpolicy"
 	"github.com/oarlock/oarlock/internal/sessionrun"
 	"github.com/oarlock/oarlock/internal/sessions"
@@ -126,7 +127,7 @@ type Server struct {
 	o    Options
 	srv  *gssh.Server
 	log  *slog.Logger
-	rate *connLimiter
+	rate *ratelimit.Limiter
 }
 
 // New builds the server.

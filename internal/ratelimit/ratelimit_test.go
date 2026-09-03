@@ -1,6 +1,6 @@
-package sshsrv
+package ratelimit
 
-// The rate limiter's own arithmetic, tested from inside the package.
+// The limiter's own arithmetic, tested from inside the package.
 //
 // Most of the value here is in clientKey rather than the counter. A counter that is
 // wrong fails visibly the first time somebody looks; a key that is wrong makes the whole
@@ -26,20 +26,20 @@ func (a addr) String() string  { return string(a) }
 // /64, so rotating the low half is free — an address-keyed counter would be defeated by
 // a for-loop, and would go on looking like it was working.
 func TestAnIPv6ClientIsCountedByItsSixtyFour(t *testing.T) {
-	first := clientKey(addr("[2001:db8:1:2::1]:52000"))
+	first := Key(addr("[2001:db8:1:2::1]:52000"))
 	// Same /64, eighteen quintillion addresses to choose from.
 	for _, other := range []string{
 		"[2001:db8:1:2::2]:52001",
 		"[2001:db8:1:2:ffff:ffff:ffff:ffff]:52002",
 		"[2001:db8:1:2:dead:beef:cafe:1]:52003",
 	} {
-		if got := clientKey(addr(other)); got != first {
+		if got := Key(addr(other)); got != first {
 			t.Fatalf("%s keyed as %q, want %q — rotating the host half evades the limit",
 				other, got, first)
 		}
 	}
 	// A different /64 is a different client.
-	if got := clientKey(addr("[2001:db8:1:3::1]:52000")); got == first {
+	if got := Key(addr("[2001:db8:1:3::1]:52000")); got == first {
 		t.Fatalf("a separate /64 shares the key %q", got)
 	}
 }
@@ -48,8 +48,8 @@ func TestAnIPv6ClientIsCountedByItsSixtyFour(t *testing.T) {
 // client, and treating it as one would let a single misbehaving host lock out its
 // neighbours — a rate limit that becomes somebody else's outage.
 func TestAnIPv4ClientIsCountedByItsAddress(t *testing.T) {
-	a := clientKey(addr("203.0.113.7:52000"))
-	b := clientKey(addr("203.0.113.8:52000"))
+	a := Key(addr("203.0.113.7:52000"))
+	b := Key(addr("203.0.113.8:52000"))
 	if a == b {
 		t.Fatalf("two IPv4 neighbours share the key %q", a)
 	}
@@ -58,7 +58,7 @@ func TestAnIPv4ClientIsCountedByItsAddress(t *testing.T) {
 	}
 	// The port must not be part of it, or every connection is its own client and the
 	// limit counts to one forever.
-	if clientKey(addr("203.0.113.7:52001")) != a {
+	if Key(addr("203.0.113.7:52001")) != a {
 		t.Fatal("the source port changed the key")
 	}
 }
@@ -71,11 +71,11 @@ func TestAnIPv4ClientIsCountedByItsAddress(t *testing.T) {
 // existence shares. The limit would then count the entire IPv4 internet on one counter
 // and lock everybody out after thirty connections.
 func TestAnIPv4MappedAddressIsNotGivenASixtyFour(t *testing.T) {
-	got := clientKey(addr("[::ffff:203.0.113.7]:52000"))
+	got := Key(addr("[::ffff:203.0.113.7]:52000"))
 	if got != "203.0.113.7" {
 		t.Fatalf("key = %q, want 203.0.113.7", got)
 	}
-	other := clientKey(addr("[::ffff:198.51.100.4]:52000"))
+	other := Key(addr("[::ffff:198.51.100.4]:52000"))
 	if got == other {
 		t.Fatalf("two unrelated IPv4 clients collapsed onto one key %q", got)
 	}
@@ -85,11 +85,11 @@ func TestAnIPv4MappedAddressIsNotGivenASixtyFour(t *testing.T) {
 // would be a bypass for whatever produced it.
 func TestAnUnparseableAddressStillGetsAKey(t *testing.T) {
 	for _, a := range []net.Addr{addr("not-an-address"), addr("")} {
-		if clientKey(a) == "" {
+		if Key(a) == "" {
 			t.Fatalf("%q produced an empty key, which every such client would share", a)
 		}
 	}
-	if clientKey(nil) != "unknown" {
+	if Key(nil) != "unknown" {
 		t.Fatal("a nil address produced no key")
 	}
 }
@@ -98,14 +98,14 @@ func TestAnUnparseableAddressStillGetsAKey(t *testing.T) {
 
 func TestTheLimitAdmitsExactlyItsBudget(t *testing.T) {
 	now := time.Now()
-	l := newConnLimiter(3, func() time.Time { return now })
+	l := newTestLimiter(3, func() time.Time { return now })
 
 	for i := 1; i <= 3; i++ {
-		if ok, n := l.allow("c"); !ok {
+		if ok, n := l.Allow("c"); !ok {
 			t.Fatalf("connection %d refused at count %d, inside a budget of 3", i, n)
 		}
 	}
-	ok, n := l.allow("c")
+	ok, n := l.Allow("c")
 	if ok {
 		t.Fatal("a fourth connection was admitted on a budget of three")
 	}
@@ -119,16 +119,16 @@ func TestTheLimitAdmitsExactlyItsBudget(t *testing.T) {
 // get back in without an administrator.
 func TestTheWindowRolls(t *testing.T) {
 	now := time.Now()
-	l := newConnLimiter(2, func() time.Time { return now })
+	l := newTestLimiter(2, func() time.Time { return now })
 
-	l.allow("c")
-	l.allow("c")
-	if ok, _ := l.allow("c"); ok {
+	l.Allow("c")
+	l.Allow("c")
+	if ok, _ := l.Allow("c"); ok {
 		t.Fatal("the third connection was admitted")
 	}
 
 	now = now.Add(time.Minute)
-	if ok, n := l.allow("c"); !ok {
+	if ok, n := l.Allow("c"); !ok {
 		t.Fatalf("still refused after the window rolled (count %d)", n)
 	}
 }
@@ -137,15 +137,15 @@ func TestTheWindowRolls(t *testing.T) {
 // else, which is the failure mode that makes people turn rate limits off.
 func TestClientsAreCountedSeparately(t *testing.T) {
 	now := time.Now()
-	l := newConnLimiter(1, func() time.Time { return now })
+	l := newTestLimiter(1, func() time.Time { return now })
 
-	if ok, _ := l.allow("noisy"); !ok {
+	if ok, _ := l.Allow("noisy"); !ok {
 		t.Fatal("the first connection was refused")
 	}
-	if ok, _ := l.allow("noisy"); ok {
+	if ok, _ := l.Allow("noisy"); ok {
 		t.Fatal("the noisy client got a second connection")
 	}
-	if ok, _ := l.allow("quiet"); !ok {
+	if ok, _ := l.Allow("quiet"); !ok {
 		t.Fatal("an unrelated client was refused because of somebody else's traffic")
 	}
 }
@@ -153,21 +153,21 @@ func TestClientsAreCountedSeparately(t *testing.T) {
 // TestANegativeLimitDisablesTheControl. The documented escape hatch for a deployment
 // behind a load balancer, where this limit would count every operator as one client.
 func TestANegativeLimitDisablesTheControl(t *testing.T) {
-	l := newConnLimiter(-1, nil)
+	l := newTestLimiter(-1, nil)
 	if l != nil {
 		t.Fatal("a negative limit produced a limiter")
 	}
 	for range 1000 {
-		if ok, _ := l.allow("c"); !ok {
+		if ok, _ := l.Allow("c"); !ok {
 			t.Fatal("a disabled limiter refused a connection")
 		}
 	}
 }
 
 func TestZeroMeansTheDefault(t *testing.T) {
-	l := newConnLimiter(0, nil)
-	if l == nil || l.perMinute != DefaultConnRatePerMinute {
-		t.Fatalf("zero produced %+v, want the default of %d", l, DefaultConnRatePerMinute)
+	l := newTestLimiter(0, nil)
+	if l == nil || l.perMinute != DefaultWSConnRatePerMinute {
+		t.Fatalf("zero produced %+v, want the default of %d", l, DefaultWSConnRatePerMinute)
 	}
 }
 
@@ -178,24 +178,24 @@ func TestZeroMeansTheDefault(t *testing.T) {
 // attacker's counter, which is the one thing the map is for.
 func TestTheSweepDoesNotDropALiveWindow(t *testing.T) {
 	now := time.Now()
-	l := newConnLimiter(2, func() time.Time { return now })
+	l := newTestLimiter(2, func() time.Time { return now })
 
 	// A gateway that has been scanned: one window per source address, past the
 	// threshold that arms the sweep.
 	for i := range 10_001 {
-		l.allow("scanner-" + strconv.Itoa(i))
+		l.Allow("scanner-" + strconv.Itoa(i))
 	}
 	now = now.Add(2 * time.Minute) // all of those are now expired
 
 	// A real client arrives and reaches its limit. Its first connection is the
 	// insertion that finds the map over the threshold and runs the sweep.
-	l.allow("victim")
-	l.allow("victim")
+	l.Allow("victim")
+	l.Allow("victim")
 
 	if got := len(l.windows); got > 10 {
 		t.Fatalf("the sweep did not run: %d windows remain", got)
 	}
-	if ok, n := l.allow("victim"); ok {
+	if ok, n := l.Allow("victim"); ok {
 		t.Fatalf("the sweep dropped a live counter: the client was admitted at count %d", n)
 	}
 }
@@ -208,13 +208,23 @@ func TestTheSweepDoesNotDropALiveWindow(t *testing.T) {
 func TestPrivateSourcesAreRecognised(t *testing.T) {
 	for _, key := range []string{"127.0.0.1", "10.1.2.3", "192.168.0.5", "172.16.9.9",
 		"fd00:1:2:3::/64", "169.254.1.1"} {
-		if !privateSource(key) {
+		if !PrivateSource(key) {
 			t.Errorf("%s was not recognised as a private source", key)
 		}
 	}
 	for _, key := range []string{"203.0.113.7", "2001:db8:1:2::/64", "8.8.8.8"} {
-		if privateSource(key) {
+		if PrivateSource(key) {
 			t.Errorf("%s was called private", key)
 		}
 	}
+}
+
+// newTestLimiter is what a door does with its configured number: default a zero to the
+// door's own constant, then build. New itself deliberately does not default, because the
+// right number differs per door and hiding that here is how the two would drift together.
+func newTestLimiter(perMinute int, now func() time.Time) *Limiter {
+	if perMinute == 0 {
+		perMinute = DefaultWSConnRatePerMinute
+	}
+	return New(perMinute, now)
 }

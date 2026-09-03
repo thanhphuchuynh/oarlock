@@ -179,7 +179,7 @@ routinely the least-protected asset in a deployment like this, so:
 | One session stalling another on the same connection | **Not possible:** a connection carries one session (ADR-024), so socket backpressure slows exactly the session that is not keeping up. This is what removing multiplexing bought — there is no head-of-line class to defend against. |
 | An operator opening many sessions | `sessions_per_principal`, enforced atomically in `SessionStore`. |
 | Many sessions per device | `sessions_per_device` (default 1), enforced by a unique index, not a check-then-act. |
-| Unauthenticated connection flood on `/ws/control` or `/ws/session` | 5 s handshake budget, and the handshake does no allocation on behalf of an unauthenticated peer beyond a fixed-size buffer. **No rate limit** — see § 12, gap 6: this row claimed one until the SSH door's was built and the claim was checked. |
+| Unauthenticated connection flood on `/ws/control` or `/ws/session` | 5 s handshake budget; a per-client connection rate limit (default 120/min, shared across all three `/ws/*` doors, keyed by IPv4 address or IPv6 /64) applied before the upgrade; and the handshake does no allocation on behalf of an unauthenticated peer beyond a fixed-size buffer. Neither door can be *guessed* at — Ed25519 challenge-response and a 32-byte random ticket — so the limit bounds work rather than attempts. |
 | Idle sessions accumulating | `limits.idle` (5 min) and `limits.max_duration` (4 h). |
 | A malformed length forcing an allocation | There is no length field. The WebSocket message boundary is the frame boundary, and messages over `limits.frame` are rejected by the transport. |
 | Thundering-herd reconnect after a restart (`persistent`) | Jittered backoff in the agent, and `GOAWAY` carries a per-agent `reconnect_after_ms` during a drain. |
@@ -231,7 +231,7 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 | 5 | Pre-authentication budget and connection ceiling on the SSH door | tested | `internal/sshsrv/preauth.go` |
 | 5 | Per-client connection rate limit on the SSH door | tested | `internal/sshsrv/ratelimit.go` — keyed by IPv4 address or IPv6 /64 |
 | 5 | Per-IP rate limit on the HTTP/API surface | tested | `internal/apisrv` — and keyed correctly for IPv6, which it was not |
-| 6 | Connection rate limit on the WebSocket legs | **not built** | the limiter is `internal/sshsrv`-private; `/ws/*` mounts straight on the mux |
+| 6 | Connection rate limit on the WebSocket legs | tested | `internal/ratelimit` — one budget across `/ws/control`, `/ws/session` and `/ws/attach`, refused before the upgrade |
 | 5 | Delegated authority needs a signed assertion | built | `internal/auth/delegated` |
 | 5 | Audit of open, close, deny and revocation | built | `plugin.AuditSink` |
 | 6 | Ed25519 challenge-response, key generated on-device | tested | `internal/handshake` |
@@ -268,16 +268,21 @@ somebody who also wrote some of it, not an independent audit — and the statuse
    worth knowing before an incident.
 5. **A backend that ignores `Target` grants every target**, and forgetting to read it is
    not a compile error. The widening direction is the quiet one. Review backends for it.
-6. **The WebSocket legs have no connection rate limit.** § 6 claimed one until the SSH
-   door's limiter was built and the claim was checked against the mux: `/api/` is wrapped
-   by the API limiter, and `/ws/control`, `/ws/session` and `/ws/attach` are not. Their
-   5 s handshake budget bounds holding, not trying — the same gap the SSH door had.
-   Closing it means lifting the limiter out of `internal/sshsrv`, and the device leg needs
-   a number chosen for a fleet reconnecting after an outage rather than for one operator.
-7. **The SSH rate limit counts connections, not authentication attempts**, at six tries
+6. **The SSH rate limit counts connections, not authentication attempts**, at six tries
    each, and does nothing about an attempt spread across many sources. It makes a single
    source useless, which is all a per-client limit can honestly claim.
-8. **None of this has been reviewed by anyone who did not write it.** The statuses above
+7. **Two rate limits in this codebase key IPv6 differently.** `internal/ratelimit` groups
+   an IPv6 client by its /64, because a per-address counter is defeated by rotating the
+   low half; `internal/apisrv` keys per address, and a test there asserts that on the
+   reasoning that a shared bucket lets one caller spend a bystander's. Both arguments are
+   real, and they point opposite ways on the door where the limit exists to bound *token
+   guessing*. The API surface is the one that is guessable, so it is the one where the
+   weaker key matters most. Unresolved.
+8. **All three rate limits are per node and in memory.** A gateway behind a load balancer
+   with N replicas gives an attacker N times the budget, and a restart clears every
+   counter. Shared state would fix it and would put a dependency in the path of accepting
+   a connection, which is its own risk. Not attempted.
+9. **None of this has been reviewed by anyone who did not write it.** The statuses above
    say what the code does, not that the code is right.
 
 ## 13. Reporting a vulnerability
