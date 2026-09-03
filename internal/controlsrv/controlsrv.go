@@ -12,6 +12,7 @@ import (
 
 	"github.com/oarlock/oarlock/internal/handshake"
 	"github.com/oarlock/oarlock/internal/hub"
+	"github.com/oarlock/oarlock/internal/ownership"
 	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/transport"
 )
@@ -22,6 +23,10 @@ type Server struct {
 	Handshake *handshake.Gateway
 	Hub       *hub.Hub
 	Log       *slog.Logger
+
+	// Owners records which node is holding this channel, for a deployment with more
+	// than one replica. Nil is a single-node gateway and costs a nil check.
+	Owners *ownership.Keeper
 }
 
 var _ http.Handler = (*Server)(nil)
@@ -60,6 +65,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.log().Info("control channel up",
 		"device", res.Device.ID, "mode", res.Device.ResolvedMode(),
 		"caps", res.Caps, "agent", res.Agent.Version)
+
+	// Bracket the channel's whole lifetime, which is exactly Serve's: this handler
+	// stays for as long as the device is reachable through this node, so it is the one
+	// place where "held here" begins and ends.
+	//
+	// A claim that fails is logged and not fatal. The device is dialled in and
+	// reachable through this node whatever the registry believes, and refusing the
+	// channel would turn a registry outage into a fleet outage.
+	release, err := s.Owners.Hold(ctx, res.Device.ID)
+	if err != nil {
+		s.log().Error("could not record which node holds this device",
+			"device", res.Device.ID, "error", err)
+	}
+	defer release()
 
 	if err := s.Hub.Serve(ctx, conn, res); err != nil {
 		s.log().Info("control channel ended", "device", res.Device.ID, "error", err)

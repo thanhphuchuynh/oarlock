@@ -775,16 +775,42 @@ the operator's session invitation *through* A's control channel and have the age
 no question about where the ring lives: it lives on the node the operator is attached to,
 because that is the node the agent dialled.
 
+`internal/ownership` is the `device_id → node` record with a lease. Its semantics are
+built and tested; a *shared* implementation is not, so nothing in a running gateway
+consumes it yet and a deployment is still one node. What is settled:
+
+- **A hint, not a lock.** The registry cannot make a device reachable or unreachable — a
+  device holding a channel to this node is reachable through it whatever the record says.
+  So `Claim` takes over rather than refusing, and an unavailable registry costs a retry
+  instead of a refusal. A lock that failed closed on a dependency the session path does
+  not otherwise need would take the fleet down with the registry.
+- **`Renew` and `Release` are owner-checked.** A device that loses its radio and
+  reconnects to B leaves A serving a half-open socket for some seconds; without the check,
+  A's release deletes B's lease and the device is unroutable until it reconnects again.
+- **The node's identity is its own URL.** It is unique per replica by construction, it is
+  already configured, and it is what a peer needs in order to reach it — so the identity
+  and the address cannot drift apart the way two settings would.
+
 What is still needed:
 
-- **`Ownership`** (Redis) mapping `device_id → node_id` with a lease, so B knows which
-  replica to ask for the favour of a `DIAL`.
+- **A shared `Ownership`** — Redis in the plan — so the record survives outside one
+  process. Everything above is written against the interface, so this is a backend.
 - **A control-plane hop between replicas** carrying an invitation — one small JSON message,
-  not a byte pipe. This is a much smaller thing than a forwarding proxy.
+  not a byte pipe. This is a much smaller thing than a forwarding proxy. **A node name from
+  the registry must not be dialled on the registry's authority alone:** the invitation
+  carries a live single-use ticket, so resolve the name against the configured replica set
+  and refuse one that is not in it. Otherwise a poisoned record is a device takeover rather
+  than an outage.
+
+Until that hop exists, a persistent-mode device held by another replica is reported as
+`device_on_another_node` rather than `device_not_connected`, which is the difference
+between sending somebody to a deployment and sending them to a treadmill.
 
 `dispatch` mode needs neither: the doorbell delivers the invitation directly and it already
 names the node. That remains a real argument for `dispatch` at scale, alongside the
-idle-socket cost.
+idle-socket cost — and it is why the ownership lookup happens *inside* the persistent
+branch: a dispatch device holding a channel to another replica is still wakeable by this
+node's doorbell, and answering with the owner would refuse a session that works.
 
 **Draining.** On `SIGTERM` the gateway stops accepting new sessions, sends `ERROR` with
 `gateway_shutdown` to attached operators, finalises every recording, releases its
@@ -814,6 +840,7 @@ contract to tell them apart. They now have their own codes.
 | condition | detected | recorded as | what the operator is told |
 |---|---|---|---|
 | `device_not_connected` | hub lookup, before dispatch (`persistent`) | `rejected` | "This device isn't connected." |
+| `device_on_another_node` | ownership lookup, after the hub misses (`persistent`) | `rejected` | "This device is connected to a different gateway node." Told apart from the row above because they send somebody to different places: one to a machine, one to a deployment. |
 | `device_unreachable` | `Dispatcher.Wake` reported the device is not reachable | `rejected` | "This device isn't reachable right now." |
 | `device_offline` | `answer_deadline`, 30 s (`dispatch`) | `closed` / `device_offline` | "The agent didn't answer." |
 | `doorbell_failed` | `Dispatcher.Wake` returned an error | `rejected` | "Can't reach the device right now" — *not* "device offline". A broken doorbell is our fault, and saying "offline" sends someone to look at hardware. |

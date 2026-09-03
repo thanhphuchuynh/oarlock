@@ -106,6 +106,15 @@ export const conditions: readonly Condition[] = [
     nextAction: "The device may be asleep — try again in a moment.",
   },
   {
+    id: "device_on_another_node",
+    kind: "error",
+    audience: "operator",
+    fault: "gateway",
+    retryable: true,
+    headline: "This device is connected to a different gateway node.",
+    nextAction: "Try again — a retry usually reaches the node holding it.",
+  },
+  {
     id: "device_unknown",
     kind: "error",
     audience: "operator",

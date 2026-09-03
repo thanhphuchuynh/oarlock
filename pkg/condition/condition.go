@@ -132,6 +132,17 @@ var set = []Condition{
 		NextAction: "It may be powered off or off the network. Check it, then try again.",
 	},
 	{
+		// Told apart from device_not_connected because they send somebody to different
+		// places. "Not connected" sends an operator to look at hardware; this one is a
+		// device that is connected, holding a control channel to another replica of
+		// this gateway, which this node cannot reach across yet. Saying the first when
+		// the second is true costs somebody a trip to a machine that is fine.
+		ID: "device_on_another_node", Kind: Error, Audience: Operator,
+		Fault: FaultGateway, Retryable: true,
+		Headline:   "This device is connected to a different gateway node.",
+		NextAction: "Try again \u2014 a retry usually reaches the node holding it.",
+	},
+	{
 		ID: "device_offline", Kind: Error | Close, Audience: Operator,
 		Fault: FaultDevice, Retryable: true,
 		Headline:   "The agent didn’t answer.",

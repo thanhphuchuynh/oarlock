@@ -85,6 +85,11 @@ var (
 	// ErrNoRoute: a dispatch-mode device with no Dispatcher configured. A deployment
 	// mistake, and it must not be reported as the device's problem.
 	ErrNoRoute = of("no_wake_method")
+	// ErrElsewhere: the device is connected, to another replica of this gateway. Only
+	// reachable in a multi-replica deployment, and until the forwarding hop exists it
+	// is the difference between sending somebody to check a treadmill and telling them
+	// what actually happened.
+	ErrElsewhere = of("device_on_another_node")
 )
 
 // of builds a Failure from the canonical condition table, so the code, the retryability
@@ -103,6 +108,15 @@ func failure(base *Failure, cause error) *Failure {
 	f := *base
 	f.Cause = cause
 	return &f
+}
+
+// Locator is the part of the ownership registry this package needs: which *other*
+// replica is holding a device's control channel, or "" for nobody this node knows of.
+//
+// Deliberately a single string rather than a lease: this package decides where to send
+// an invitation, and everything else on the record is somebody else's question.
+type Locator interface {
+	Elsewhere(ctx context.Context, deviceID string) string
 }
 
 // Reacher is the part of the hub this package needs: whether a device is holding a
@@ -140,6 +154,10 @@ type Inviter struct {
 	Tickets    ticket.Store
 	Hub        Reacher
 	Dispatcher plugin.Dispatcher
+
+	// Owners answers which other replica holds a device. Nil on a single-node
+	// gateway, where the question has one answer and it is always this node.
+	Owners Locator
 
 	// NodeURL is the session endpoint on **this** node, e.g.
 	// wss://gw-a.example.org/ws/session. Not a load balancer: the agent must land
@@ -438,6 +456,26 @@ func (i *Inviter) deliver(ctx context.Context, dev *plugin.Device, inv frame.Inv
 
 	switch dev.ResolvedMode() {
 	case plugin.ModePersistent:
+		// Not on this node, and persistent mode has no doorbell to fall back to. Before
+		// concluding the device is not there, ask whether another replica is holding
+		// it — "isn't connected" and "is connected to the node next door" send an
+		// operator to different places, and only one of those places has anything
+		// wrong with it.
+		//
+		// Only here, and deliberately not before the switch: a dispatch-mode device
+		// that happens to hold a channel to another node is still wakeable by *this*
+		// node's doorbell, and answering with the owner would refuse a session that
+		// would have worked.
+		//
+		// This is where E6.S2's forwarding hop goes: with the owner in hand the
+		// invitation can be handed to that node instead of to the operator.
+		if i.Owners != nil {
+			if node := i.Owners.Elsewhere(ctx, dev.ID); node != "" {
+				i.log().Info("the device is held by another node",
+					"device", dev.ID, "session", inv.SessionID, "node", node)
+				return failure(ErrElsewhere, fmt.Errorf("held by %s", node))
+			}
+		}
 		return failure(ErrNotConnected, nil)
 
 	case plugin.ModeDispatch:
