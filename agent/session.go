@@ -146,7 +146,28 @@ func (s *session) runShell(ctx context.Context, shell ShellFunc, inv frame.Invit
 	}()
 
 	err = s.gatewayToPTY(ctx, p, rs)
+
+	// The terminal is closed *before* waiting for the output goroutine, and that
+	// ordering is the whole of it.
+	//
+	// ptyToGateway blocks in p.Read, and nothing else ever unblocks it. Cancelling the
+	// context does not reach a blocking read on a file descriptor, and the deferred
+	// p.Close() above cannot run until this function returns — which it cannot do until
+	// the wait below is satisfied. So every session the *gateway* ended on an idle shell
+	// parked a goroutine, a pty and a live shell process on the device, permanently: an
+	// operator closing a browser tab was enough, and nothing on the device said so.
+	//
+	// Closing here breaks it at both ends: the read fails, and Close sends SIGHUP to the
+	// session's process group so p.Wait() returns rather than waiting on a shell that has
+	// no reason to exit. The deferred Close still runs and is harmless.
+	// The resizer stops first. It applies window changes from a time.AfterFunc callback,
+	// so a flush already scheduled would otherwise reach an ioctl on the descriptor being
+	// closed on the line below — which is a genuine race on the file, not a tidy-up
+	// detail. stop() blocks on any flush in progress and refuses later ones, so it is the
+	// barrier that makes closing safe. The deferred stop and Close still run, harmlessly.
 	cancel()
+	rs.stop()
+	_ = p.Close()
 	wg.Wait()
 	return err
 }
