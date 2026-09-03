@@ -285,7 +285,13 @@ func (s *Server) handleKeyboardInteractive(ctx gssh.Context,
 
 // handlePublicKey authenticates the operator and stashes the principal.
 func (s *Server) handlePublicKey(ctx gssh.Context, key gssh.PublicKey) bool {
-	p, err := s.o.Authenticator.AuthPublicKey(ctx, ctx.User(), key)
+	// The peer travels with the credential. An SSH certificate may restrict itself to a
+	// source address, and x/crypto enforces that option only from the Permissions its own
+	// callback returns — which this path never produces. Without the address here a
+	// backend has to choose between ignoring the restriction and refusing every
+	// certificate that carries one; with it, it can do the thing the CA operator meant.
+	p, err := s.o.Authenticator.AuthPublicKey(
+		plugin.WithPeer(ctx, ctx.RemoteAddr()), ctx.User(), key)
 	if err != nil || p == nil {
 		// No detail on the wire. An unauthenticated peer learns only that it failed,
 		// and in particular does not learn whether the *device* in the username

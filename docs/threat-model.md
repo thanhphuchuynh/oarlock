@@ -221,7 +221,7 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 |---|---|---|---|
 | 5 | Operator authentication by key or OIDC | tested | `internal/auth/authorizedkeys`, `internal/auth/oidc` |
 | 5 | JWT algorithm allow-list bound to the key kind, and a `kid`-flood limiter | tested | `internal/auth/oidc/verify.go`, `jwks.go` |
-| 5 | `sshca` short-lived certificates | **not built** | — the row above names a backend that does not exist |
+| 5 | `sshca` short-lived certificates | tested | `internal/auth/sshca` — expiry becomes `Principal.Expiry`, so a session cannot outlive the certificate |
 | 5 | Per-action, per-device authorisation | tested | `internal/authz`, `pkg/plugin/authz.go` |
 | 5 | Per-target authorisation for `tcp`, `file:*`, `exec` | tested | `plugin.Target`; `rules` and `sqlite` backends |
 | 5 | Re-check every 30 s, `Watch` as the optimisation | tested | `internal/authz/supervisor.go` |
@@ -259,8 +259,13 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 2. **`authorized_keys` as the default authenticator** is the wrong default for anything
    past a lab, and it is the default because it needs no dependencies. The README and this
    document both say so; a warning at boot would say it louder.
-3. **`sshca` does not exist.** §5 offers it as the answer to a stolen key, and there is no
-   such backend. Until there is, the answer to a stolen key is OIDC or a short grant.
+3. **The `sshca` backend is single-node and trusts whatever the CA signs.** It now
+   exists, and two things about it are worth knowing before relying on it. Revocation
+   inside a certificate's lifetime needs the serial list, which is a file pushed to every
+   replica — the same weakness `authorized_keys` has, which is why the expiry is the
+   mechanism and the list is the exception. And the gateway checks that the CA signed;
+   whether the CA *should have* is the CA's problem, so a compromised CA is a compromised
+   fleet until its key is removed from `auth.ca_keys`.
 4. **The device writes half the policy for `tcp`, `file` and `exec`.** The gateway can now
    narrow to a port, a path or an argv, but the device's own allow-list is what holds when
    the gateway is lying — and changing that list is a fleet push, not a policy edit. Both

@@ -54,6 +54,7 @@ import (
 	"github.com/oarlock/oarlock/internal/auth/authorizedkeys"
 	"github.com/oarlock/oarlock/internal/auth/delegated"
 	"github.com/oarlock/oarlock/internal/auth/oidc"
+	"github.com/oarlock/oarlock/internal/auth/sshca"
 	"github.com/oarlock/oarlock/internal/auth/statictoken"
 	"github.com/oarlock/oarlock/internal/authsrv"
 	"github.com/oarlock/oarlock/internal/authz"
@@ -788,6 +789,45 @@ func buildAuthenticator(cfg *config.Config, log *slog.Logger) (plugin.Authentica
 			}, a, "oidc+authorized_keys", nil
 		}
 		return a, a, "oidc", nil
+	}
+
+	if cfg.Auth.Kind == "sshca" {
+		ca, err := sshca.Open(sshca.Options{
+			CAKeys:        cfg.Auth.CAKeys,
+			Revocations:   cfg.Auth.Revocations,
+			MaxLifetime:   cfg.Auth.MaxLifetime,
+			PrincipalFrom: sshca.PrincipalSource(cfg.Auth.PrincipalFrom),
+			Log:           log,
+		})
+		if err != nil {
+			return nil, nil, "", err
+		}
+		// A CA authenticates the SSH front door and nothing else: a certificate is an
+		// SSH credential, and there is no honest way to turn an HTTP request into one.
+		// So the API still needs its own backend, and static tokens are the only one
+		// available without OIDC.
+		if cfg.SSH.AuthorizedKeys != "" {
+			// Not combined, unlike oidc + keys. There the key file is a break-glass path
+			// beside a different kind of credential; here it is the *same* kind, and it
+			// is the one that does not expire — so it is not a fallback, it is the way
+			// in that survives the CA refusing to issue.
+			return nil, nil, "", errors.New("oarlockd: ssh.authorized_keys is set " +
+				"alongside auth.kind: sshca. A key in that file authenticates without a " +
+				"certificate and never expires, which is the one thing running a CA is " +
+				"meant to remove. Remove ssh.authorized_keys")
+		}
+		var tokens plugin.Authenticator
+		if len(cfg.API.Tokens) > 0 {
+			st, err := statictoken.Open(cfg.Env, cfg.API.Tokens)
+			if err != nil {
+				return nil, nil, "", err
+			}
+			tokens = st
+		}
+		if tokens == nil {
+			return ca, nil, "sshca", nil
+		}
+		return &pair{keys: ca, tokens: tokens}, nil, "sshca+static_token", nil
 	}
 
 	// An SSH key file authenticates operators at the front door; static tokens
