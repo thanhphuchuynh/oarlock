@@ -40,11 +40,44 @@ type Config struct {
 	// transport in tests.
 	Dialer transport.Dialer
 
-	// PinSHA256 pins the gateway's public key. Strongly recommended and on by
-	// default in the reference agent: wire version v0 has no channel binding, so
-	// pinning is what stands between the handshake and a TLS-terminating middlebox
-	// relaying it.
+	// PinSHA256 pins the gateway's public key. Strongly recommended and on by default in
+	// the reference agent.
+	//
+	// It is the weaker half of the pair now that channel binding exists: a pin stops a
+	// middlebox that has to present a certificate this device would reject, and does
+	// nothing about one holding a certificate the device already trusts. Keep both — the
+	// pin also fails the connection *earlier*, before any handshake, which is worth
+	// having on a device that pays for its radio.
 	PinSHA256 []string
+
+	// RequireChannelBinding refuses a handshake the gateway will not bind to the TLS
+	// connection underneath it (protocol v1).
+	//
+	// This is the agent's half of the control and it is the half that stops a downgrade:
+	// the gateway picks the version, so anything that can rewrite HELLO can ask for the
+	// unbound one, and the agent is the only party in a position to say no.
+	//
+	// It is what PinSHA256 was standing in for. A pin covers a middlebox that has to
+	// present a certificate this device would reject; it does nothing about one holding a
+	// certificate the device already trusts — a corporate inspection appliance, or a CA
+	// in the platform trust store. Binding covers both, because the relay's two TLS
+	// sessions export different keying material whatever certificate it holds.
+	//
+	// # Off by default, and used anyway
+	//
+	// The agent always *offers* v1, so binding happens wherever both ends can do it with
+	// nothing configured. This flag is the difference between using it and insisting on
+	// it, and insisting is opt-in for a reason that has nothing to do with taste: an
+	// agent that refuses an unbound handshake refuses to connect at all when the gateway
+	// is older, or when anything in the path cannot export keying material. On a device
+	// in somebody's plant room, a fleet that will not reconnect is a fleet that needs
+	// physical access.
+	//
+	// So the protection is opportunistic by default and mandatory by choice — and the
+	// choice belongs to whoever knows their gateway is v1, which is not this library.
+	// Turning it on is what closes the downgrade: without it, something that can rewrite
+	// HELLO can ask for v0 and this agent will agree.
+	RequireChannelBinding bool
 
 	// Caps is what this build can actually do. Omit "shell" if there is no PTY, and
 	// the gateway refuses such a session at open time with a real reason instead of
@@ -146,12 +179,24 @@ func NewControl(cfg Config) (*Control, error) {
 	if cfg.WriteTimeout <= 0 {
 		cfg.WriteTimeout = DefaultWriteTimeout
 	}
+	if len(cfg.PinSHA256) > 0 && !cfg.RequireChannelBinding {
+		// An agent that pins has said it cares which gateway it is talking to, and a pin
+		// is the weaker of the two ways to care: it cannot see a middlebox holding a
+		// certificate this device already trusts. Worth saying once, because the
+		// stronger control is one flag away and nothing else would mention it.
+		cfg.Log.Info("certificate pinning is on and channel binding is not required; "+
+			"binding will still be used when the gateway offers it, but a downgrade to "+
+			"the unbound handshake would be accepted. Set require_channel_binding once "+
+			"every gateway in the path speaks protocol v1",
+			"device", cfg.DeviceID)
+	}
 	if len(cfg.PinSHA256) == 0 {
 		// Loud, once, at startup — not silent. An unpinned agent is a working agent
 		// with a weaker guarantee than the documentation claims, and the operator
 		// should know which one they have.
-		cfg.Log.Warn("no certificate pin configured; v0 has no channel binding, "+
-			"so a TLS-terminating middlebox could relay this handshake",
+		cfg.Log.Warn("no certificate pin configured; a TLS-terminating middlebox could "+
+			"relay this handshake unless the gateway negotiates a channel-bound one "+
+			"(protocol v1), which is not guaranteed unless require_channel_binding is set",
 			"device", cfg.DeviceID)
 	}
 	c := &Control{cfg: cfg, log: cfg.Log.With("device", cfg.DeviceID)}
@@ -225,10 +270,11 @@ func (c *Control) runOnce(ctx context.Context, sleeper *backoff.Sleeper) (time.D
 	defer conn.Close(transport.CloseNormal, "done")
 
 	hs := &handshake.Agent{
-		DeviceID: c.cfg.DeviceID,
-		Signer:   c.cfg.Signer,
-		Caps:     c.cfg.Caps,
-		Info:     c.cfg.Info,
+		DeviceID:              c.cfg.DeviceID,
+		Signer:                c.cfg.Signer,
+		Caps:                  c.cfg.Caps,
+		Info:                  c.cfg.Info,
+		RequireChannelBinding: c.cfg.RequireChannelBinding,
 	}
 	w, err := hs.Perform(ctx, conn)
 	if err != nil {

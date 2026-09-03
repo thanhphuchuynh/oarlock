@@ -96,7 +96,9 @@ func TestSigningInputIsInjective(t *testing.T) {
 	}
 	seen := map[string][2]string{}
 	for _, p := range pairs {
-		key := string(handshake.SigningInput(nS, nC, p[0], p[1]))
+		key := string(handshake.SigningInput(handshake.Signed{
+			NonceS: nS, NonceC: nC, DeviceID: p[0], GatewayID: p[1],
+		}))
 		if other, dup := seen[key]; dup {
 			t.Fatalf("(%q,%q) and (%q,%q) produce identical signing input",
 				other[0], other[1], p[0], p[1])
@@ -105,8 +107,13 @@ func TestSigningInputIsInjective(t *testing.T) {
 	}
 
 	// The nonces must matter too, or a signature would replay across handshakes.
-	base := handshake.SigningInput(nS, nC, "d", "g")
-	if bytes.Equal(base, handshake.SigningInput(nC, nS, "d", "g")) {
+	base := handshake.SigningInput(handshake.Signed{
+		NonceS: nS, NonceC: nC, DeviceID: "d", GatewayID: "g",
+	})
+	swapped := handshake.SigningInput(handshake.Signed{
+		NonceS: nC, NonceC: nS, DeviceID: "d", GatewayID: "g",
+	})
+	if bytes.Equal(base, swapped) {
 		t.Error("swapping the nonces produces the same input")
 	}
 	// And the domain separator must be there, so a device key signature can never
@@ -137,8 +144,12 @@ func TestHandshakeSucceeds(t *testing.T) {
 	if res.Device.ID != dev.ID {
 		t.Errorf("gateway identified %q", res.Device.ID)
 	}
-	if res.Version != handshake.Version || w.Version != handshake.Version {
-		t.Errorf("versions: gateway %d, agent saw %d", res.Version, w.Version)
+	// v0, and correctly: `run` uses an in-memory pipe, which has no channel to bind to,
+	// so there is no v1 handshake to be had. The bound path is exercised in
+	// binding_test.go against a pair that reports one.
+	if res.Version != handshake.VersionUnbound || w.Version != handshake.VersionUnbound {
+		t.Errorf("versions: gateway %d, agent saw %d; an unbindable transport negotiates v%d",
+			res.Version, w.Version, handshake.VersionUnbound)
 	}
 	if w.GatewayID != "gw-a" {
 		t.Errorf("gateway id %q", w.GatewayID)

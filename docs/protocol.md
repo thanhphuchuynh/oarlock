@@ -122,20 +122,32 @@ sequenceDiagram
     participant A as agent
     participant G as oarlockd
     A->>G: WSS connect  /ws/control
-    A->>G: HELLO {device_id, versions:[0], nonce_c, caps, agent}
-    G->>A: CHALLENGE {nonce_s, gateway_id}
+    A->>G: HELLO {device_id, versions:[1,0], nonce_c, caps, agent}
+    G->>A: CHALLENGE {nonce_s, gateway_id, version}
     A->>G: AUTH {sig = Ed25519(SigningInput)}
-    G->>A: WELCOME {version:0, limits, resume}
+    G->>A: WELCOME {version, limits, resume}
     Note over A,G: channel is live — it carries DIAL, CANCEL, PING and GOAWAY only
 ```
 
-The signed bytes are **length-prefixed and domain-separated**, not concatenated:
+The signed bytes are **length-prefixed and domain-separated**, not concatenated. There
+are two versions, and the version *is* the domain separator:
 
 ```
-"oarlock-control-v0" 0x00
-  u16(len) nonce_s   u16(len) nonce_c
-  u16(len) device_id u16(len) gateway_id
+v1 (channel-bound)                      v0 (unbound)
+"oarlock-control-v1" 0x00               "oarlock-control-v0" 0x00
+  u16(len) nonce_s   u16(len) nonce_c     u16(len) nonce_s   u16(len) nonce_c
+  u16(len) device_id u16(len) gateway_id  u16(len) device_id u16(len) gateway_id
+  u16(len) channel_binding
 ```
+
+`channel_binding` is 32 bytes of RFC 5705 exported keying material, label
+`EXPORTER-oarlock-control-v1`, taken from the TLS connection the handshake is running on.
+**It never appears on the wire** — both sides compute it independently and only mix it into
+what is signed.
+
+Making the version the domain separator rather than a field inside the input is what makes
+cross-version replay impossible by construction: a v0 signature cannot verify as a v1 one
+whatever else matches.
 
 An earlier draft of this document described plain concatenation, and that was a
 vulnerability rather than a simplification: device `ab` with gateway `c` produces
@@ -156,10 +168,34 @@ hash similar bytes.
   key alongside the old, let devices roll over, then retire the old one.
 - The gateway id is in the signed blob so a signature captured by one gateway cannot
   be replayed to another.
-- **Not yet solved: channel binding.** A hostile TLS-terminating middlebox could
-  relay a valid handshake and own the channel. `v1` should mix in RFC 5705 exported
-  keying material; `v0` relies on the agent pinning the gateway's certificate, which
-  the reference agent does by default (`--pin-sha256`).
+- **Channel binding (v1) is what stops a relay.** A TLS-terminating middlebox has two
+  TLS sessions and therefore exports two different keying materials: the device signs over
+  one and the gateway verifies over the other, so the signature does not verify. The
+  middlebox does not have to modify a single frame for this to catch it.
+
+  Certificate pinning was the stopgap and covers less than it looks: it only stops a
+  middlebox that has to present a certificate the device would *reject*. An inspection
+  appliance whose CA is in the device's trust store passes pinning and then holds the
+  device's authenticated channel.
+
+- **The version is chosen by the gateway, so downgrade is a policy question on both
+  sides.** `CHALLENGE` carries the chosen version precisely because the agent has to know
+  it before it signs — an agent that learned it from `WELCOME` would already have signed
+  the wrong thing. The agent checks it against what it offered.
+
+  Beyond that, nothing cryptographic can stop a downgrade: a v0 handshake genuinely has
+  nothing to bind with, so refusing one is a decision rather than a verification. Both
+  ends therefore carry an explicit `require_channel_binding`, and an agent that sets it
+  does not offer v0 at all. **Both default to off**, because requiring binding means
+  refusing to connect to a gateway that cannot provide one — and a fleet in the field that
+  will not reconnect needs somebody to drive to it. Binding is used wherever both ends
+  can; it is *required* only where somebody has said so. `internal/safety` refuses
+  production without it on the gateway.
+
+  Exporting also fails on a TLS 1.2 session resumed without extended master secret, where
+  the exporter would not be tied to this handshake. Go refuses rather than returning
+  something that looks bound and is not, and a gateway that requires binding reports that
+  as a refusal rather than downgrading.
 - The whole exchange has a 5 s budget from socket open. `AgentAuthenticator` may
   replace it entirely — mTLS moves the problem into the TLS layer and skips § 3.1.
 - `WELCOME.resume` names sessions the gateway is still holding for this device. The

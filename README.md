@@ -206,7 +206,8 @@ strict checks, including an unset value.
 ```
 
 `-insecure-skip-pin` is required to leave the gateway unpinned, and the agent refuses to
-start without one or the other. Wire version `v0` has no channel binding, so pinning is
+start without one or the other. Protocol `v1` binds the handshake to the TLS connection
+underneath it, which is the stronger of the two and is negotiated automatically; pinning is
 what stands between the handshake and a TLS-terminating middlebox relaying it — an agent
 that connects unpinned because nobody passed a flag is an agent nobody decided about.
 

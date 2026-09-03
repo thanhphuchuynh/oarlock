@@ -157,6 +157,15 @@ type Hello struct {
 type Challenge struct {
 	NonceS    string `json:"nonce_s"`
 	GatewayID string `json:"gateway_id"`
+	// Version is the version the gateway chose, sent here rather than only in WELCOME
+	// because the agent has to know it *before* it signs: the version selects the
+	// domain separator and whether the channel binding is covered, so an agent that
+	// learned it afterwards would have already signed the wrong thing.
+	//
+	// The agent must check it against what it offered, and against its own policy. A
+	// gateway naming v0 to an agent that requires binding is the downgrade this field
+	// makes visible.
+	Version int `json:"version,omitempty"`
 }
 
 // Auth carries the signature over nonce_s ‖ nonce_c ‖ device_id ‖ gateway_id.
