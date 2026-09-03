@@ -29,6 +29,16 @@ const Subprotocol = "oarlock.v0"
 const defaultHandshakeTimeout = 10 * time.Second
 
 type conn struct {
+	// tls is the state of the connection underneath, when there is one. It exists for
+	// channel binding: internal/handshake mixes RFC 5705 exported keying material into
+	// what the device signs, so a middlebox that terminates TLS and relays the handshake
+	// signs over one channel and is verified over another.
+	//
+	// Held rather than fetched because there is nowhere to fetch it from later: on the
+	// client side it arrives on the dial's *http.Response and on the server side on the
+	// *http.Request, and both are gone by the time the handshake runs.
+	tlsState *tls.ConnectionState
+
 	c    *ws.Conn
 	addr string
 }
@@ -147,6 +157,7 @@ func (Dialer) Dial(ctx context.Context, url string, opts transport.Options) (tra
 		return nil, fmt.Errorf("websocket: dial %s: %w", url, err)
 	}
 	if resp != nil && resp.Body != nil {
+		// The TLS state is read from resp below; closing the body does not invalidate it.
 		_ = resp.Body.Close()
 	}
 	if got := c.Subprotocol(); got != sub {
@@ -154,7 +165,11 @@ func (Dialer) Dial(ctx context.Context, url string, opts transport.Options) (tra
 		return nil, fmt.Errorf("websocket: server negotiated subprotocol %q, want %q", got, sub)
 	}
 	c.SetReadLimit(readLimit(opts))
-	return &conn{c: c, addr: url}, nil
+	var state *tls.ConnectionState
+	if resp != nil {
+		state = resp.TLS
+	}
+	return &conn{c: c, addr: url, tlsState: state}, nil
 }
 
 // Upgrader accepts inbound WebSocket connections.
@@ -189,7 +204,7 @@ func (u Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, opts transport
 		return nil, fmt.Errorf("websocket: client did not offer %q", sub)
 	}
 	c.SetReadLimit(readLimit(opts))
-	return &conn{c: c, addr: r.RemoteAddr}, nil
+	return &conn{c: c, addr: r.RemoteAddr, tlsState: r.TLS}, nil
 }
 
 // pinVerifier matches the leaf's SubjectPublicKeyInfo against a pin set.
@@ -224,3 +239,28 @@ func Pin(cert *x509.Certificate) string {
 	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
+
+// ChannelBinding returns RFC 5705 exported keying material for this connection.
+//
+// # When this legitimately fails
+//
+// `ws://` has nothing to bind to, so a development gateway gets ErrNoChannelBinding and
+// the caller's policy decides what that means.
+//
+// It also fails on a TLS 1.2 session resumed without extended master secret, because the
+// exporter would not be tied to *this* handshake — Go refuses rather than returning
+// something that looks bound and is not, which is the right refusal. TLS 1.3 always
+// exports. A deployment that requires binding and hits this is running an old TLS stack
+// somewhere in the path, and the refusal says so rather than quietly downgrading.
+func (c *conn) ChannelBinding(label string, length int) ([]byte, error) {
+	if c.tlsState == nil {
+		return nil, transport.ErrNoChannelBinding
+	}
+	ekm, err := c.tlsState.ExportKeyingMaterial(label, nil, length)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", transport.ErrNoChannelBinding, err)
+	}
+	return ekm, nil
+}
+
+var _ transport.ChannelBound = (*conn)(nil)

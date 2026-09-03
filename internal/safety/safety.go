@@ -75,6 +75,9 @@ type Settings struct {
 	AuthzGrace int
 	// AuthzKind is the authorisation backend.
 	AuthzKind string
+	// ChannelBindingRequired says whether the control-channel handshake must be bound to
+	// the connection underneath it.
+	ChannelBindingRequired bool
 }
 
 // Problem is one finding. Fatal problems refuse the boot; the rest are warnings that
@@ -189,6 +192,16 @@ func Check(s Settings, log *slog.Logger) ([]Problem, error) {
 			"fail-closed — an authorisation error ends live sessions immediately — "+
 			"and a positive value is how many failed re-checks a live session "+
 			"survives before closing as authz_unavailable")
+	}
+	// A relay that terminates TLS with a certificate the device accepts passes pinning
+	// and then holds the device's authenticated control channel. Binding is the thing
+	// that notices, and without it the device-authentication story has a hole a
+	// corporate inspection appliance walks through by accident.
+	if !s.ChannelBindingRequired && prod {
+		add(false, "listen.require_channel_binding", "the control-channel handshake is "+
+			"not bound to the connection it runs on, so a TLS-terminating middlebox can "+
+			"relay a device's handshake and keep the channel. Certificate pinning is the "+
+			"stopgap and does not cover a certificate the device already trusts")
 	}
 	if s.AuthzKind == "" && prod {
 		add(true, "authorizer", "not configured. With no authorizer there is nothing "+

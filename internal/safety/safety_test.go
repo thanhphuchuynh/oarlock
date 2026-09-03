@@ -26,6 +26,10 @@ func safeProd() safety.Settings {
 		// WORM storage and must still be able to record.
 		RecordingStoreProtected: true,
 		RecordingStoreMode:      "compliance",
+		// And it binds the control-channel handshake to the connection it runs on, so a
+		// TLS-terminating middlebox cannot relay a device's handshake and keep the
+		// channel. Pinning does not cover a certificate the device already trusts.
+		ChannelBindingRequired: true,
 	}
 }
 
@@ -65,6 +69,10 @@ func TestEachUnsafeSettingIsCaught(t *testing.T) {
 		},
 		"no recorder": {
 			func(s *safety.Settings) { s.RecorderConfigured = false }, "recorder", false,
+		},
+		"an unbound control-channel handshake": {
+			func(s *safety.Settings) { s.ChannelBindingRequired = false },
+			"listen.require_channel_binding", false,
 		},
 		"mutable recording store": {
 			func(s *safety.Settings) {

@@ -376,6 +376,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Upgrader: websocket.Upgrader{},
 		Handshake: &handshake.Gateway{
 			Registry: reg, GatewayID: cfg.URL, Log: log,
+			RequireChannelBinding: cfg.Listen.RequireChannelBinding,
 		},
 		Hub: g.hub, Log: log,
 	}))
@@ -492,6 +493,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		SSHHostKeyConfigured:       !generated,
 		AuthzGrace:                 grace,
 		AuthzKind:                  cfg.Authz.Kind,
+		ChannelBindingRequired:     cfg.Listen.RequireChannelBinding,
 	}
 	_ = recStoreDetail
 	return g, nil

@@ -63,7 +63,10 @@ func (d *dialer) Dial(_ context.Context, url string, _ transport.Options) (trans
 	if err != nil {
 		return nil, err
 	}
-	agentEnd, gatewayEnd := memory.Pair(0)
+	// A pair that reports a channel binding, so these tests run the v1 handshake — which
+	// is what a real agent negotiates against a real gateway over TLS. The unbound path
+	// has its own tests in internal/handshake.
+	agentEnd, gatewayEnd := memory.PairBound(0, []byte("one tls session"))
 	d.conns <- gatewayEnd
 	return agentEnd, nil
 }
@@ -330,7 +333,7 @@ func TestAnUnpinnedAgentSaysSoOutLoud(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"no certificate pin", "channel binding", "d1"} {
+	for _, want := range []string{"no certificate pin", "relay this handshake", "d1"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("the warning does not mention %q:\n%s", want, logs.String())
 		}
@@ -737,5 +740,84 @@ func TestADialFailureIsRetried(t *testing.T) {
 		"the agent gave up after a failed dial")
 	if h.ctrl.Up() {
 		t.Fatal("the channel reported itself up with no gateway behind it")
+	}
+}
+
+// TestBindingIsOfferedWithoutBeingRequired.
+//
+// The default, and the reason it is the default. An agent that *required* a bound handshake
+// would refuse to connect against a gateway that cannot provide one — an older gateway, or
+// anything in the path that cannot export keying material — and a device in a plant room
+// that will not reconnect needs somebody to drive to it.
+//
+// So binding is used wherever it can be and insisted on only when configured. This asserts
+// the first half: with nothing set, the agent still lands on the bound version.
+func TestBindingIsOfferedWithoutBeingRequired(t *testing.T) {
+	h := newControlHarness(t, func(c *agent.Config) {
+		c.PinSHA256 = nil // and therefore no requirement either
+	})
+	h.run(t)
+	conn := h.dialer.gateway(t)
+	res := h.accept(t, conn)
+
+	if res.Version != handshake.Version {
+		t.Fatalf("negotiated v%d; binding was available and should have been used", res.Version)
+	}
+}
+
+// TestAnAgentThatRequiresBindingWillNotTalkToAnUnboundGateway is the other half: opt in and
+// the downgrade is closed, at the cost of not connecting to a gateway that cannot bind.
+// That cost is the whole reason it is opt-in.
+func TestAnAgentThatRequiresBindingWillNotTalkToAnUnboundGateway(t *testing.T) {
+	unbound := &dialer{conns: make(chan transport.Conn, 8)}
+	h := newControlHarness(t, func(c *agent.Config) {
+		c.RequireChannelBinding = true
+		c.Dialer = unboundDialer{unbound}
+	})
+	h.run(t)
+	conn := h.dialer2(t, unbound)
+
+	g := &handshake.Gateway{
+		Registry:  reg{devices: map[string]*plugin.Device{h.device.ID: h.device}},
+		GatewayID: "gw-a",
+		Log:       slog.New(slog.NewTextHandler(h.gwLogs, nil)),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := g.Accept(ctx, conn); err == nil {
+		t.Fatal("an unbound gateway completed a handshake with an agent that requires binding")
+	}
+	if h.ctrl.Up() {
+		t.Fatal("the channel came up")
+	}
+}
+
+// unboundDialer hands out pairs with no channel binding, which is what `ws://` is.
+type unboundDialer struct{ d *dialer }
+
+func (u unboundDialer) Dial(ctx context.Context, url string, o transport.Options) (transport.Conn, error) {
+	u.d.mu.Lock()
+	u.d.dials = append(u.d.dials, dial{url: url, at: time.Now()})
+	u.d.mu.Unlock()
+	agentEnd, gatewayEnd := memory.Pair(0)
+	select {
+	case u.d.conns <- gatewayEnd:
+	case <-ctx.Done():
+		// The reconnect loop dials faster than a test drains, and a bare send would
+		// park this goroutine for the rest of the run once the buffer filled.
+		return nil, ctx.Err()
+	}
+	return agentEnd, nil
+}
+
+// dialer2 waits on a second dialer's queue, for the one test that needs its own.
+func (h *controlHarness) dialer2(t *testing.T, d *dialer) transport.Conn {
+	t.Helper()
+	select {
+	case c := <-d.conns:
+		return c
+	case <-time.After(3 * time.Second):
+		t.Fatal("the agent never dialled")
+		return nil
 	}
 }

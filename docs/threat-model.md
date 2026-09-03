@@ -103,7 +103,7 @@ What follows from accepting it:
 | Device key extracted from a stolen device | Ed25519 key generated on-device, never transmitted. On Android, the reference agent should use the hardware keystore where available. | A rooted device without hardware key storage gives up its key. Then that *one* device can be impersonated — and nothing else, because keys are per device. |
 | Impersonating another device | Keys are per device and the signed blob binds `device_id` and `gateway_id`. | Only as strong as the registry's key provisioning, which Oarlock does not own. |
 | Ticket replay (`dispatch`) | Atomic compare-and-delete; second redemption fails. An agent that retries must fetch a fresh ticket. | A ticket intercepted and redeemed *before* the real agent wins. The real agent then fails, loudly — which is the detection signal, so alert on it. |
-| MITM relaying a valid handshake | The agent pins the gateway certificate (`--pin-sha256`) by default. | `v0` has no channel binding; a TLS-terminating middlebox the agent was configured to trust can relay. `v1` should mix in RFC 5705 exported keying material. **Known gap.** |
+| MITM relaying a valid handshake | Protocol `v1` mixes RFC 5705 exported keying material into what the device signs, so a middlebox with two TLS sessions signs over one channel and is verified over the other. It is negotiated wherever both ends can, and required where `require_channel_binding` is set. The agent also pins the gateway certificate. | The version is chosen by the gateway, so a deployment that has not *required* binding on both ends can be downgraded to `v0` — see § 12 gap 1. Pinning alone does not cover a middlebox holding a certificate the device already trusts. |
 | A compromised device attacking the gateway | Frame size cap, strict parsing, per-connection rate limits, no dynamic allocation from attacker-controlled lengths (the WebSocket message boundary is the frame boundary). | Parser bugs. This is the largest untrusted-input surface in the project and deserves fuzzing from the first commit, not after the first report. |
 | A compromised device attacking the *operator's terminal* | Output is raw bytes and always was — a hostile device can emit any escape sequence. The web terminal disables OSC 52 (clipboard write) and window-title reporting by default. | A local `ssh` client's terminal is outside Oarlock's control. A hostile device can garble it and, with an unlucky terminal emulator, do worse. This is true of `ssh` generally; it is not made worse here. |
 | Prefix truncation deleting the mode disclosure | Strict key exchange removes the primitive; `x/crypto` implements it from v0.17.0 and the version is asserted in CI, and a test reads the server's KEXINIT off the wire to confirm `kex-strict-s-v00@openssh.com` is advertised. Structurally, the disclosure is also **repeated at session close**, where no prefix attack can reach, and the one message inside the vulnerable window carries no security-relevant claim. | An attacker who can modify traffic can still make the *opening* line disappear on a peer that somehow negotiated without strict kex; the closing line is what makes that survivable. |
@@ -237,7 +237,7 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 | 6 | Ed25519 challenge-response, key generated on-device | tested | `internal/handshake` |
 | 6 | Signing input length-prefixed and domain-separated | tested | `handshake.SigningInput` |
 | 6 | Gateway certificate pinning, additive, over the SPKI | built | `pkg/transport/websocket` |
-| 6 | Channel binding on the agent handshake | **not built** | see gap 1 below |
+| 6 | Channel binding on the agent handshake | tested | `internal/handshake` v1 — a simulated relay with two channels is refused |
 | 6 | No allocation from an attacker-controlled length | tested, fuzzed in CI | `pkg/frame` — there is no length field to lie about |
 | 6 | Terrapin: strict key exchange | tested | the `x/crypto` floor is asserted in CI |
 | 6 | `tcp` confined to device loopback, per-port allow-list on the device | tested | `internal/sshsrv/tcpip.go`, `agent/tcp.go` |
@@ -257,8 +257,14 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 
 ### Gaps, recorded here rather than discovered later
 
-1. **No channel binding in the `v0` agent handshake** (§6). Certificate pinning is the
-   stopgap; RFC 5705 exported keying material is the fix, and it belongs in `v1`.
+1. **Channel binding is used by default and required only where configured.** v1 exists
+   and a relay is refused when both ends run it. But the version is chosen by the gateway,
+   so nothing cryptographic prevents a downgrade to v0 — a v0 handshake has nothing to bind
+   with, which makes refusing one a policy rather than a verification. Both ends default to
+   *off* on purpose: requiring binding means refusing to connect where it is unavailable,
+   and a fleet in the field that will not reconnect needs physical access. So a deployment
+   that has not set `listen.require_channel_binding` and `require_channel_binding` on its
+   agents is downgradeable, and the boot gate says so in production.
 2. **`authorized_keys` as the default authenticator** is the wrong default for anything
    past a lab, and it is the default because it needs no dependencies. The README and this
    document both say so; a warning at boot would say it louder.

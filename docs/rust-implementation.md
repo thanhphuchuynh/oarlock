@@ -235,7 +235,10 @@ Build:
    `remote_addr`. Enforce the read limit *before* buffering — the limit defends against an
    allocation, so checking after allocating is theatre.
 2. **A `tokio-tungstenite` implementation** with `rustls`, plus certificate pinning
-   (SHA-256 of the SubjectPublicKeyInfo). Wire v0 has no channel binding, so pinning is
+   (SHA-256 of the SubjectPublicKeyInfo). A Rust agent must also implement protocol v1's
+   channel binding — 32 bytes of RFC 5705 exporter output, label
+   `EXPORTER-oarlock-control-v1`, mixed into the signed input — or it can only ever
+   negotiate v0 and is downgradeable by construction. Pinning is
    what stands between the handshake and a TLS-terminating middlebox. The Go agent pins by
    default; yours should too.
 3. **The control loop**: connect → `HELLO` → `CHALLENGE` → `AUTH` → `WELCOME`, then

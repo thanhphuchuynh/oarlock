@@ -35,8 +35,35 @@ const Budget = 5 * time.Second
 // NonceLen is the length of each side's nonce, before base64.
 const NonceLen = 32
 
-// Version is the wire version this build speaks.
-const Version = 0
+// Version is the highest wire version this build speaks.
+//
+// v1 adds channel binding: the device's signature covers RFC 5705 exported keying material
+// from the TLS connection underneath, so a middlebox that terminates TLS and relays the
+// handshake signs over one channel and is verified over another. Nothing new travels on
+// the wire — the binding is computed independently at both ends and only mixed into what
+// is signed.
+const Version = 1
+
+// VersionUnbound is v0: the same handshake with nothing tying it to the channel.
+//
+// Kept because a development gateway on `ws://` has no channel to bind to, and because an
+// agent in the field is not upgraded on the same day as its gateway. It is also the
+// downgrade an attacker wants, which is why both sides carry an explicit policy rather
+// than accepting whatever the peer offers — see RequireChannelBinding.
+const VersionUnbound = 0
+
+// SupportedVersions is what this build offers, highest first.
+var SupportedVersions = []int{Version, VersionUnbound}
+
+// ChannelBindingLabel is the RFC 5705 exporter label.
+//
+// Versioned, and specific to this protocol: the same label on two different connections
+// must not produce the same bytes, and a label shared with another protocol using the same
+// TLS session would let one protocol's exporter answer the other's question.
+const ChannelBindingLabel = "EXPORTER-oarlock-control-v1"
+
+// ChannelBindingLen is how many bytes of keying material are mixed in.
+const ChannelBindingLen = 32
 
 // Errors. AuthFailed is deliberately coarse — see the note on Accept.
 var (
@@ -46,10 +73,21 @@ var (
 	ErrRemoteError = errors.New("handshake: peer returned an error")
 )
 
-// domain separates these signatures from anything else the device key might ever
-// sign. Without it, a signature produced for one purpose could be replayed into
-// another protocol that happens to hash similar bytes.
-const domain = "oarlock-control-v0"
+// domainFor separates these signatures from anything else the device key might ever sign,
+// and separates each protocol version from the others.
+//
+// Without the first, a signature produced for one purpose could be replayed into another
+// protocol that happens to hash similar bytes. Without the second, a v0 signature — made
+// with nothing binding it to a channel — would verify as a v1 one, and the whole point of
+// v1 is that it cannot. The version *is* the domain separator rather than a field inside
+// the input, because that makes cross-version replay impossible by construction rather
+// than by a length prefix being right.
+func domainFor(version int) string {
+	if version >= Version {
+		return "oarlock-control-v1"
+	}
+	return "oarlock-control-v0"
+}
 
 // SigningInput builds the bytes both sides sign over.
 //
@@ -60,15 +98,45 @@ const domain = "oarlock-control-v0"
 // one field can shift the boundary and get a signature that validates against
 // values nobody agreed to. Length prefixes make the encoding injective, which is
 // what makes the signature mean what it appears to mean.
-func SigningInput(nonceS, nonceC []byte, deviceID, gatewayID string) []byte {
-	out := make([]byte, 0, len(domain)+1+8+len(nonceS)+len(nonceC)+len(deviceID)+len(gatewayID))
+func SigningInput(s Signed) []byte {
+	domain := domainFor(s.Version)
+	parts := [][]byte{s.NonceS, s.NonceC, []byte(s.DeviceID), []byte(s.GatewayID)}
+	if s.Version >= Version {
+		// Appended rather than inserted, so a v1 input is a v0 input plus one field and
+		// the two can be read side by side.
+		parts = append(parts, s.Channel)
+	}
+	n := len(domain) + 1
+	for _, p := range parts {
+		n += 2 + len(p)
+	}
+	out := make([]byte, 0, n)
 	out = append(out, domain...)
 	out = append(out, 0)
-	for _, part := range [][]byte{nonceS, nonceC, []byte(deviceID), []byte(gatewayID)} {
+	for _, part := range parts {
 		out = binary.BigEndian.AppendUint16(out, uint16(len(part)))
 		out = append(out, part...)
 	}
 	return out
+}
+
+// Signed is everything a device signature covers.
+//
+// A struct rather than five positional arguments because the set grew once — v1 added the
+// channel binding — and a call site that silently transposed two byte slices would produce
+// a signature that verifies against values nobody agreed to.
+type Signed struct {
+	// Version selects the domain separator and whether Channel is covered.
+	Version int
+	NonceS  []byte
+	NonceC  []byte
+	// DeviceID and GatewayID are each in the input so a signature captured by one
+	// gateway cannot be replayed to another, or for another device.
+	DeviceID  string
+	GatewayID string
+	// Channel is RFC 5705 exported keying material from the connection underneath.
+	// Ignored at v0, which is the whole difference between the versions.
+	Channel []byte
 }
 
 // Result is what the gateway learned from a successful handshake.
@@ -95,6 +163,20 @@ func (r *Result) Supports(cap string) bool {
 type Gateway struct {
 	Registry  plugin.DeviceRegistry
 	GatewayID string
+
+	// RequireChannelBinding refuses any handshake that is not bound to the connection
+	// underneath it.
+	//
+	// This is a policy and not a question asked of the connection, and that distinction
+	// is the whole control. Binding stops a TLS-terminating middlebox from relaying the
+	// handshake — its two TLS sessions export different keying material — and that
+	// protection evaporates if a peer can say "I cannot bind" and be believed, which is
+	// exactly what a middlebox would say. So a gateway that requires it refuses v0
+	// outright rather than negotiating down.
+	//
+	// Off by default because a development gateway on `ws://` has nothing to bind to.
+	// internal/safety refuses production without it.
+	RequireChannelBinding bool
 
 	// Rand defaults to crypto/rand.
 	Rand io.Reader
@@ -145,7 +227,23 @@ func (g *Gateway) Accept(ctx context.Context, conn transport.Conn) (*Result, err
 	if err != nil {
 		return nil, fmt.Errorf("%w: client nonce: %v", ErrProtocol, err)
 	}
-	version, err := negotiate(hello.Versions)
+	// The channel binding is computed before the version is chosen, because whether one
+	// is available is what decides whether v1 is on the table at all.
+	binding, bindErr := transport.Binding(conn, ChannelBindingLabel, ChannelBindingLen)
+	if bindErr != nil && g.RequireChannelBinding {
+		// Refused, loudly, and not downgraded. A gateway configured to require binding
+		// and unable to compute one is a deployment problem — `ws://`, or a TLS 1.2
+		// session resumed without extended master secret — and running unbound anyway
+		// would be the gateway defeating its own configuration.
+		log.Error("channel binding is required and unavailable",
+			"device", hello.DeviceID, "remote", conn.RemoteAddr(), "error", bindErr)
+		_ = send(ctx, conn, c, frame.TypeError, frame.Error{
+			Code: "version_unsupported",
+			Message: "this gateway requires a channel-bound handshake and this " +
+				"connection cannot provide one"})
+		return nil, fmt.Errorf("%w: %v", ErrVersion, bindErr)
+	}
+	version, err := negotiate(hello.Versions, bindErr == nil, g.RequireChannelBinding)
 	if err != nil {
 		_ = send(ctx, conn, c, frame.TypeError, frame.Error{
 			Code: "version_unsupported", Message: "no shared protocol version"})
@@ -163,6 +261,7 @@ func (g *Gateway) Accept(ctx context.Context, conn transport.Conn) (*Result, err
 	if err := send(ctx, conn, c, frame.TypeChallenge, frame.Challenge{
 		NonceS:    base64.RawURLEncoding.EncodeToString(nonceS),
 		GatewayID: g.GatewayID,
+		Version:   version,
 	}); err != nil {
 		return nil, err
 	}
@@ -186,7 +285,10 @@ func (g *Gateway) Accept(ctx context.Context, conn transport.Conn) (*Result, err
 		return nil, ErrAuthFailed
 	}
 
-	msg := SigningInput(nonceS, nonceC, hello.DeviceID, g.GatewayID)
+	msg := SigningInput(Signed{
+		Version: version, NonceS: nonceS, NonceC: nonceC,
+		DeviceID: hello.DeviceID, GatewayID: g.GatewayID, Channel: binding,
+	})
 	var matched bool
 	var retired bool
 	for _, key := range dev.RetiredKeys {
@@ -249,6 +351,19 @@ func (g *Gateway) reject(ctx context.Context, conn transport.Conn, c frame.Codec
 // Agent performs the client side.
 type Agent struct {
 	DeviceID string
+
+	// RequireChannelBinding refuses a handshake the gateway will not bind to the
+	// connection.
+	//
+	// The agent's half of the policy, and it is the half that actually stops a downgrade.
+	// The version is chosen by the gateway, so a middlebox that can rewrite HELLO can ask
+	// for v0 — and the agent is the only party in a position to say no. An agent dialling
+	// `wss://` with a pin and no binding requirement is an agent whose pin a relay can
+	// work around by claiming to be old.
+	//
+	// Off by default so an agent still works against a development gateway on `ws://`.
+	// The reference agent turns it on whenever it is pinning.
+	RequireChannelBinding bool
 	// Signer holds the device key. crypto.Signer rather than ed25519.PrivateKey so
 	// a hardware-backed keystore can be handed in without this package caring —
 	// which is the point on a platform that offers one.
@@ -271,7 +386,13 @@ func (a *Agent) Perform(ctx context.Context, conn transport.Conn) (*frame.Welcom
 	}
 	versions := a.Versions
 	if len(versions) == 0 {
-		versions = []int{Version}
+		versions = SupportedVersions
+		if a.RequireChannelBinding {
+			// Offering v0 at all would give a gateway — or something pretending to be
+			// one — something to choose. An agent that will not accept an unbound
+			// handshake should not advertise that it would.
+			versions = []int{Version}
+		}
 	}
 	c := frame.Codec{}
 
@@ -298,7 +419,37 @@ func (a *Agent) Perform(ctx context.Context, conn transport.Conn) (*frame.Welcom
 		return nil, fmt.Errorf("%w: server nonce: %v", ErrProtocol, err)
 	}
 
-	msg := SigningInput(nonceS, nonceC, a.DeviceID, ch.GatewayID)
+	// The gateway chose a version. Check it is one we offered before signing anything
+	// with it: a version we did not offer is either a confused gateway or somebody
+	// steering us onto a handshake we did not agree to.
+	chosen := ch.Version
+	if !contains(versions, chosen) {
+		return nil, fmt.Errorf("%w: gateway chose v%d, which we did not offer",
+			ErrVersion, chosen)
+	}
+	var binding []byte
+	if chosen >= Version {
+		binding, err = transport.Binding(conn, ChannelBindingLabel, ChannelBindingLen)
+		if err != nil {
+			// The gateway asked for a bound handshake on a connection we cannot bind.
+			// Refusing is the only honest answer: signing without the binding would
+			// produce a signature the gateway cannot verify anyway, and pretending
+			// otherwise would just move the failure somewhere less legible.
+			return nil, fmt.Errorf("%w: gateway chose v%d but this connection cannot "+
+				"be bound: %v", ErrVersion, chosen, err)
+		}
+	} else if a.RequireChannelBinding {
+		// The downgrade. The gateway — or whatever is between us and it — offered a
+		// handshake with nothing tying it to this channel, and this agent was configured
+		// not to accept one.
+		return nil, fmt.Errorf("%w: gateway chose v%d, and this agent requires a "+
+			"channel-bound handshake", ErrVersion, chosen)
+	}
+
+	msg := SigningInput(Signed{
+		Version: chosen, NonceS: nonceS, NonceC: nonceC,
+		DeviceID: a.DeviceID, GatewayID: ch.GatewayID, Channel: binding,
+	})
 	// ed25519 signs the message itself, so the hash argument is zero.
 	sig, err := a.Signer.Sign(rnd, msg, crypto.Hash(0))
 	if err != nil {
@@ -314,24 +465,41 @@ func (a *Agent) Perform(ctx context.Context, conn transport.Conn) (*frame.Welcom
 	if err := recvInto(ctx, conn, c, frame.TypeWelcome, &w); err != nil {
 		return nil, err
 	}
-	if w.Version != versions[0] && !contains(versions, w.Version) {
-		return nil, fmt.Errorf("%w: gateway chose v%d, which we did not offer",
-			ErrVersion, w.Version)
+	if w.Version != chosen {
+		// WELCOME disagreeing with CHALLENGE means the version we signed for is not the
+		// one the connection is about to run on. Nothing good follows from continuing.
+		return nil, fmt.Errorf("%w: gateway challenged for v%d and welcomed v%d",
+			ErrVersion, chosen, w.Version)
 	}
 	return &w, nil
 }
 
 // ── plumbing ────────────────────────────────────────────────────────────────────
 
-func negotiate(offered []int) (int, error) {
+// negotiate picks the highest version both sides can actually run.
+//
+// `canBind` rather than a preference: v1 is not merely newer, it is a handshake that covers
+// keying material, so offering it on a connection with none would produce a signature
+// neither side could reproduce. And when binding is required, v0 is not a fallback — it is
+// the thing being refused.
+func negotiate(offered []int, canBind, requireBinding bool) (int, error) {
 	best := -1
 	for _, v := range offered {
-		if v == Version && v > best {
-			best = v
+		switch v {
+		case Version:
+			if canBind && v > best {
+				best = v
+			}
+		case VersionUnbound:
+			if !requireBinding && v > best {
+				best = v
+			}
 		}
 	}
 	if best < 0 {
-		return 0, fmt.Errorf("%w: peer offered %v, we speak v%d", ErrVersion, offered, Version)
+		return 0, fmt.Errorf("%w: peer offered %v, we speak %v (channel binding "+
+			"available=%v, required=%v)",
+			ErrVersion, offered, SupportedVersions, canBind, requireBinding)
 	}
 	return best, nil
 }

@@ -102,6 +102,22 @@ type Listen struct {
 	// operator behind it is counted as one client. Forwarded headers are deliberately
 	// not read: a key the caller chooses is not a limit.
 	WSConnRatePerMinute int `yaml:"ws_conn_rate_per_minute"`
+	// RequireChannelBinding refuses any control-channel handshake that is not bound to
+	// the TLS connection underneath it (protocol v1).
+	//
+	// Binding is what stops a TLS-terminating middlebox from relaying a device's
+	// handshake and keeping the authenticated channel for itself: the relay has two TLS
+	// sessions, so it exports two different keying materials, and a signature made over
+	// one does not verify over the other. Certificate pinning was the stopgap and only
+	// covers the case where the middlebox has to present a certificate the agent would
+	// reject.
+	//
+	// Off by default because a development gateway on `ws://` has no channel to bind to
+	// and would refuse every agent. `internal/safety` refuses production without it.
+	//
+	// Agents must also require it on their side: the gateway picks the version, so an
+	// agent that accepts v0 can be steered onto it by anything that can rewrite HELLO.
+	RequireChannelBinding bool `yaml:"require_channel_binding"`
 }
 
 // SSH is the operator-facing SSH server.
