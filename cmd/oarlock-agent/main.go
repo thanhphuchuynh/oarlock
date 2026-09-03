@@ -232,6 +232,26 @@ func main() {
 			"ports", cfg.ForwardPorts)
 	}
 
+	// `log` likewise: offered only when the device publishes sources to read.
+	var tailFn agent.LogFunc
+	if len(cfg.LogSources) > 0 {
+		opts := []agent.LogOption{}
+		if cfg.LogHistoryLines != 0 {
+			opts = append(opts, agent.LogLines(cfg.LogHistoryLines))
+		}
+		if cfg.LogPollInterval > 0 {
+			opts = append(opts, agent.LogPollInterval(cfg.LogPollInterval))
+		}
+		tailFn = agent.Logs(cfg.LogSources, opts...)
+		if tailFn != nil {
+			caps = append(caps, "log")
+			// The names, not the paths: what an operator asks for is the name, and the
+			// paths are already in the config file next to this line.
+			log.Info("log streaming is available on this device",
+				"sources", agent.LogSources(cfg.LogSources))
+		}
+	}
+
 	control, err := agent.NewControl(agent.Config{
 		Gateway:   cfg.Gateway,
 		DeviceID:  cfg.Device,
@@ -249,6 +269,7 @@ func main() {
 		Exec: execFn,
 		File: fileFn,
 		Dial: dialFn,
+		Tail: tailFn,
 		Log:  log,
 	})
 	if err != nil {

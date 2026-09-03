@@ -479,9 +479,21 @@ gateway cannot name a third party and turn the device into a proxy into the netw
 sits on. The port is matched against the device's own allow-list on arrival, and refused
 with `not_authorized` if it is not on it.
 
+For a `log` session it carries `"log": {"name": "messages", "follow": true, "lines": 200}`.
+A **name, never a path.** The device publishes a map of logical name to file and the
+gateway only ever sees the name, so one authorisation rule — "may read the agent log" —
+applies across a fleet whose members keep that log in different places, and a compromised
+gateway cannot turn the profile into an arbitrary file read. A name the device does not
+publish is refused, with the same refusal as a name that does not exist: distinguishing
+them would let the gateway enumerate the device's filesystem one guess at a time.
+
+`lines` is how much history to send before following; zero means the device's default and
+a negative value means none, which is how a script asks for only what happens next.
+
 The target travels here rather than in a request frame, for the same reason `exec` and
 `file` do: the ticket is scoped to a profile *and* to what was authorised, so one session
-is one connection to one port and cannot be repointed after it opens.
+is one connection to one port — or one log source — and cannot be repointed after it
+opens.
 
 *Dial me for this session.* This is the entire content of the control channel's
 usefulness, and it is why the channel exists.

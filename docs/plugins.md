@@ -150,6 +150,17 @@ principal instead — so without an explicit check a certificate restricted to o
 would work from anywhere. Where the surface did not record a peer address, such a
 certificate is refused rather than honoured unchecked.
 
+### 2.0 The `log` action
+
+`log` is its own action and carries a target: `Target.Log` is the logical source name, so a
+grant can name `agent` without naming `messages`. Worth separating, because one of a
+device's logs is usually the one recording what everybody else did.
+
+The name is not a path. The device publishes a map of name to file and the gateway only
+ever sees the name, so an authorisation rule written once applies to a fleet whose members
+keep the same log in different places — and a backend cannot be tricked into approving a
+path it did not expect, because it never sees one.
+
 ### 2.0a Mode A and the `passthrough` action
 
 `passthrough` is an action like any other, and a grant for it names a port the way a `tcp`

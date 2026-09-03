@@ -126,6 +126,35 @@ var devAllowPassthrough bool
 // a test where the two disagree is testing the disagreement rather than mode A.
 var passthroughPort int
 
+// logSources is the device's published log allow-list, in the same package-variable
+// style as the rest of this harness. Empty for every test that is not about it — and then
+// the agent advertises no "log" capability either, which is what an unconfigured device
+// does.
+var logSources map[string]string
+
+// deviceProfiles restricts what the *registry* says this device may be asked to do. Empty
+// means the gateway's default set, which is what every other test wants.
+var deviceProfiles []string
+
+// newStackLogs wires an agent publishing the named log sources.
+func newStackLogs(t *testing.T, sources map[string]string) *stack {
+	t.Helper()
+	prev := logSources
+	logSources = sources
+	t.Cleanup(func() { logSources = prev })
+	return newStackWith(t, []string{"/bin/sh"}, fastLimits(), 0, false)
+}
+
+// newStackWithProfiles restricts the device's registry record, which is what the gateway
+// checks before waking anything.
+func newStackWithProfiles(t *testing.T, profiles []string) *stack {
+	t.Helper()
+	prev := deviceProfiles
+	deviceProfiles = profiles
+	t.Cleanup(func() { deviceProfiles = prev })
+	return newStackWith(t, []string{"/bin/sh"}, fastLimits(), 0, false)
+}
+
 // newStackPassthrough wires a front door and a device with mode A turned on to the degree
 // each argument says, so a test can remove exactly one key and watch the refusal.
 func newStackPassthrough(t *testing.T, deployment, device bool, sshdPort int) *stack {
@@ -180,6 +209,9 @@ func agentCaps() []string {
 	if len(forwardPorts) > 0 {
 		caps = append(caps, "tcp")
 	}
+	if len(logSources) > 0 {
+		caps = append(caps, "log")
+	}
 	return caps
 }
 
@@ -223,7 +255,7 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 	// ── a dispatch-mode device: the doorbell is a function call, which keeps the
 	// test to one moving part while still exercising the whole session path ──
 	dev := &plugin.Device{ID: deviceID, Platform: plugin.PlatformAndroid,
-		AllowPassthrough: devAllowPassthrough}
+		AllowPassthrough: devAllowPassthrough, Profiles: deviceProfiles}
 	registry := reg{map[string]*plugin.Device{dev.ID: dev}}
 
 	tickets := ticket.NewMemory(nil)
@@ -257,6 +289,7 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 		Caps:      agentCaps(),
 		Shell:     agent.Forkpty(shell),
 		Dial:      agentDial(),
+		Tail:      agent.Logs(logSources, agent.LogPollInterval(10*time.Millisecond)),
 		// The allow-list the exec tests run against. Exact argvs, which is the profile's
 		// whole security property — see agent/exec.go.
 		Exec: agent.Exec([][]string{

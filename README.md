@@ -361,8 +361,9 @@ holds when the gateway is lying — see [the threat model](docs/threat-model.md)
 
 Missing, and worth naming rather than leaving to be discovered:
 
-- **The `log` profile.** The last of epic 5. **Epics 6 to 8** — multi-replica operation,
-  the generated SDKs, and the supply-chain work — are planned and unbuilt.
+- **The sftp subsystem.** The last of epic 5; `file:read`/`file:write` cover the transfers
+  themselves. **Epics 6 to 8** — multi-replica operation, the generated SDKs, and the
+  supply-chain work — are planned and unbuilt.
 
 [`docs/threat-model.md`](docs/threat-model.md) § 12 is the authoritative list of what is
 built, what is tested, and what is only described. It is the section to read before

@@ -85,6 +85,26 @@ type Config struct {
 	// ForwardDialTimeout bounds connecting to a forwarded port. Zero uses the agent
 	// default.
 	ForwardDialTimeout time.Duration `yaml:"forward_dial_timeout"`
+
+	// LogSources is the allow-list for the `log` profile: a logical name for each log
+	// an operator may stream, mapped to the file it actually is. Empty — the default —
+	// means this device does not offer `log` at all.
+	//
+	// Names rather than paths, and the gateway only ever sees the name. That is what
+	// makes one policy — "may read the agent log" — apply across a fleet whose members
+	// keep that log in different places, and it is what stops a compromised gateway
+	// from turning this profile into an arbitrary file read. See agent/log.go.
+	//
+	// Publish only what an operator should be able to read. A log is a text file the
+	// device is willing to hand over in full, and plenty of applications write
+	// credentials, tokens and request bodies into theirs.
+	LogSources map[string]string `yaml:"log_sources"`
+	// LogHistoryLines is how much history a log session sends before following. Zero
+	// uses the agent default.
+	LogHistoryLines int `yaml:"log_history_lines"`
+	// LogPollInterval is how often a followed log is re-checked for new bytes. Zero uses
+	// the agent default.
+	LogPollInterval time.Duration `yaml:"log_poll_interval"`
 }
 
 // Sessions says what OS identity a session's shell runs as.

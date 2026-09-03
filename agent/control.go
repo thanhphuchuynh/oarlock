@@ -102,6 +102,14 @@ type Config struct {
 	// filesystem worth exposing — and then leave "file" out of Caps too.
 	File FileFunc
 
+	// Tail streams a device log source, for the `log` profile. Nil on a build with no
+	// logs worth exposing — and then leave "log" out of Caps too.
+	//
+	// Named Tail rather than Log because Config.Log is already this agent's own logger,
+	// and a struct with two fields called Log is a struct somebody will set the wrong one
+	// of.
+	Tail LogFunc
+
 	// Dial opens one connection to an allow-listed device-local port, for the `tcp`
 	// profile — this is what carries `ssh -L`. Nil on a build with nothing worth
 	// forwarding, and then leave "tcp" out of Caps too.
