@@ -965,8 +965,10 @@ rather than a gap.
 
 **M5 — more than one.** `oarlockctl` has landed (E6.S4): list, inspect, kill, fetch, and
 verify a recording against a key the operator holds rather than against this gateway's
-opinion of its own file. What is left: Redis ownership, node-to-node forwarding, and the
-load test that says how many idle agents one replica actually holds.
+opinion of its own file. Metrics have too (E6.S5) — golden signals plus every plugin's
+latency and error rate, documented in [docs/metrics.md](docs/metrics.md) with a starter
+alert set. What is left: Redis ownership, node-to-node forwarding, and the load test that
+says how many idle agents one replica actually holds.
 
 **M6 — integration.** OpenAPI generated in CI, the Go and TypeScript SDKs,
 `@oarlock/terminal` and `@oarlock/react`, signed webhooks with a dead-letter list, and the
