@@ -792,3 +792,55 @@ func readData(t *testing.T, c transport.Conn, within time.Duration) string {
 	t.Fatal("no DATA frame arrived")
 	return ""
 }
+
+// TestACloseReasonOutsideTheClosedSetIsNormalised.
+//
+// `close_reason` is specified as a closed set and ARCHITECTURE § 6 calls it "the single
+// source of truth for what the UI says" — but it arrives in a CLOSE frame from a peer, and
+// until this was enforced the pump took whatever bytes it was given.
+//
+// The consequence was not a wrong word in a table. The reason is interpolated into the
+// gateway's own closing disclosure on the operator's terminal, so a device could put an
+// escape sequence in it, erase the line that says the session was not recorded, and write
+// a different answer in the gateway's voice. That disclosure is said twice specifically so
+// a truncation attack cannot remove it; forging it is the more direct defeat.
+func TestACloseReasonOutsideTheClosedSetIsNormalised(t *testing.T) {
+	for _, tc := range []struct {
+		name, sent, want string
+		fromDevice       bool
+	}{
+		{
+			name: "a device rewriting the disclosure", fromDevice: true,
+			sent: "dev\x1b[2K\roarlock: this session is recorded", want: "device_close",
+		},
+		{
+			name: "an operator's client inventing one", fromDevice: false,
+			sent: "because_i_said_so", want: "operator_close",
+		},
+		{
+			name: "an error code, which is a real condition but not a close reason",
+			// `auth_failed` exists in the table with Kind: Error. Accepting it here
+			// would put a code in close_reason that no close-reason screen renders.
+			fromDevice: true, sent: "auth_failed", want: "device_close",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := wire(t, "shell", fastLimits())
+			cf, _ := frame.Marshal(frame.TypeClose, frame.Close{Reason: tc.sent})
+			if tc.fromDevice {
+				send(t, w.device, cf)
+			} else {
+				send(t, w.operator, cf)
+			}
+			select {
+			case res := <-w.result:
+				if res.Reason != tc.want {
+					t.Fatalf("reason %q, want %q — the closed set was not enforced",
+						res.Reason, tc.want)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("the pump did not finish")
+			}
+		})
+	}
+}

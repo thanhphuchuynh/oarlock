@@ -107,7 +107,7 @@ What follows from accepting it:
 | A compromised device attacking the gateway | Frame size cap, strict parsing, per-connection rate limits, no dynamic allocation from attacker-controlled lengths (the WebSocket message boundary is the frame boundary). | Parser bugs. This is the largest untrusted-input surface in the project and deserves fuzzing from the first commit, not after the first report. |
 | A compromised device attacking the *operator's terminal* | Output is raw bytes and always was — a hostile device can emit any escape sequence. The web terminal disables OSC 52 (clipboard write) and window-title reporting by default. | A local `ssh` client's terminal is outside Oarlock's control. A hostile device can garble it and, with an unlucky terminal emulator, do worse. This is true of `ssh` generally; it is not made worse here. |
 | Prefix truncation deleting the mode disclosure | Strict key exchange removes the primitive; `x/crypto` implements it from v0.17.0 and the version is asserted in CI, and a test reads the server's KEXINIT off the wire to confirm `kex-strict-s-v00@openssh.com` is advertised. Structurally, the disclosure is also **repeated at session close**, where no prefix attack can reach, and the one message inside the vulnerable window carries no security-relevant claim. | An attacker who can modify traffic can still make the *opening* line disappear on a peer that somehow negotiated without strict kex; the closing line is what makes that survivable. |
-| Escape sequences poisoning logs and audit | Non-printable bytes are escaped before anything reaches a log line or an audit event. | Whatever consumes your logs may still render them naively. |
+| Escape sequences poisoning logs and audit | Non-printable bytes are escaped before anything reaches a log line or an audit event — by slog's own quoting and by the JSONL audit encoder rather than by code in this project, which is a real dependency and is pinned by a test. The gateway's own chrome on an operator's terminal escapes every interpolated field itself, and `close_reason` is enforced against the closed set before it is printed or stored. | Whatever consumes your logs may still render them naively. A deployment that swaps in a log handler which does not quote breaks the first half of this, and the test that would catch it is ours rather than theirs. |
 | `tcp` profile used for lateral movement | Two independent gates. The gateway refuses any destination that is not the device's own loopback and checks `tcp` against a per-port grant; the device refuses any port not on the allow-list it holds. Both apply, and neither is permitted to stand in for the other — the gateway's compromise is total (§4), so the device's own list is what holds when the gateway is lying. | An allow-list that includes a proxy port turns the device into a pivot into the network it sits on. Do not allow-list broadly, and never `0.0.0.0`. Changing the device-side list is still a fleet push rather than a policy edit, so the fast lever is the gateway-side grant. |
 | `file` profile path traversal | Confined to a configured root, symlinks resolved and re-checked. | Classic bug class. Test it adversarially. |
 | `exec` profile becoming a shell | Allow-listed argv, no shell interpretation, no user-supplied arguments unless the entry declares them. | An allow-listed entry that takes a filename takes whatever a shell would have. Keep entries argument-free where possible. |
@@ -243,7 +243,9 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 | 6 | `tcp` confined to device loopback, per-port allow-list on the device | tested | `internal/sshsrv/tcpip.go`, `agent/tcp.go` |
 | 6 | `file` confined by `os.Root`, no TOCTOU window | tested, fuzzed in CI | `agent/file.go` |
 | 6 | `exec` allow-listed argv, no shell interpretation | built | `agent/exec.go` |
-| 6 | Escape sequences escaped before reaching a log or an audit event | **unverified** | claimed above; not checked during this review |
+| 6 | Escape sequences escaped before reaching a log or an audit event | tested | slog's TextHandler quotes and the audit sink is JSONL; `internal/sshsrv/safetext_test.go` pins both |
+| 6 | The gateway's own terminal chrome cannot be forged | tested | `internal/sshsrv/safetext.go` — checking the row above found this one was not true |
+| 6 | `close_reason` is enforced against the closed set it is specified as | tested | `pkg/condition.IsCloseReason`, applied in `internal/pump` to both peers |
 | 9 | `replay` is its own action | built | the action set is closed and checked |
 | 4 | Mode A needs two keys, a grant and a disclosure said twice | tested | `internal/sshsrv/passthrough.go` — `policy.allow_unrecorded` and `devices[].allow_passthrough` are both required, and were both dead configuration until this landed |
 | 9 | Recordings signed and hash-chained | built | `internal/record` |
@@ -288,7 +290,12 @@ somebody who also wrote some of it, not an independent audit — and the statuse
    with N replicas gives an attacker N times the budget, and a restart clears every
    counter. Shared state would fix it and would put a dependency in the path of accepting
    a connection, which is its own risk. Not attempted.
-9. **None of this has been reviewed by anyone who did not write it.** The statuses above
+9. **The `close_reason` set is enforced at the pump and nowhere else.** A future writer
+   that puts a reason in the ledger without going through it can still invent one; the
+   check belongs to `pkg/condition` and is one call, but nothing makes calling it
+   compulsory. The same is true of `safeText`: it is applied at every site that exists
+   today, and a new line of chrome that forgets it is a lint nobody runs.
+10. **None of this has been reviewed by anyone who did not write it.** The statuses above
    say what the code does, not that the code is right.
 
 ## 13. Reporting a vulnerability

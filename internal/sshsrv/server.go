@@ -403,7 +403,8 @@ func (s *Server) handleSession(sess gssh.Session) {
 		}
 		log.Warn("session refused by authorization",
 			"outcome", verdict.Outcome, "code", verdict.Code, "error", verdict.Err)
-		fmt.Fprintf(sess.Stderr(), "oarlock: %s\r\n", text)
+		// The backend's own sentence, printed on an operator's terminal.
+		fmt.Fprintf(sess.Stderr(), "oarlock: %s\r\n", safeText(text))
 		_ = sess.Exit(1)
 		return
 	}
@@ -415,7 +416,8 @@ func (s *Server) handleSession(sess gssh.Session) {
 			Surface: "ssh", Code: "policy_conflict", Reason: err.Error(),
 			Action: string(action),
 		})
-		fmt.Fprintf(sess.Stderr(), "oarlock: record_input policy conflict: %s\r\n", err)
+		fmt.Fprintf(sess.Stderr(), "oarlock: record_input policy conflict: %s\r\n",
+			safeText(err.Error()))
 		_ = sess.Exit(1)
 		return
 	}
@@ -626,7 +628,7 @@ func defaultBanner(dev *plugin.Device, p *plugin.Principal, recording bool) stri
 	// mode you were in from the absence of a recording six weeks later is not a
 	// disclosure.
 	return fmt.Sprintf("oarlock: %s · gateway-terminated · this session is %s\r\n",
-		dev.ID, recordingWord(recording))
+		safeText(dev.ID), recordingWord(recording))
 }
 
 func recordingWord(recording bool) string {
@@ -651,9 +653,11 @@ func recordingWord(recording bool) string {
 // It also happens to be the more useful placement: it carries the session id, which
 // is what somebody needs in order to go and find the recording.
 func closingDisclosure(dev *plugin.Device, sessionID, reason string, recording bool) string {
+	// Every interpolated field is somebody else's string: the device id comes from a
+	// registry, and the reason arrived in a CLOSE frame. See safetext.go.
 	return fmt.Sprintf(
 		"\r\noarlock: session %s on %s ended (%s) · gateway-terminated · was %s\r\n",
-		sessionID, dev.ID, reason, recordingWord(recording))
+		safeText(sessionID), safeText(dev.ID), safeText(reason), recordingWord(recording))
 }
 
 func ephemeralHostKey() (xssh.Signer, error) {

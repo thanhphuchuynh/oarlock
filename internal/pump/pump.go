@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oarlock/oarlock/internal/ring"
+	"github.com/oarlock/oarlock/pkg/condition"
 	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/plugin"
 	"github.com/oarlock/oarlock/pkg/transport"
@@ -442,11 +443,7 @@ func (s *Session) readDevice(ctx context.Context, out *Output, opSink *operatorP
 		case frame.TypeClose:
 			var cl frame.Close
 			_ = frame.Unmarshal(f, &cl)
-			r := cl.Reason
-			if r == "" {
-				r = "device_close"
-			}
-			return nil, r, nil
+			return nil, closeReasonFrom(log, cl.Reason, "device_close", "device"), nil
 		case frame.TypeError:
 			var e frame.Error
 			_ = frame.Unmarshal(f, &e)
@@ -569,11 +566,7 @@ func (s *Session) readOperator(ctx context.Context, port *operatorPort,
 		case frame.TypeClose:
 			var cl frame.Close
 			_ = frame.Unmarshal(f, &cl)
-			r := cl.Reason
-			if r == "" {
-				r = "operator_close"
-			}
-			return r, nil
+			return closeReasonFrom(log, cl.Reason, "operator_close", "operator"), nil
 		case frame.TypePing:
 			stamp, err := frame.ReadStamp(f)
 			if err != nil {
@@ -802,4 +795,33 @@ func shortest(ds ...time.Duration) time.Duration {
 		out = time.Second
 	}
 	return out
+}
+
+// closeReasonFrom normalises a peer-supplied close reason to the closed set.
+//
+// `close_reason` is specified as a closed set — ARCHITECTURE § 6 calls it "the single
+// source of truth for what the UI says" — and it arrives in a CLOSE frame from a peer that
+// can put any bytes it likes in it. Taking it verbatim made an untrusted party the author
+// of that source of truth, and the consequences were not confined to a wrong word:
+//
+//   - the reason is printed in the gateway's own closing disclosure on the operator's
+//     terminal, so escape sequences in it could erase and rewrite the line that says
+//     whether the session was recorded. That disclosure is the security claim; letting the
+//     device forge it defeats the reason it is said twice.
+//   - it is written to the ledger, where every query that groups by close reason silently
+//     gains a category nobody defined.
+//
+// So an unrecognised reason becomes the default for that side, and the raw value is logged
+// — escaped by slog's own quoting — because a device sending something unexpected is worth
+// seeing rather than swallowing.
+func closeReasonFrom(log *slog.Logger, sent, fallback, side string) string {
+	if sent == "" {
+		return fallback
+	}
+	if condition.IsCloseReason(sent) {
+		return sent
+	}
+	log.Warn("ignoring a close reason that is not in the closed set",
+		"side", side, "sent", sent, "using", fallback)
+	return fallback
 }
