@@ -325,6 +325,29 @@ func build(t *testing.T, mode plugin.Mode) *gateway {
 	go func() { _ = srv.Handler().Serve(l) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
+	// End live sessions and wait for them, before anything removes the directory their
+	// recordings are being written into.
+	//
+	// Registered here rather than earlier on purpose: t.Cleanup runs last-in-first-out and
+	// t.TempDir's removal was registered at the top of this function, so a cleanup added
+	// here runs *before* it. Without this the harness cancelled the context, returned, and
+	// raced a recorder still finalising — surfacing as `TempDir RemoveAll cleanup:
+	// directory not empty` on a busy machine, which reads like a test framework problem
+	// and is a teardown that did not wait.
+	//
+	// The same shape as the gateway's own drain: end them with a reason, then wait for
+	// them to finish rather than sleeping and hoping.
+	t.Cleanup(func() {
+		live.KillAll("gateway_shutdown")
+		deadline := time.Now().Add(5 * time.Second)
+		for live.Len() > 0 && time.Now().Before(deadline) {
+			time.Sleep(2 * time.Millisecond)
+		}
+		if n := live.Len(); n > 0 {
+			t.Errorf("%d sessions were still running when the test ended", n)
+		}
+	})
+
 	return &gateway{sshAddr: l.Addr().String(), operator: opSigner,
 		ledger: ledger, device: dev, control: control,
 		recorder: recorder, recPub: recPub,

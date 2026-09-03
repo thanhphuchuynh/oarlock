@@ -349,7 +349,11 @@ func TestListFollowsTheCursor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pages++
 		if r.URL.Query().Get("cursor") == "" {
-			_, _ = w.Write([]byte(`{"sessions":[{"id":"a"},{"id":"b"}],"next":"c2"}`))
+			// `next_cursor`, which is the field the API actually sends. This test used to
+			// say `next` — the same mistake the client made — so it passed while paging
+			// was broken. A fake server built from the same wrong assumption as the code
+			// tests nothing.
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"a"},{"id":"b"}],"next_cursor":"c2"}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"sessions":[{"id":"c"}]}`))
