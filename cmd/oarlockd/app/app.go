@@ -637,19 +637,41 @@ func (g *Gateway) Serve(ctx context.Context) error {
 	// Stop accepting first, then tell live sessions why. An operator whose session ends
 	// during a deploy should see `gateway_shutdown` rather than a dropped connection:
 	// one is a deploy and the other is a bug they will report.
+	//
+	// The ordering here is load-bearing and was wrong. `ssh.Close()` closes every active
+	// connection as well as the listeners, so calling it before the kill below tore the
+	// sessions down before anything told them why — and the ledger recorded
+	// `transport_error` for what was a deploy. It failed intermittently, because under
+	// light load the kill usually won the race; under load it did not. StopAccepting
+	// closes only the listeners and then waits, which is what leaves room for the kill to
+	// decide how those sessions end.
 	g.Log.Info("draining", "live_sessions", g.live.Len())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
-	_ = g.ssh.Close()
+
+	sshDone := make(chan struct{})
+	go func() {
+		defer close(sshDone)
+		_ = g.ssh.StopAccepting(shutdownCtx)
+	}()
+
 	if n := g.live.KillAll("gateway_shutdown"); n > 0 {
 		g.Log.Info("closed live sessions for a drain", "sessions", n)
 	}
-	// A moment for the CLOSE frames to land before the process goes.
+
+	// Waiting for the handlers to return, rather than sleeping and hoping. A handler
+	// returns after it has finalised its recording and written its row, so this is the
+	// point at which "the ledger says why" is true — which is the thing a drain has to
+	// guarantee and the thing a fixed sleep could only usually deliver.
 	select {
-	case <-time.After(500 * time.Millisecond):
+	case <-sshDone:
 	case <-shutdownCtx.Done():
+		g.Log.Warn("a session did not finish within the drain window; closing it")
 	}
+	// Whatever ignored its kill. Nothing should reach here, and a deploy must not wait on
+	// something that does.
+	_ = g.ssh.Close()
 	g.Log.Info("stopped")
 	return nil
 }
