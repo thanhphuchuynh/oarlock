@@ -420,6 +420,15 @@ func clientIP(r *http.Request) string {
 type Replays interface {
 	Cast(ctx context.Context, sessionID string) ([]byte, error)
 	Verdict(ctx context.Context, sessionID string) (ReplayVerdict, error)
+	// Manifest returns the stored manifest bytes, for a caller who will verify the
+	// recording themselves.
+	//
+	// The bytes rather than a struct, so this gateway is not a decode/encode hop in the
+	// middle. The signature is over a canonical form recomputed from the struct, so a
+	// round trip is safe *in a build that knows every field* — and a build that does not
+	// would drop one, change the canonical form, and make a good recording unverifiable.
+	// Not a risk worth taking on the path whose whole purpose is verification.
+	Manifest(ctx context.Context, sessionID string) ([]byte, error)
 }
 
 // ReplayVerdict is what the verifier said, in the shape the browser renders.
@@ -1779,8 +1788,28 @@ func (s *Server) getRecording(w http.ResponseWriter, r *http.Request, p *plugin.
 
 	s.log.Info("recording read", "session", id, "principal", p.ID,
 		"verdict", verdict.Status, "request", requestID(r))
+	// The manifest travels with the recording so a reader can verify it *themselves*.
+	//
+	// That is the whole point of signing and hash-chaining these, and until this field
+	// existed nothing outside the gateway could use either: the only verification on
+	// offer was `verdict`, which is this gateway's opinion of its own file. Asking the
+	// party that might have tampered with something whether it was tampered with is not
+	// verification, and an operator holding the recorder's public key can now settle it
+	// without trusting this endpoint at all.
+	//
+	// Base64 of the exact signed bytes, for the reason on Replays.Manifest.
+	manifest, merr := s.o.Replays.Manifest(r.Context(), id)
+	if merr != nil {
+		// Not fatal. A recording whose manifest is missing is exactly the case somebody
+		// investigating needs to see, and the verdict above already says it cannot be
+		// verified.
+		s.log.Warn("serving a recording with no manifest",
+			"session", id, "error", merr, "request", requestID(r))
+	}
+
 	s.writeJSON(w, http.StatusOK, struct {
-		Cast    string        `json:"cast"`
-		Verdict ReplayVerdict `json:"verdict"`
-	}{Cast: string(cast), Verdict: verdict})
+		Cast     string        `json:"cast"`
+		Manifest []byte        `json:"manifest,omitempty"`
+		Verdict  ReplayVerdict `json:"verdict"`
+	}{Cast: string(cast), Manifest: manifest, Verdict: verdict})
 }
