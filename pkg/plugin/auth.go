@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"time"
 
@@ -89,4 +90,34 @@ type InteractiveAuthenticator interface {
 	// It may block for as long as the operator takes, so honour ctx: an SSH client
 	// that hung up is a login nobody is waiting for.
 	AuthInteractive(ctx context.Context, user string, ask Challenge) (*Principal, error)
+}
+
+// ── the peer behind a credential ────────────────────────────────────────────────
+
+// peerKey carries the network address a credential arrived from.
+type peerKey struct{}
+
+// WithPeer records the address the credential being authenticated arrived from.
+//
+// It exists for one reason: an SSH certificate can carry a `source-address` critical
+// option, and a restriction the gateway cannot check is a restriction the gateway must
+// refuse rather than ignore. x/crypto enforces that option from the `Permissions` its own
+// callback returns, and this interface returns a Principal instead — so without the
+// address here, a certificate valid only from one office would be accepted from anywhere,
+// silently, and the CA operator would have no way to find out.
+//
+// Surfaces set it where they know it. A backend that needs it must treat *absent* as a
+// reason to refuse an address-restricted credential, never as permission to skip the
+// check.
+func WithPeer(ctx context.Context, addr net.Addr) context.Context {
+	if addr == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, peerKey{}, addr)
+}
+
+// PeerFrom returns the address a credential arrived from, and whether one was recorded.
+func PeerFrom(ctx context.Context) (net.Addr, bool) {
+	addr, ok := ctx.Value(peerKey{}).(net.Addr)
+	return addr, ok && addr != nil
 }

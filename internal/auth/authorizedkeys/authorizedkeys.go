@@ -5,7 +5,7 @@
 // revoking someone means editing a file on every replica, and a file edit is not a
 // revocation mechanism you want to rely on when someone leaves in a hurry.
 //
-// The alternative is `sshca` (E4.S2): trust one CA, accept short-lived
+// The alternative is `sshca`, which now exists: trust one CA, accept short-lived
 // certificates, and revocation becomes "stop issuing".
 package authorizedkeys
 

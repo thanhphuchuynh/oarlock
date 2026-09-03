@@ -360,10 +360,6 @@ holds when the gateway is lying — see [the threat model](docs/threat-model.md)
 
 Missing, and worth naming rather than leaving to be discovered:
 
-- **The SSH-CA authenticator.** Operator identity can come from an identity provider on all
-  three surfaces — a bearer JWT for the API, a sign-in redirect for the console, a device
-  code at an SSH prompt — but there is no `sshca` backend, and the threat model used to
-  imply otherwise.
 - **Mode A passthrough.** It is expressible as an action, every authorizer will answer
   about it, and a device can carry the `allow_passthrough` flag — but nothing serves such
   a session. A policy granting `passthrough` today grants something with no implementation

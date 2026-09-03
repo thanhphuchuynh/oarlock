@@ -124,12 +124,31 @@ credential that opened it, independent of the re-check interval.
 |---|---|
 | `authorized_keys` (default) | one file, `oarlock` extension comments carry the principal id. Fine for a handful of operators; revocation means editing a file on every replica. |
 | `oidc` | device-code flow over keyboard-interactive for CLI, standard code flow for the browser. The one most people should use. |
-| `sshca` | trust one CA, accept short-lived user certificates, read the principal from the cert. No per-operator state on the gateway at all, and expiry is enforced by the protocol. |
+| `sshca` | trust one CA, accept short-lived user certificates, read the principal from the cert. No per-operator state on the gateway at all, and the certificate's expiry becomes the session's ceiling. Set `auth.ca_keys`. |
 | `static` | tokens in config. For tests and CI. Refuses to start if `env != dev`. |
 
 **`sshca` is the recommendation at any real size.** One key to trust, certificates that
 expire on their own, and revocation becomes "stop issuing" rather than a push to every
 replica. It is the one idea worth importing from the mode-A world without importing mode A.
+
+Three things about the implementation are worth knowing before you configure it.
+
+The **SSH username is the device id**, so it is not the certificate principal — which is
+the opposite of every other SSH CA integration, and the reason this backend drives
+`CheckCert` itself instead of using `CertChecker.Authenticate`. The identity comes from
+`valid_principals` (the first entry, or the key id with `principal_from: key_id`), and
+*all* the principals become groups, because in a CA deployment principals are roles and a
+rule that can match `oncall` is worth having.
+
+A certificate that **never expires is refused**, and one issued for longer than
+`auth.max_lifetime` (24h by default) is too. A CA that can mint an eternal certificate is
+an `authorized_keys` file with extra steps, and this backend's whole claim is the expiry.
+
+**`source-address` is enforced here**, not by x/crypto. x/crypto applies that critical
+option from the `Permissions` its own callback returns, and this gateway returns a
+principal instead — so without an explicit check a certificate restricted to one office
+would work from anywhere. Where the surface did not record a peer address, such a
+certificate is refused rather than honoured unchecked.
 
 ### 2.1 Gateway SSH host key
 

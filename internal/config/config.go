@@ -199,8 +199,28 @@ func (d *Devices) UnmarshalYAML(n *yaml.Node) error {
 
 // Auth configures who an operator is. Authz configures whether they may.
 type Auth struct {
-	// Kind is "oidc" today, or empty to use ssh.authorized_keys and api.tokens.
+	// Kind is "oidc" or "sshca", or empty to use ssh.authorized_keys and api.tokens.
 	Kind string `yaml:"kind"`
+
+	// ── sshca ──
+	// CAKeys is a file of trusted SSH CA public keys, in authorized_keys format. More
+	// than one is how a CA is rotated: publish the new key alongside the old, re-issue,
+	// then remove the old.
+	CAKeys string `yaml:"ca_keys"`
+	// Revocations is an optional file of revoked certificate serial numbers.
+	//
+	// The primary revocation mechanism is the expiry — a list pushed to every replica is
+	// the same problem authorized_keys has. This is for the case expiry cannot cover: a
+	// certificate known to be stolen while it is still valid.
+	Revocations string `yaml:"revocations"`
+	// MaxLifetime caps how long a certificate may have been issued for. Zero means
+	// sshca.DefaultMaxLifetime (24h); negative disables the cap, which gives up the
+	// property this backend exists for. A certificate that never expires is refused
+	// whatever this says.
+	MaxLifetime time.Duration `yaml:"max_lifetime"`
+	// PrincipalFrom is "principals" (the default: the first valid_principal) or
+	// "key_id". Vault and Teleport put the username in the key id.
+	PrincipalFrom string `yaml:"principal_from"`
 
 	// Issuer is the OIDC issuer URL. Discovery happens at
 	// <issuer>/.well-known/openid-configuration, and every token must name this
@@ -635,8 +655,21 @@ func (c *Config) Validate() error {
 					"code delivered over http is a code anybody on the path can read")
 			}
 		}
+	case "sshca":
+		if c.Auth.CAKeys == "" {
+			add("auth.ca_keys is required for kind: sshca — there is nothing to trust")
+		}
+		// A negative max_lifetime is legal and not checked here: it gives up the
+		// property the backend exists for, and sshca.Open says so loudly at boot, which
+		// is the right place for a warning that is not a refusal.
+		switch c.Auth.PrincipalFrom {
+		case "", "principals", "key_id":
+		default:
+			add("auth.principal_from %q is not \"principals\" or \"key_id\"",
+				c.Auth.PrincipalFrom)
+		}
 	default:
-		add("auth.kind %q is not known (oidc, or empty for authorized_keys and "+
+		add("auth.kind %q is not known (oidc, sshca, or empty for authorized_keys and "+
 			"api.tokens)", c.Auth.Kind)
 	}
 	for i, admin := range c.Authz.Admins {
