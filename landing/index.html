@@ -244,9 +244,8 @@
               <tr data-part="34"><td>34</td><td>Agent</td></tr>
               <tr data-part="36"><td>36</td><td>Pseudoterminal</td></tr>
               <tr data-part="40"><td>40</td><td>Device loopback</td></tr>
-              <tr class="absent"><td>44</td><td>SSH-CA authenticator</td></tr>
-              <tr class="absent"><td>46</td><td>Mode A passthrough</td></tr>
-              <tr class="absent"><td>48</td><td>Channel binding</td></tr>
+              <tr class="absent"><td>44</td><td>Device ownership registry</td></tr>
+              <tr class="absent"><td>46</td><td>Cross-replica invitation</td></tr>
             </tbody>
           </table>
           <figcaption>
@@ -353,10 +352,11 @@
 <span class="cmd">sh-3.2$</span> </code></pre>
           <p class="muted">
             The agent refuses to start without either a pinned gateway certificate or an explicit
-            <code>-insecure-skip-pin</code>. Wire version v0 has no channel binding, so pinning is
-            what stands between the handshake and a TLS-terminating middlebox relaying it. An
-            agent that connects unpinned because nobody passed a flag is an agent nobody decided
-            about.
+            <code>-insecure-skip-pin</code>. Handshake v1 binds the signature to the TLS channel,
+            which a middlebox relaying it cannot reproduce — but both ends still accept v0 by
+            default, because a fleet that will not reconnect is a fleet somebody has to drive to.
+            So pinning is what stands under the downgrade, and an agent that connects unpinned
+            because nobody passed a flag is an agent nobody decided about.
           </p>
         </div>
       </section>
@@ -387,9 +387,9 @@
         <div>
           <h2>Not built</h2>
           <p class="lede" style="font-size: 0.8rem">
-            The SSH-CA authenticator, mode A passthrough, channel binding for the agent
-            handshake, multi-replica operation, and the generated SDKs. Named here so nobody has
-            to find out later.
+            Multi-replica operation — a device belongs to the node holding its control channel
+            and no other node can invite it — the generated SDKs, and a signed release with an
+            SBOM. Named here so nobody has to find out later.
           </p>
         </div>
       </div>
