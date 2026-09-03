@@ -89,9 +89,20 @@ func (c *Control) Serve(ctx context.Context, inv frame.Invitation) error {
 		return s.runFile(ctx, c.cfg.File, inv)
 	case "tcp":
 		return s.runTCP(ctx, c.cfg.Dial, inv)
+	case "sshpass":
+		// Mode A, and on this side it is the same relay as `tcp`: the gateway asked for
+		// a connection to a device-local port, and the bytes crossing it are an SSH
+		// session between the operator and this device's own sshd. The device cannot
+		// read them either, and does not need to — the difference between the two modes
+		// is entirely the gateway's, which is what makes it enforceable there.
+		//
+		// It still goes through the same allow-list. The gateway naming port 22 is not
+		// permission to reach port 22; the device's own `forward_ports` is, and that is
+		// the half that holds when the gateway is lying.
+		return s.runTCP(ctx, c.cfg.Dial, inv)
 	default:
-		// log and sshpass land later in E5. Refusing clearly beats
-		// pretending: the gateway already knows what this build advertised.
+		// `log` is what is left of E5. Refusing clearly beats pretending: the gateway
+		// already knows what this build advertised.
 		err := fmt.Errorf("profile %q is not implemented by this build", inv.Profile)
 		_ = s.send(ctx, frame.TypeError, frame.Error{
 			Code: "profile_unsupported", Message: err.Error()})

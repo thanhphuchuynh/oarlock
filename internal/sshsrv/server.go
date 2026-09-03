@@ -101,6 +101,14 @@ type Options struct {
 	// negative disables the bound, which is for tests that drive a handshake by hand.
 	HandshakeBudget time.Duration
 
+	// AllowUnrecorded permits mode A passthrough, where the gateway relays ciphertext it
+	// cannot read. Off by default, and only half the switch: the device must carry
+	// `allow_passthrough` too. See passthrough.go for why there are two keys.
+	AllowUnrecorded bool
+	// PassthroughPort is the device-local sshd port a passthrough session dials. Zero
+	// means 22.
+	PassthroughPort int
+
 	// ConnRatePerMinute caps how many connections one client may open in a minute.
 	// Zero means DefaultConnRatePerMinute; negative disables the limit.
 	//
@@ -147,6 +155,9 @@ func New(o Options) (*Server, error) {
 	}
 	if o.NewSessionID == nil {
 		o.NewSessionID = randomSessionID
+	}
+	if o.PassthroughPort == 0 {
+		o.PassthroughPort = 22
 	}
 	if o.HandshakeBudget == 0 {
 		o.HandshakeBudget = DefaultHandshakeBudget
@@ -201,6 +212,13 @@ func New(o Options) (*Server, error) {
 		// allow-list. Every other channel type stays unhandled and is refused by the
 		// library, which is the right answer for `-R` — a device opening listeners on
 		// the gateway is a different feature with a different threat model.
+		// Subsystems have their own handler table in gliderlabs; Handler above never
+		// sees them. `default` catches everything unregistered, which is how the refusal
+		// for sftp finally reaches the operator instead of a bare protocol failure.
+		SubsystemHandlers: map[string]gssh.SubsystemHandler{
+			PassthroughSubsystem: s.handleSubsystem,
+			"default":            s.handleSubsystem,
+		},
 		ChannelHandlers: map[string]gssh.ChannelHandler{
 			"session":      gssh.DefaultSessionHandler,
 			"direct-tcpip": s.handleDirectTCPIP,
@@ -319,13 +337,10 @@ func (s *Server) handleSession(sess gssh.Session) {
 	}
 	log := s.log.With("principal", p.ID, "device", deviceID)
 
-	if sess.Subsystem() != "" {
-		// sftp is E5.S4. Refusing clearly beats half-running something.
-		fmt.Fprintf(sess.Stderr(), "oarlock: the %s subsystem is not supported yet\r\n",
-			sess.Subsystem())
-		_ = sess.Exit(1)
-		return
-	}
+	// No subsystem check here. gliderlabs routes a subsystem request to
+	// SubsystemHandlers and never to Handler, so a branch on sess.Subsystem() in this
+	// function is unreachable — which is what it was, silently, along with the sftp
+	// message it was supposed to print. See handleSubsystem.
 
 	// `ssh device` opens a shell; `ssh device some command` runs that one command under
 	// the exec profile. Two profiles down one handler, because everything between the

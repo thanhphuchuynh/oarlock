@@ -11,6 +11,36 @@ import (
 // Config is the policy section of oarlock.yaml.
 type Config struct {
 	RecordInput RecordInput `yaml:"record_input"`
+
+	// AllowUnrecorded permits sessions the gateway cannot read — mode A passthrough,
+	// where the operator's SSH terminates at the device and the gateway relays
+	// ciphertext.
+	//
+	// Off by default, and it is the *gateway-wide* half of a two-key switch: the device
+	// must also carry `allow_passthrough`. Two keys because an unrecorded session must
+	// never be an accident, and the two are owned by different people — the fleet
+	// operator sets the device flag, and whoever writes this file decides whether the
+	// deployment permits it at all.
+	AllowUnrecorded bool `yaml:"allow_unrecorded"`
+
+	// PassthroughPort is the device-local port a passthrough session connects to: the
+	// `sshd` the device runs on its own loopback. Zero means 22.
+	//
+	// Gateway-wide rather than per-device because it is a property of how the fleet is
+	// built, and a per-device override is a device field waiting for a deployment that
+	// needs one.
+	PassthroughPort int `yaml:"passthrough_port"`
+}
+
+// DefaultPassthroughPort is the device-local sshd port a passthrough session dials.
+const DefaultPassthroughPort = 22
+
+// SSHPort is PassthroughPort with its default applied.
+func (c Config) SSHPort() int {
+	if c.PassthroughPort == 0 {
+		return DefaultPassthroughPort
+	}
+	return c.PassthroughPort
 }
 
 // RecordInput resolves whether operator keystrokes are recorded.

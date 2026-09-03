@@ -360,13 +360,8 @@ holds when the gateway is lying — see [the threat model](docs/threat-model.md)
 
 Missing, and worth naming rather than leaving to be discovered:
 
-- **Mode A passthrough.** It is expressible as an action, every authorizer will answer
-  about it, and a device can carry the `allow_passthrough` flag — but nothing serves such
-  a session. A policy granting `passthrough` today grants something with no implementation
-  behind it.
-- **Epic 5 is half-landed**: the three profiles above are its, and passthrough is the rest
-  of it. **Epics 6 to 8** — multi-replica operation, the generated SDKs, and the
-  supply-chain work — are planned and unbuilt.
+- **The `log` profile.** The last of epic 5. **Epics 6 to 8** — multi-replica operation,
+  the generated SDKs, and the supply-chain work — are planned and unbuilt.
 
 [`docs/threat-model.md`](docs/threat-model.md) § 12 is the authoritative list of what is
 built, what is tested, and what is only described. It is the section to read before

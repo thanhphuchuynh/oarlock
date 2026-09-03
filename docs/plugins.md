@@ -150,6 +150,16 @@ principal instead — so without an explicit check a certificate restricted to o
 would work from anywhere. Where the surface did not record a peer address, such a
 certificate is refused rather than honoured unchecked.
 
+### 2.0a Mode A and the `passthrough` action
+
+`passthrough` is an action like any other, and a grant for it names a port the way a `tcp`
+grant does — so "may open an unrecorded session on this device" is a distinct decision from
+"may open a shell". It is also not sufficient on its own: the deployment must set
+`policy.allow_unrecorded` and the device must carry `allow_passthrough`, and both are
+checked before the authorizer is consulted at all. Two keys, because the person who
+administers a fleet and the person who decides whether the deployment permits unrecorded
+sessions are usually not the same person.
+
 ### 2.1 Gateway SSH host key
 
 `ssh.host_key` is the gateway's SSH identity, not an operator credential and not a

@@ -147,8 +147,10 @@ func ActionFor(profile string) plugin.Action {
 func Recorded(profile string) bool {
 	switch profile {
 	case "file", "tcp", "sshpass":
-		// sshpass is mode A: the gateway cannot read it at all, so there is nothing to
-		// record even in principle.
+		// sshpass is mode A: the gateway relays ciphertext, so there is nothing to record
+		// even in principle — and a recording of ciphertext is a file that looks like
+		// evidence and is not. internal/sshsrv/passthrough.go refuses the session outright
+		// if this ever starts returning true for it.
 		return false
 	default:
 		return true
