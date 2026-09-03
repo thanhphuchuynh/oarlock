@@ -60,6 +60,18 @@ type deployment struct {
 }
 
 // deploy writes a working configuration and builds the gateway from it.
+// tweakConfig edits the configuration between loading it and building the gateway, in the
+// package-variable style the other harnesses in this repository use.
+var tweakConfig func(*config.Config)
+
+// withConfig runs the rest of a test against a gateway built from an edited config.
+func withConfig(t *testing.T, f func(*config.Config)) {
+	t.Helper()
+	prev := tweakConfig
+	tweakConfig = f
+	t.Cleanup(func() { tweakConfig = prev })
+}
+
 func deploy(t *testing.T, log *slog.Logger) *deployment {
 	t.Helper()
 	dir := t.TempDir()
@@ -144,6 +156,12 @@ api:
 	cfg, err := config.Load(filepath.Join(dir, "oarlock.yaml"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A hook for the settings a test needs decided *before* the gateway is assembled —
+	// routes are wired during Build, so a test that set one afterwards would be
+	// configuring something that had already been read.
+	if tweakConfig != nil {
+		tweakConfig(cfg)
 	}
 	gw, err := app.Build(cfg, log)
 	if err != nil {

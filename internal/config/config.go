@@ -118,6 +118,15 @@ type Listen struct {
 	// Agents must also require it on their side: the gateway picks the version, so an
 	// agent that accepts v0 can be steered onto it by anything that can rewrite HELLO.
 	RequireChannelBinding bool `yaml:"require_channel_binding"`
+	// Metrics serves Prometheus metrics at /metrics on the HTTP listener. Empty disables
+	// it entirely.
+	//
+	// "authenticated" (the default when metrics are on) requires the same bearer token
+	// the API takes, which Prometheus can send. "public" serves them to anyone who can
+	// reach the listener — which is reasonable behind a private interface and is refused
+	// in production by the boot gate, because the numbers describe the fleet: how many
+	// devices exist, how many refusals are happening, when the recorder is struggling.
+	Metrics string `yaml:"metrics"`
 }
 
 // SSH is the operator-facing SSH server.
@@ -641,6 +650,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Authz.RecheckInterval < 0 {
 		add("authorizer.recheck_interval is negative")
+	}
+	switch c.Listen.Metrics {
+	case "", "authenticated", "public":
+	default:
+		add("listen.metrics %q is not \"authenticated\", \"public\", or empty to disable",
+			c.Listen.Metrics)
 	}
 	switch c.Auth.Kind {
 	case "", "none":

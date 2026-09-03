@@ -63,6 +63,7 @@ import (
 	"github.com/oarlock/oarlock/internal/handshake"
 	"github.com/oarlock/oarlock/internal/hub"
 	"github.com/oarlock/oarlock/internal/invite"
+	"github.com/oarlock/oarlock/internal/metrics"
 	"github.com/oarlock/oarlock/internal/ratelimit"
 	"github.com/oarlock/oarlock/internal/record"
 	"github.com/oarlock/oarlock/internal/registry/file"
@@ -181,6 +182,12 @@ type Gateway struct {
 	ssh     *sshsrv.Server
 	httpMux *http.ServeMux
 
+	// metricsReg is this gateway's own registry, and metricsG the families on it. One per
+	// gateway rather than a package global, so two gateways in one process — which is
+	// every test here — do not share counters.
+	metricsReg *metrics.Registry
+	metricsG   *metrics.Gateway
+
 	sshListener  net.Listener
 	httpListener net.Listener
 }
@@ -192,6 +199,10 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		log = slog.Default()
 	}
 	g := &Gateway{Cfg: cfg, Log: log}
+	// First, because the plugin decorators below wrap backends as they are built and the
+	// saturation gauges are bound after the components exist. One registry per gateway.
+	g.metricsReg = metrics.New()
+	g.metricsG = metrics.NewGateway(g.metricsReg)
 	g.audit = buildAuditSink(cfg, log)
 
 	// ── the device registry ──
@@ -243,7 +254,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		if err != nil {
 			return nil, err
 		}
-		recorder = fr
+		// Wrapped for metrics; `replays` keeps the concrete recorder, because the CLI's
+		// verification path needs RawManifest and that is not on plugin.Recorder.
+		recorder = g.metricsG.Plugins.Recorder("file", fr)
 		replays = &fileReplays{rec: fr, pub: pub}
 		imm := fr.Immutability()
 		recStoreMode, recStoreDetail = string(imm.Mode), imm.Detail
@@ -289,6 +302,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 			"sessions; they may not open a session without a grant of their own",
 			"admins", strings.Join(cfg.Authz.Admins, ","))
 	}
+	// Every backend is wrapped here, at the seam, rather than instrumented inside itself.
+	// `pkg/plugin` is public API and a third-party backend would otherwise be the one
+	// nobody could measure — see internal/metrics/plugins.go.
+	backend = g.metricsG.Plugins.Authorizer(cfg.Authz.Kind, backend)
+
 	checker := &authz.Checker{Backend: backend, Grace: cfg.Authz.Grace,
 		Admins: cfg.Authz.Admins, Log: log}
 	g.supervisor = &authz.Supervisor{
@@ -301,9 +319,14 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	dispatcher = g.metricsG.Plugins.Dispatcher(cfg.Dispatch.Kind, dispatcher)
+	// Held rather than constructed inline, so the saturation gauge can ask it how many
+	// tickets are outstanding.
+	tickets := ticket.NewMemory(time.Now)
+
 	g.hub = hub.New(hub.Options{Log: log})
 	g.inviter = &invite.Inviter{
-		Tickets:    ticket.NewMemory(time.Now),
+		Tickets:    tickets,
 		Hub:        g.hub,
 		Dispatcher: dispatcher,
 		NodeURL:    strings.TrimRight(cfg.URL, "/") + "/ws/session",
@@ -361,6 +384,21 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		return nil, err
 	}
 
+	// ── metrics ──
+	//
+	// Registered before the routes so the endpoint and the decorators share one registry,
+	// and after the components so the saturation gauges can read the numbers those
+	// components already keep. Every one of them had a "for metrics" comment and no
+	// consumer until now.
+	if cfg.Listen.Metrics != "" {
+		g.metricsG.Bind(g.metricsReg, metrics.Sources{
+			LiveSessions: g.live.Len,
+			Agents:       g.hub.Len,
+			Outstanding:  g.inviter.Outstanding,
+			Tickets:      tickets.Outstanding,
+		})
+	}
+
 	mux := http.NewServeMux()
 
 	// One limiter across all three WebSocket doors, so a client cannot spend a fresh
@@ -401,6 +439,17 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Runner: runner, Live: g.live, Log: log,
 	}))
 	mux.Handle("/api/", api)
+
+	// `/metrics`, when configured. Authenticated by default: the numbers describe the
+	// fleet's size and health, which is reconnaissance rather than a credential — and the
+	// boot gate refuses the public option in production for that reason.
+	if cfg.Listen.Metrics != "" {
+		h := g.metricsReg.Handler()
+		if cfg.Listen.Metrics != "public" {
+			h = requireToken(authn, h, log)
+		}
+		mux.Handle("GET /metrics", h)
+	}
 
 	// The browser login, when a provider is configured and a callback is registered.
 	// Without redirect_url there is nothing to mount: the console then expects a pasted
@@ -494,6 +543,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		AuthzGrace:                 grace,
 		AuthzKind:                  cfg.Authz.Kind,
 		ChannelBindingRequired:     cfg.Listen.RequireChannelBinding,
+		MetricsPublic:              cfg.Listen.Metrics == "public",
 	}
 	_ = recStoreDetail
 	return g, nil
@@ -1064,4 +1114,32 @@ func parseEd25519Seed(b []byte) (ed25519.PrivateKey, error) {
 	}
 	return nil, fmt.Errorf("not an ed25519 key: %d bytes, want %d or %d",
 		len(b), ed25519.SeedSize, ed25519.PrivateKeySize)
+}
+
+// requireToken gates a handler behind the same authentication the API uses.
+//
+// For `/metrics`. Prometheus can send a bearer token, and the numbers behind this endpoint
+// describe the fleet's size and health — which is reconnaissance for anybody who can reach
+// the listener, and is why the unauthenticated option is refused in production.
+//
+// Deliberately not the API's own `wrap`: that adds a correlation id, rate limiting and a
+// problem document, and a scraper wants none of those. What it shares is the credential.
+func requireToken(authn plugin.Authenticator, next http.Handler, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authn == nil {
+			// No authenticator at all is a development gateway. Refusing would make
+			// metrics unusable in the one place they are easiest to try.
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, err := authn.AuthHTTP(r.Context(), r); err != nil {
+			// No detail and no problem document: an unauthenticated caller learns only
+			// that it failed, the same as everywhere else.
+			log.Warn("refused an unauthenticated metrics scrape", "remote", r.RemoteAddr)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="oarlock"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

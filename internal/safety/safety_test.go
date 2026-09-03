@@ -70,6 +70,9 @@ func TestEachUnsafeSettingIsCaught(t *testing.T) {
 		"no recorder": {
 			func(s *safety.Settings) { s.RecorderConfigured = false }, "recorder", false,
 		},
+		"metrics served to anybody": {
+			func(s *safety.Settings) { s.MetricsPublic = true }, "listen.metrics", false,
+		},
 		"an unbound control-channel handshake": {
 			func(s *safety.Settings) { s.ChannelBindingRequired = false },
 			"listen.require_channel_binding", false,

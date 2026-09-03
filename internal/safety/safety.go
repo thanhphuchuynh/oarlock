@@ -78,6 +78,8 @@ type Settings struct {
 	// ChannelBindingRequired says whether the control-channel handshake must be bound to
 	// the connection underneath it.
 	ChannelBindingRequired bool
+	// MetricsPublic says whether /metrics is served without authentication.
+	MetricsPublic bool
 }
 
 // Problem is one finding. Fatal problems refuse the boot; the rest are warnings that
@@ -202,6 +204,15 @@ func Check(s Settings, log *slog.Logger) ([]Problem, error) {
 			"not bound to the connection it runs on, so a TLS-terminating middlebox can "+
 			"relay a device's handshake and keep the channel. Certificate pinning is the "+
 			"stopgap and does not cover a certificate the device already trusts")
+	}
+	// The numbers describe the fleet: how many devices exist, how many refusals are
+	// happening, when the recorder is struggling. None of it is a credential and all of it
+	// is reconnaissance, which is worth a decision rather than a default.
+	if s.MetricsPublic && prod {
+		add(false, "listen.metrics", "metrics are served without authentication. They "+
+			"describe the fleet's size and health, which is reconnaissance for anybody "+
+			"who can reach the listener — keep this on a private interface or set "+
+			"listen.metrics: authenticated")
 	}
 	if s.AuthzKind == "" && prod {
 		add(true, "authorizer", "not configured. With no authorizer there is nothing "+

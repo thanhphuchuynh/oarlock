@@ -365,8 +365,9 @@ Missing, and worth naming rather than leaving to be discovered:
   it: FR10 names the six profiles and every one is implemented. So sftp is a convenience
   on top of `file:read`/`file:write` rather than an outstanding requirement, and it is
   unbuilt because nothing asks for it — not because it was forgotten.
-- **Epic 6 is part-landed**: `oarlockctl` is here (list, inspect, kill, fetch, verify) and
-  so is drain. Multi-replica ownership and cross-replica invitations are not. **Epics 7 and
+- **Epic 6 is part-landed**: `oarlockctl` is here (list, inspect, kill, fetch, verify),
+  so is drain, and so are [metrics](docs/metrics.md). Multi-replica ownership and
+  cross-replica invitations are not. **Epics 7 and
   8** — the generated SDKs and the supply-chain work — are planned and unbuilt.
 
 [`docs/threat-model.md`](docs/threat-model.md) § 12 is the authoritative list of what is
