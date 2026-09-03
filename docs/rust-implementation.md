@@ -238,7 +238,11 @@ Build:
    (SHA-256 of the SubjectPublicKeyInfo). A Rust agent must also implement protocol v1's
    channel binding — 32 bytes of RFC 5705 exporter output, label
    `EXPORTER-oarlock-control-v1`, mixed into the signed input — or it can only ever
-   negotiate v0 and is downgradeable by construction. Pinning is
+   negotiate v0 and is downgradeable by construction.
+
+   `cmd/oarlock-conformance` is the acceptance test for all of this: point a Rust agent at
+   it and it reports which paragraphs of `docs/protocol.md` the implementation honours.
+   Run it over TLS or the channel-binding cases are skipped rather than passed. Pinning is
    what stands between the handshake and a TLS-terminating middlebox. The Go agent pins by
    default; yours should too.
 3. **The control loop**: connect → `HELLO` → `CHALLENGE` → `AUTH` → `WELCOME`, then

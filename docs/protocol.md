@@ -109,6 +109,28 @@ connection it is holding, and there is no sane per-frame recovery from that.
 
 Three, and they divide along the two connection kinds.
 
+### 3.0 Checking your implementation
+
+`pkg/agentconf` is an executable version of this document, and `cmd/oarlock-conformance`
+runs it:
+
+```
+oarlock-conformance -device rower-1 -key rower-1.pub
+  control channel: ws://127.0.0.1:9440/ws/control
+```
+
+Point your agent at that URL and it reports which paragraphs below your implementation
+honours. Each case is one control channel — the suite hangs up between them and expects
+you to reconnect, which makes "you come back after the gateway drops you" the first thing
+it checks.
+
+Two things it deliberately does not claim. Serve it over `ws://` and the channel-binding
+cases are **skipped rather than passed**, because there is no channel to bind to; pass
+`-cert` to check them. And four properties are invisible from the wire — whether your
+private key stayed on the device, whether you pinned the certificate, whether your
+allow-lists are enforced, and the per-profile behaviour of a live session — so the report
+lists them as unchecked on every run rather than letting a green result imply them.
+
 ### 3.1 Control channel — device key, challenge–response
 
 A `persistent`-mode agent holds one control channel, so it needs a long-lived

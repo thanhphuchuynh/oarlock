@@ -958,8 +958,10 @@ rotation.
 **M4 — the rest of the protocol.** `exec`, `file`, `tcp` and `direct-tcpip` have landed
 (§ 9.5), and mode A passthrough has landed on top of `tcp` as the `sshpass` profile,
 reached with `ssh -s sshpass` and gated by the four guard rails in § 4.2. The `log`
-profile has landed too, reached with `ssh -s log:<source>`. What is left: the sftp
-subsystem.
+profile has landed too, reached with `ssh -s log:<source>`, and the agent conformance
+suite is in `pkg/agentconf` with a binary at `cmd/oarlock-conformance` (E5.S6, FR39, SC7).
+What is left: the sftp subsystem — which FR10 does not require, so it is a convenience
+rather than a gap.
 
 **M5 — more than one.** Redis ownership, node-to-node forwarding, drain, and the load test
 that says how many idle agents one replica actually holds.
