@@ -409,3 +409,15 @@ func (c Condition) Text() string {
 	}
 	return head + " " + next
 }
+
+// IsCloseReason reports whether id is a close reason from the closed set.
+//
+// It exists because `close_reason` is specified as a closed set and arrives from a peer.
+// A device sends CLOSE with whatever string it likes, and that string is written to the
+// ledger and printed in the gateway's own closing disclosure — so "the single source of
+// truth for what the UI says" was, until this was consulted, whatever an untrusted party
+// put on the wire.
+func IsCloseReason(id string) bool {
+	c, ok := Lookup(id)
+	return ok && c.Kind&Close != 0
+}

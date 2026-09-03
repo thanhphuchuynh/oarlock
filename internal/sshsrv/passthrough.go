@@ -129,7 +129,7 @@ func (s *Server) handlePassthrough(sess gssh.Session, dev *plugin.Device,
 			Surface: "ssh", Code: verdict.Code, Reason: verdict.Reason,
 			Action: string(plugin.ActionPassthrough),
 		})
-		fmt.Fprintf(sess.Stderr(), "oarlock: %s\r\n", text)
+		fmt.Fprintf(sess.Stderr(), "oarlock: %s\r\n", safeText(text))
 		_ = sess.Exit(1)
 		return true
 	}
@@ -274,13 +274,13 @@ func passthroughBanner(dev *plugin.Device, sessionID string, port int) string {
 	return fmt.Sprintf(
 		"oarlock: passthrough to %s:%s — this session is NOT recorded and this gateway "+
 			"cannot read it. Session %s.\r\n",
-		dev.ID, strconv.Itoa(port), sessionID)
+		safeText(dev.ID), strconv.Itoa(port), safeText(sessionID))
 }
 
 func passthroughClosing(sessionID, reason string) string {
 	return fmt.Sprintf(
 		"oarlock: passthrough session %s closed (%s) — it was NOT recorded.\r\n",
-		sessionID, reason)
+		safeText(sessionID), safeText(reason))
 }
 
 // handleSubsystem is the entry point for `ssh -s`.
@@ -306,7 +306,8 @@ func (s *Server) handleSubsystem(sess gssh.Session) {
 
 	if sub != PassthroughSubsystem {
 		// sftp is E5.S4. Refusing clearly beats half-running something.
-		fmt.Fprintf(sess.Stderr(), "oarlock: the %s subsystem is not supported\r\n", sub)
+		fmt.Fprintf(sess.Stderr(), "oarlock: the %s subsystem is not supported\r\n",
+			safeText(sub))
 		_ = sess.Exit(1)
 		return
 	}
