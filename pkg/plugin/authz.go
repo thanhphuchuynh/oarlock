@@ -18,6 +18,11 @@ const (
 	ActionFileRead  Action = "file:read"
 	ActionFileWrite Action = "file:write"
 	ActionTCP       Action = "tcp"
+	// ActionLog streams a device log source. Its own action rather than a flavour of
+	// `file:read`, because the two answer different questions: a log tail names a source
+	// the *device* published, and a file read names a path the *operator* chose. One of
+	// those a policy can be written about across a mixed fleet; the other cannot.
+	ActionLog Action = "log"
 	// ActionPassthrough is asking for a session the gateway cannot read.
 	ActionPassthrough Action = "passthrough"
 	// ActionReplay is reading a recording afterwards.
@@ -163,11 +168,14 @@ type Target struct {
 	Path string
 	// Argv is the command and its arguments, for ActionExec. Argv[0] is the command.
 	Argv []string
+	// Log is the logical log source, for ActionLog. Not a path: see frame.LogSource for
+	// why the gateway names a source the device published rather than a file.
+	Log string
 }
 
 // IsZero reports whether the action named no target.
 func (t Target) IsZero() bool {
-	return t.Port == 0 && t.Path == "" && len(t.Argv) == 0
+	return t.Port == 0 && t.Path == "" && len(t.Argv) == 0 && t.Log == ""
 }
 
 // Equal compares two targets.
@@ -176,7 +184,7 @@ func (t Target) IsZero() bool {
 // caller reaching for equality is usually a cache key or a re-check assertion, and both
 // want to be explicit that Argv compares element by element.
 func (t Target) Equal(o Target) bool {
-	if t.Port != o.Port || t.Path != o.Path || len(t.Argv) != len(o.Argv) {
+	if t.Port != o.Port || t.Path != o.Path || t.Log != o.Log || len(t.Argv) != len(o.Argv) {
 		return false
 	}
 	for i := range t.Argv {
@@ -200,6 +208,8 @@ func (t Target) String() string {
 		return "path " + t.Path
 	case len(t.Argv) > 0:
 		return "argv " + strings.Join(t.Argv, " ")
+	case t.Log != "":
+		return "log " + t.Log
 	default:
 		return "-"
 	}

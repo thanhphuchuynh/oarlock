@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	gssh "github.com/gliderlabs/ssh"
@@ -304,6 +305,18 @@ func (s *Server) handleSubsystem(sess gssh.Session) {
 	}
 	log := s.log.With("principal", p.ID, "device", deviceID, "subsystem", sub)
 
+	// `log:<source>` streams a device log source. The name rides in the subsystem string
+	// because that is the only place an operator can put an argument on `ssh -s`, and it
+	// keeps `ssh -s log:messages device@gateway | grep …` working as a pipeline.
+	if source, ok := strings.CutPrefix(sub, LogSubsystem+":"); ok {
+		dev, err := s.device(sess, ctx, deviceID, log)
+		if dev == nil {
+			return
+		}
+		_ = err
+		s.handleLog(sess, dev, p, strings.TrimSpace(source), log.With("profile", ProfileLog))
+		return
+	}
 	if sub != PassthroughSubsystem {
 		// sftp is E5.S4. Refusing clearly beats half-running something.
 		fmt.Fprintf(sess.Stderr(), "oarlock: the %s subsystem is not supported\r\n",
@@ -322,4 +335,21 @@ func (s *Server) handleSubsystem(sess gssh.Session) {
 		return
 	}
 	s.handlePassthrough(sess, dev, p, log.With("profile", ProfilePassthrough))
+}
+
+// device looks a device up and writes the refusal itself, returning nil when it did.
+//
+// Shared by the two subsystem paths because the sentence has to be identical: a valid key
+// must not be able to enumerate the fleet by trying usernames, and two copies of that
+// message are two chances for one of them to drift into being more helpful.
+func (s *Server) device(sess gssh.Session, ctx gssh.Context, id string,
+	log *slog.Logger) (*plugin.Device, error) {
+	dev, err := s.o.Registry.Get(ctx, id)
+	if err != nil || dev.Disabled {
+		log.Warn("device lookup failed", "error", err)
+		fmt.Fprintln(sess.Stderr(), "oarlock: no such device, or you don't have access")
+		_ = sess.Exit(1)
+		return nil, err
+	}
+	return dev, nil
 }

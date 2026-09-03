@@ -254,7 +254,7 @@ func TestAnInvitationMissingItsUrlOrTicketIsRefusedBeforeDialling(t *testing.T) 
 func TestAnUnknownProfileIsRefusedWithAReason(t *testing.T) {
 	h := newSessionHarness(t, nil)
 	inv := shellInvitation()
-	inv.Profile = "log"
+	inv.Profile = "telemetry"
 	conn := h.serve(t, inv)
 
 	_ = openFrom(t, conn)
@@ -272,7 +272,7 @@ func TestAnUnknownProfileIsRefusedWithAReason(t *testing.T) {
 		t.Fatalf("code = %q, want profile_unsupported", e.Code)
 	}
 	// Quoted, so this does not pass on the word "log" appearing incidentally.
-	if !strings.Contains(e.Message, `profile "log"`) {
+	if !strings.Contains(e.Message, `profile "telemetry"`) {
 		t.Fatalf("the refusal does not name the profile: %q", e.Message)
 	}
 
@@ -658,10 +658,11 @@ func TestTheDefaultInvitationHandlerDialsAndLogsItsFailures(t *testing.T) {
 	h.run(t)
 	conn := h.up(t)
 
-	// A profile no build serves, so the session fails and the wrapper has something to
-	// report. What matters is that it dialled at all.
+	// A profile no build serves — every profile in ARCHITECTURE § 9.4 is now implemented,
+	// so this is the case the default branch actually guards: a newer gateway asking for
+	// something this build predates.
 	inv := shellInvitation()
-	inv.Profile = "log"
+	inv.Profile = "telemetry"
 	send(t, conn, frame.TypeDial, inv)
 
 	waitFor(t, func() bool { return h.dialer.count() >= 2 },
@@ -674,8 +675,7 @@ func TestTheDefaultInvitationHandlerDialsAndLogsItsFailures(t *testing.T) {
 	waitFor(t, func() bool {
 		return strings.Contains(h.logs.String(), "session ended with an error")
 	}, "the default handler swallowed the session's failure")
-	// The slog attribute, not the bare word: "log" appears in every line of a log.
-	if !strings.Contains(h.logs.String(), "profile=log") {
+	if !strings.Contains(h.logs.String(), "profile=telemetry") {
 		t.Fatalf("the log does not name the profile:\n%s", h.logs.String())
 	}
 }

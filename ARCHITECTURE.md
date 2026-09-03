@@ -640,10 +640,15 @@ a frame at the ceiling is unambiguously a bug or an attack, never traffic.
 |---|---|---|
 | `shell` | `forkpty` → the platform shell | yes |
 | `exec` | one allow-listed argv, no shell interpretation, exit code returned | yes |
-| `log` | tail a log source | yes |
+| `log` | tail a named log source from the device's own allow-list | yes |
 | `file` | read/write under a configured root | no |
 | `tcp` | dial `127.0.0.1:port` from an allow-list | no |
 | `sshpass` | dial the device-local `sshd` (mode A) | never |
+
+`log` names a *source*, never a path, and the mapping lives on the device. That is what
+makes "may read the agent log" a policy somebody can write across a fleet whose members
+keep that log in different places — and what stops a compromised gateway turning the
+profile into an arbitrary file read, which `file` deliberately can be within its root.
 
 `exec` exists so that automation does not need a shell. Most of what calls a shell wants
 one command, and an allow-listed argv is a far smaller thing to audit than
@@ -952,8 +957,9 @@ rotation.
 
 **M4 — the rest of the protocol.** `exec`, `file`, `tcp` and `direct-tcpip` have landed
 (§ 9.5), and mode A passthrough has landed on top of `tcp` as the `sshpass` profile,
-reached with `ssh -s sshpass` and gated by the four guard rails in § 4.2. What is left:
-the `log` profile and the sftp subsystem.
+reached with `ssh -s sshpass` and gated by the four guard rails in § 4.2. The `log`
+profile has landed too, reached with `ssh -s log:<source>`. What is left: the sftp
+subsystem.
 
 **M5 — more than one.** Redis ownership, node-to-node forwarding, drain, and the load test
 that says how many idle agents one replica actually holds.

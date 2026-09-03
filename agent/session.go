@@ -87,6 +87,8 @@ func (c *Control) Serve(ctx context.Context, inv frame.Invitation) error {
 		return s.runExec(ctx, c.cfg.Exec, inv)
 	case "file":
 		return s.runFile(ctx, c.cfg.File, inv)
+	case "log":
+		return s.runLog(ctx, c.cfg.Tail, inv)
 	case "tcp":
 		return s.runTCP(ctx, c.cfg.Dial, inv)
 	case "sshpass":
@@ -101,8 +103,10 @@ func (c *Control) Serve(ctx context.Context, inv frame.Invitation) error {
 		// the half that holds when the gateway is lying.
 		return s.runTCP(ctx, c.cfg.Dial, inv)
 	default:
-		// `log` is what is left of E5. Refusing clearly beats pretending: the gateway
-		// already knows what this build advertised.
+		// Every profile in ARCHITECTURE § 9.4 is implemented, so this branch is now for
+		// a *newer gateway* asking an older agent for something it predates. Refusing
+		// clearly beats pretending: the gateway already knows what this build
+		// advertised in Caps, so a disagreement is worth naming rather than absorbing.
 		err := fmt.Errorf("profile %q is not implemented by this build", inv.Profile)
 		_ = s.send(ctx, frame.TypeError, frame.Error{
 			Code: "profile_unsupported", Message: err.Error()})

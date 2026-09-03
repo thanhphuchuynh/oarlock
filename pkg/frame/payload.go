@@ -215,6 +215,7 @@ type Invitation struct {
 	Exec      []string   `json:"exec,omitempty"`
 	File      *FileOp    `json:"file,omitempty"`
 	TCP       *TCPTarget `json:"tcp,omitempty"`
+	Log       *LogSource `json:"log,omitempty"`
 	Principal string     `json:"principal,omitempty"`
 	ExpiresAt string     `json:"expires_at,omitempty"` // RFC 3339
 }
@@ -233,6 +234,37 @@ type Invitation struct {
 // connection to one port and cannot be repointed after it opens.
 type TCPTarget struct {
 	Port int `json:"port"`
+}
+
+// LogSource is what a `log` session streams, for the `log` profile.
+//
+// # A name, not a path
+//
+// This is the one thing worth reading here. The gateway asks for `messages` or `agent`,
+// and the device maps that to whatever it actually is — `/var/log/messages` on a Linux
+// box, `logcat -b main` on Android, a journal unit on something newer. The gateway never
+// names a file.
+//
+// Two reasons, and the second is the one that matters. A logical name means the same
+// request works across a mixed fleet, which is the difference between a policy that says
+// "may read the agent log" and one that has to enumerate paths per platform. And a
+// compromised gateway that could name a path would have an arbitrary-file-read on every
+// device in the fleet — `file` accepts that risk deliberately, confined to a configured
+// root and authorised per path, but a log tail has no reason to carry it.
+//
+// Like FileOp and TCPTarget, it travels in the invitation rather than in a request frame:
+// the ticket is scoped to a profile *and* to what was authorised, so one session is one
+// source and cannot be repointed after it opens.
+type LogSource struct {
+	// Name is the logical source, from the set the device published in its own
+	// configuration. Not a path.
+	Name string `json:"name"`
+	// Follow keeps the session open and streams new lines, like `tail -f`. False reads
+	// what is there and closes, which is what a script wants.
+	Follow bool `json:"follow,omitempty"`
+	// Lines is how much history to send first. Zero means the device's default; a
+	// negative value means none, which is how you ask for only what happens next.
+	Lines int `json:"lines,omitempty"`
 }
 
 // FileOp is one file operation, for the `file` profile.
