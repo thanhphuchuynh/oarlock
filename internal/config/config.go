@@ -82,6 +82,26 @@ type Listen struct {
 	// and a device key handshake over `ws://` is a handshake anybody can watch.
 	TLSCert string `yaml:"tls_cert"`
 	TLSKey  string `yaml:"tls_key"`
+	// WSConnRatePerMinute caps how many WebSocket connections one client may open in a
+	// minute, across /ws/control, /ws/session and /ws/attach. Zero means
+	// ratelimit.DefaultWSConnRatePerMinute (120); negative disables it.
+	//
+	// Not an anti-guessing control — nothing on these doors can be guessed, since the
+	// control channel is an Ed25519 challenge-response and the session doors redeem a
+	// 32-byte random ticket. It bounds *work*: a peer that connects, starts a handshake
+	// and hangs up costs a goroutine and a signature verify, and until this existed
+	// nothing bounded how fast that could be repeated.
+	//
+	// Sized for a fleet, not an operator. One client here can legitimately be several
+	// hundred NAT'd devices reconnecting after a restart, which is why the number is
+	// four times the SSH door's. Being refused is a retry rather than a failure — an
+	// agent backs off and comes back, and since its backoff resets on a successful
+	// handshake rather than a successful dial, a throttled fleet spreads itself out.
+	//
+	// **Set this to -1 if a proxy terminates these connections**, or every device and
+	// operator behind it is counted as one client. Forwarded headers are deliberately
+	// not read: a key the caller chooses is not a limit.
+	WSConnRatePerMinute int `yaml:"ws_conn_rate_per_minute"`
 }
 
 // SSH is the operator-facing SSH server.

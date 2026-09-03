@@ -62,6 +62,7 @@ import (
 	"github.com/oarlock/oarlock/internal/handshake"
 	"github.com/oarlock/oarlock/internal/hub"
 	"github.com/oarlock/oarlock/internal/invite"
+	"github.com/oarlock/oarlock/internal/ratelimit"
 	"github.com/oarlock/oarlock/internal/record"
 	"github.com/oarlock/oarlock/internal/registry/file"
 	regsqlite "github.com/oarlock/oarlock/internal/registry/sqlite"
@@ -360,17 +361,27 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws/control", &controlsrv.Server{
+
+	// One limiter across all three WebSocket doors, so a client cannot spend a fresh
+	// budget on each. They are the same peer arriving at the same gateway, and counting
+	// them separately would triple the ceiling for anybody who noticed.
+	wsRate := cfg.Listen.WSConnRatePerMinute
+	if wsRate == 0 {
+		wsRate = ratelimit.DefaultWSConnRatePerMinute
+	}
+	wsLimit := ratelimit.Middleware(ratelimit.New(wsRate, nil), "ws", log)
+
+	mux.Handle("/ws/control", wsLimit(&controlsrv.Server{
 		Upgrader: websocket.Upgrader{},
 		Handshake: &handshake.Gateway{
 			Registry: reg, GatewayID: cfg.URL, Log: log,
 		},
 		Hub: g.hub, Log: log,
-	})
+	}))
 	// The two browser-facing sockets honour browser_origins; /ws/control above does
 	// not, because a device sends no Origin header and never should.
 	browserWS := websocket.Upgrader{OriginPatterns: cfg.BrowserOrigins}
-	mux.Handle("/ws/session", &sessionsrv.Server{
+	mux.Handle("/ws/session", wsLimit(&sessionsrv.Server{
 		Upgrader: browserWS, Inviter: g.inviter, Log: log,
 		Ready: func(c *ticket.Claims) frame.Ready {
 			// Whether *this session* is recorded, not whether a recorder exists. A
@@ -382,11 +393,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 				Recording: recorder != nil && sessionrun.Recorded(c.Profile),
 			}
 		},
-	})
-	mux.Handle("/ws/attach", &attachsrv.Server{
+	}))
+	mux.Handle("/ws/attach", wsLimit(&attachsrv.Server{
 		Upgrader: browserWS, Inviter: g.inviter,
 		Runner: runner, Live: g.live, Log: log,
-	})
+	}))
 	mux.Handle("/api/", api)
 
 	// The browser login, when a provider is configured and a callback is registered.
