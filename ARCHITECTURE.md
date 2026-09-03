@@ -963,8 +963,10 @@ suite is in `pkg/agentconf` with a binary at `cmd/oarlock-conformance` (E5.S6, F
 What is left: the sftp subsystem — which FR10 does not require, so it is a convenience
 rather than a gap.
 
-**M5 — more than one.** Redis ownership, node-to-node forwarding, drain, and the load test
-that says how many idle agents one replica actually holds.
+**M5 — more than one.** `oarlockctl` has landed (E6.S4): list, inspect, kill, fetch, and
+verify a recording against a key the operator holds rather than against this gateway's
+opinion of its own file. What is left: Redis ownership, node-to-node forwarding, and the
+load test that says how many idle agents one replica actually holds.
 
 **M6 — integration.** OpenAPI generated in CI, the Go and TypeScript SDKs,
 `@oarlock/terminal` and `@oarlock/react`, signed webhooks with a dead-letter list, and the

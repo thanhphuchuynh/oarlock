@@ -967,6 +967,17 @@ func (f *fileReplays) Cast(ctx context.Context, sessionID string) ([]byte, error
 	return io.ReadAll(rc)
 }
 
+// Manifest returns the manifest bytes as stored.
+//
+// RawManifest rather than decode-then-encode. The signature is over a canonical form
+// recomputed from the struct, so a round trip through *this* build would verify fine — but
+// a build whose decoder does not know a field a newer writer added would silently drop it
+// and turn a good recording into one that will not verify. Passing the stored bytes
+// through keeps this gateway out of that.
+func (f *fileReplays) Manifest(ctx context.Context, sessionID string) ([]byte, error) {
+	return f.rec.RawManifest(ctx, sessionID)
+}
+
 func (f *fileReplays) Verdict(ctx context.Context, sessionID string) (apisrv.ReplayVerdict, error) {
 	v, err := f.rec.Verify(ctx, sessionID, f.pub)
 	if err != nil {

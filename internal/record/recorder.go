@@ -143,6 +143,20 @@ func (r *Recorder) Manifest(ctx context.Context, sessionID string) (Manifest, er
 	return DecodeManifest(b)
 }
 
+// RawManifest returns the manifest bytes as stored, undecoded.
+//
+// For serving a manifest to somebody who will verify it themselves. The signature is over
+// a canonical re-encoding of the *struct* — signingBytes marshals it with the signature
+// field cleared — so a decode/encode round trip through this build is safe. What is not
+// safe is a round trip through a build whose decoder does not know a field a newer writer
+// added: that field is dropped, the canonical form changes, and a perfectly good recording
+// stops verifying. Handing over the stored bytes removes this gateway from that risk
+// entirely, and leaves it where it belongs — with the verifier, who has to understand the
+// manifest they are verifying.
+func (r *Recorder) RawManifest(ctx context.Context, sessionID string) ([]byte, error) {
+	return r.o.Store.GetManifest(ctx, sessionID)
+}
+
 // Verify reads both halves and checks them.
 //
 // This is what `oarlockctl verify` runs (E6.S4) and what replay calls before handing
