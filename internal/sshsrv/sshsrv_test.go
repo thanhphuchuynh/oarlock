@@ -68,6 +68,9 @@ type stack struct {
 	// failDoorbell makes the next wake return this error, so a test can see what an
 	// operator is actually told when one fails.
 	failDoorbell func(error)
+	// ledger is the session store, so a test can assert what was *written* about a
+	// session rather than only what the operator was shown.
+	ledger sessions.Store
 }
 
 func newStack(t *testing.T, shell []string, limits pump.Limits) *stack {
@@ -111,6 +114,35 @@ var handshakeBudget time.Duration
 // every test connects from 127.0.0.1, they would all share one key if the default of 30
 // ever bit. It does not: each stack builds its own server, and therefore its own counter.
 var connRate int
+
+// allowUnrecorded and devAllowPassthrough are the two keys mode A needs, in the same
+// package-variable style as the rest of this harness. Both false everywhere else, which
+// is what every other test asserts by never reaching passthrough at all.
+var allowUnrecorded bool
+var devAllowPassthrough bool
+
+// passthroughPort is the device-local sshd port the gateway asks for. It tracks
+// forwardPorts, because the device's own allow-list is the other half of the bargain and
+// a test where the two disagree is testing the disagreement rather than mode A.
+var passthroughPort int
+
+// newStackPassthrough wires a front door and a device with mode A turned on to the degree
+// each argument says, so a test can remove exactly one key and watch the refusal.
+func newStackPassthrough(t *testing.T, deployment, device bool, sshdPort int) *stack {
+	t.Helper()
+	pu, pd, pp := allowUnrecorded, devAllowPassthrough, forwardPorts
+	allowUnrecorded, devAllowPassthrough = deployment, device
+	prevPort := passthroughPort
+	if sshdPort > 0 {
+		forwardPorts = []int{sshdPort}
+		passthroughPort = sshdPort
+	}
+	t.Cleanup(func() {
+		allowUnrecorded, devAllowPassthrough, forwardPorts = pu, pd, pp
+		passthroughPort = prevPort
+	})
+	return newStackWith(t, []string{"/bin/sh"}, fastLimits(), 0, false)
+}
 
 // newStackRateLimited wires a front door that admits `perMinute` connections from one
 // client before refusing.
@@ -190,7 +222,8 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 
 	// ── a dispatch-mode device: the doorbell is a function call, which keeps the
 	// test to one moving part while still exercising the whole session path ──
-	dev := &plugin.Device{ID: deviceID, Platform: plugin.PlatformAndroid}
+	dev := &plugin.Device{ID: deviceID, Platform: plugin.PlatformAndroid,
+		AllowPassthrough: devAllowPassthrough}
 	registry := reg{map[string]*plugin.Device{dev.ID: dev}}
 
 	tickets := ticket.NewMemory(nil)
@@ -263,17 +296,20 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 		recorder = r
 	}
 
+	ledger := sessions.NewMemory(sessions.Limits{}, nil)
 	srv, err := sshsrv.New(sshsrv.Options{
 		Authenticator:     authn,
 		Authz:             authzChecker,
 		AuthzSupervisor:   authzSupervisor,
 		Registry:          registry,
 		Inviter:           inviter,
-		Sessions:          sessions.NewMemory(sessions.Limits{}, nil),
+		Sessions:          ledger,
 		Recorder:          recorder,
 		Limits:            limits,
 		HandshakeBudget:   handshakeBudget,
 		ConnRatePerMinute: connRate,
+		AllowUnrecorded:   allowUnrecorded,
+		PassthroughPort:   passthroughPort,
 		Log:               quiet(),
 	})
 	if err != nil {
@@ -289,6 +325,7 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 	return &stack{
 		sshAddr: l.Addr().String(), client: signer, dev: dev, shell: shell,
 		failDoorbell: func(e error) { doorbellErr.Store(e) },
+		ledger:       ledger,
 	}
 }
 
@@ -643,6 +680,15 @@ func TestExecNeedsNoTerminal(t *testing.T) {
 	}
 }
 
+// TestASubsystemIsStillRefused. `sshpass` is the only one this gateway serves; everything
+// else has to say so.
+//
+// Read through StderrPipe rather than sess.Stderr, and that is not a style choice:
+// x/crypto's RequestSubsystem sends the request without calling start(), so the copy
+// goroutines that would fill sess.Stderr are never created and it stays empty however long
+// you wait. This test used to "pass" through its early-return branch, because no subsystem
+// handler was registered at all and the request was rejected outright — so the message it
+// was checking for had never once been delivered.
 func TestASubsystemIsStillRefused(t *testing.T) {
 	s := newStack(t, []string{"/bin/sh"}, fastLimits())
 	c := s.dial(t, nil, "")
@@ -651,16 +697,18 @@ func TestASubsystemIsStillRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.Close()
-	var stderr syncBuf
-	sess.Stderr = &stderr
-	// The request is accepted at the channel level and refused by the handler, so the
-	// failure arrives as a non-zero exit rather than a rejected request.
+
+	stderr, err := sess.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := sess.RequestSubsystem("sftp"); err != nil {
 		return // rejected outright, which is also a refusal
 	}
-	_ = sess.Wait()
-	if !strings.Contains(stderr.String(), "sftp") {
-		t.Fatalf("stderr = %q, want it to name the unsupported subsystem", stderr.String())
+	buf := make([]byte, 256)
+	n, _ := stderr.Read(buf)
+	if !strings.Contains(string(buf[:n]), "sftp") {
+		t.Fatalf("stderr = %q, want it to name the unsupported subsystem", buf[:n])
 	}
 }
 

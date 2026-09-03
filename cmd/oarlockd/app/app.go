@@ -459,6 +459,8 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Audit:             g.audit,
 		HandshakeBudget:   cfg.SSH.HandshakeBudget,
 		ConnRatePerMinute: cfg.SSH.ConnRatePerMinute,
+		AllowUnrecorded:   cfg.Policy.AllowUnrecorded,
+		PassthroughPort:   cfg.Policy.SSHPort(),
 		HostKey:           hostKey, Log: log,
 	})
 	if err != nil {
@@ -482,6 +484,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Env:                        cfg.SafetyEnv(),
 		AuthenticatorKind:          authnKind,
 		RecordInputDefault:         cfg.Policy.RecordInput.Default,
+		AllowUnrecorded:            cfg.Policy.AllowUnrecorded,
 		RecorderConfigured:         recorder != nil,
 		RecordingStoreProtected:    recProtected,
 		RecordingStoreMode:         recStoreMode,

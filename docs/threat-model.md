@@ -245,6 +245,7 @@ somebody who also wrote some of it, not an independent audit — and the statuse
 | 6 | `exec` allow-listed argv, no shell interpretation | built | `agent/exec.go` |
 | 6 | Escape sequences escaped before reaching a log or an audit event | **unverified** | claimed above; not checked during this review |
 | 9 | `replay` is its own action | built | the action set is closed and checked |
+| 4 | Mode A needs two keys, a grant and a disclosure said twice | tested | `internal/sshsrv/passthrough.go` — `policy.allow_unrecorded` and `devices[].allow_passthrough` are both required, and were both dead configuration until this landed |
 | 9 | Recordings signed and hash-chained | built | `internal/record` |
 | 10 | Frame and batch ceilings, coalescing, backpressure | tested | `internal/pump`, `pkg/frame` |
 | 10 | `sessions_per_device` by unique index, not check-then-act | tested | `internal/sessions` |

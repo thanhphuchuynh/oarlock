@@ -254,7 +254,7 @@ func TestAnInvitationMissingItsUrlOrTicketIsRefusedBeforeDialling(t *testing.T) 
 func TestAnUnknownProfileIsRefusedWithAReason(t *testing.T) {
 	h := newSessionHarness(t, nil)
 	inv := shellInvitation()
-	inv.Profile = "sshpass"
+	inv.Profile = "log"
 	conn := h.serve(t, inv)
 
 	_ = openFrom(t, conn)
@@ -271,7 +271,8 @@ func TestAnUnknownProfileIsRefusedWithAReason(t *testing.T) {
 	if e.Code != "profile_unsupported" {
 		t.Fatalf("code = %q, want profile_unsupported", e.Code)
 	}
-	if !strings.Contains(e.Message, "sshpass") {
+	// Quoted, so this does not pass on the word "log" appearing incidentally.
+	if !strings.Contains(e.Message, `profile "log"`) {
 		t.Fatalf("the refusal does not name the profile: %q", e.Message)
 	}
 
@@ -660,7 +661,7 @@ func TestTheDefaultInvitationHandlerDialsAndLogsItsFailures(t *testing.T) {
 	// A profile no build serves, so the session fails and the wrapper has something to
 	// report. What matters is that it dialled at all.
 	inv := shellInvitation()
-	inv.Profile = "sshpass"
+	inv.Profile = "log"
 	send(t, conn, frame.TypeDial, inv)
 
 	waitFor(t, func() bool { return h.dialer.count() >= 2 },
@@ -673,7 +674,8 @@ func TestTheDefaultInvitationHandlerDialsAndLogsItsFailures(t *testing.T) {
 	waitFor(t, func() bool {
 		return strings.Contains(h.logs.String(), "session ended with an error")
 	}, "the default handler swallowed the session's failure")
-	if !strings.Contains(h.logs.String(), "sshpass") {
+	// The slog attribute, not the bare word: "log" appears in every line of a log.
+	if !strings.Contains(h.logs.String(), "profile=log") {
 		t.Fatalf("the log does not name the profile:\n%s", h.logs.String())
 	}
 }

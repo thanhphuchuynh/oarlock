@@ -201,10 +201,15 @@ What you give up is the reason mode C exists:
 | Device-side listener | none | a loopback socket |
 | `scp` / `sftp` / `-L` | gateway implements them | free with the protocol |
 
-Guard rails, because an unrecorded session must never be an accident:
+Guard rails, because an unrecorded session must never be an accident. All four are
+enforced in `internal/sshsrv/passthrough.go`, and an operator reaches this mode with
+`ssh -s sshpass <device>@gateway` — usually as a `ProxyCommand`, so the inner `ssh`
+terminates at the device:
 
 1. `devices[].allow_passthrough` must be `true` for that specific device.
-2. Policy `allow_unrecorded` must be `true` gateway-wide.
+2. Policy `allow_unrecorded` must be `true` gateway-wide. The gateway-wide key is checked
+   *first*, so a deployment that has not opted in answers identically for every device and
+   the refusal cannot be used to discover which devices carry the flag.
 3. The session row is written with `recording_state: not_recorded` — an unrecorded session
    is a queryable fact, not a missing file.
 4. The operator sees a banner naming the mode before the first prompt, **and again as
@@ -946,8 +951,9 @@ grace window, the **MQTT** dispatcher adapter, S3/GCS recorder, Postgres store, 
 rotation.
 
 **M4 — the rest of the protocol.** `exec`, `file`, `tcp` and `direct-tcpip` have landed
-(§ 9.5). What is left: the `log` profile, the sftp subsystem, and mode A passthrough on
-top of `tcp`.
+(§ 9.5), and mode A passthrough has landed on top of `tcp` as the `sshpass` profile,
+reached with `ssh -s sshpass` and gated by the four guard rails in § 4.2. What is left:
+the `log` profile and the sftp subsystem.
 
 **M5 — more than one.** Redis ownership, node-to-node forwarding, drain, and the load test
 that says how many idle agents one replica actually holds.
