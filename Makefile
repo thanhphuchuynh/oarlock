@@ -8,6 +8,7 @@ OARLOCKD := oarlockd
 OARLOCK_AGENT := oarlock-agent
 DEMO_DIR := demo
 DEMO_CONFIG := $(DEMO_DIR)/oarlock.yaml
+LOCAL_CONFIG := $(DEMO_DIR)/oarlock.local.yaml
 DEMO_DEVICE := treadmill-4821
 DEMO_GATEWAY := ws://127.0.0.1:8443/ws/control
 DEMO_SHELL := /bin/sh
@@ -25,7 +26,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
@@ -36,9 +37,11 @@ help:
 		'  make check        Run typecheck, UI build, Go tests, and go vet' \
 		'  make test         Run Go tests and frontend tests' \
 		'  make vet          Run go vet ./...' \
-		'  make demo-url     Point demo/oarlock.yaml at this machine's current LAN address' \
+		'  make demo-url     Point demo/oarlock.yaml at the current LAN address' \
 		'  make demo-reset   Remove demo/oarlock.db for a clean SQLite registry' \
 		'  make demo-server  Start demo gateway with demo/oarlock.yaml' \
+		'  make local-config Write demo/oarlock.local.yaml, a loopback-only copy' \
+		'  make local-server Start the gateway on 127.0.0.1 only' \
 		'  make demo-seed-device  Add treadmill-4821 to the demo SQLite registry' \
 		'  make demo-seed-permissions  Add the demo grants to SQLite' \
 		'  make demo-agent   Start demo oarlock-agent for treadmill-4821' \
@@ -79,6 +82,20 @@ clean:
 # agent logs `connection refused` to an address that used to be here.
 demo-url:
 	@addr=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null); 	if [ -z "$$addr" ]; then echo "no LAN address on en0/en1"; exit 1; fi; 	current=$$(sed -n 's|^url: ws://\([^:]*\):.*|\1|p' $(DEMO_CONFIG)); 	if [ "$$current" = "$$addr" ]; then printf 'demo url is already ws://%s:8443\n' "$$addr"; exit 0; fi; 	sed -i '' "s|^url: ws://.*|url: ws://$$addr:8443|" $(DEMO_CONFIG); 	printf 'demo url: ws://%s:8443 (was %s) — restart the gateway, and update the APK\n' "$$addr" "$$current"
+
+# A loopback-only gateway, for working on this machine with nothing else involved.
+#
+# The only thing that has to differ from the demo config is `url`, and it is the one
+# thing that matters: it is the address the *agent* dials for the session leg, so a LAN
+# address left in it from the last phone session makes a local run fail as though the
+# device never answered. Generated rather than committed, because demo/ is ignored and a
+# second config to keep in step with the first is a config that drifts.
+local-config:
+	@sed 's|^url: ws://.*|url: ws://127.0.0.1:8443|' $(DEMO_CONFIG) > $(LOCAL_CONFIG)
+	@printf 'wrote %s (url: ws://127.0.0.1:8443)\n' '$(LOCAL_CONFIG)'
+
+local-server: local-config
+	cd $(DEMO_DIR) && ../$(OARLOCKD) -config ./oarlock.local.yaml
 
 demo-reset:
 	rm -f $(DEMO_DIR)/oarlock.db
