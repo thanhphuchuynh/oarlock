@@ -32,8 +32,19 @@ export default defineConfig(({ mode }) => {
   return {
     root: "web",
     plugins: [react(), tailwind()],
-    // Relative, so the bundle works wherever the gateway mounts it.
-    base: "./",
+    // Absolute, and it has to be. A relative base resolves against the *document's*
+    // directory, so it works only while every route is a single segment: on `/ui/` the
+    // browser asks for `/ui/assets/…`, but on `/ui/s/sess_x` it asks for
+    // `/ui/s/assets/…`, which `ui.Handler`'s SPA fallback answers with index.html — a
+    // 200 of `text/html` where a script was expected, so the page renders blank and
+    // nothing in the network log looks like an error.
+    //
+    // This used to say "relative, so the bundle works wherever the gateway mounts it".
+    // That stopped being true when the console gained routes with depth. The mount point
+    // is already fixed in two other places — `cmd/oarlockd/app/app.go` mounts `/ui/`, and
+    // `web/src/router/useRouter.ts` derives the same prefix — so this is the third, not
+    // a new constraint.
+    base: "/ui/",
     build: {
       outDir: "dist",
       emptyOutDir: true,
