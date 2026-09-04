@@ -764,6 +764,53 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+  /api/v1/principals/{id}/access:
+    get:
+      operationId: getPrincipalAccess
+      summary: List the rules that apply to one principal.
+      description: Requires the `admin:permissions` action. **Optional:** present only when the gateway is configured with Permissions; otherwise this path answers 404.
+      tags:
+        - principals
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The resource's id.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK.
+        "401":
+          description: The credential was missing or refused.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        "403":
+          description: The authorizer refused, or could not be reached — `type` distinguishes `not_authorized` from `authz_unavailable`, and they mean different things.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        "404":
+          description: 'No such resource, or the caller may not see it. Deliberately the same answer for both: telling them apart is an enumeration oracle.'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        "429":
+          description: Rate limited. `Retry-After` says how long.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        "500":
+          description: The gateway failed. `request` is the correlation id.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /api/v1/recordings/{id}:
     get:
       operationId: getRecording

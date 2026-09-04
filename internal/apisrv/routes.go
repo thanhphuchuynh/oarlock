@@ -178,6 +178,15 @@ func routes() []route {
 			}),
 			handler: func(s *Server) handlerFunc { return s.deviceAccess },
 		},
+		{
+			ID:     "getPrincipalAccess",
+			Method: "GET", Path: "/principals/{id}/access",
+			Summary:   "List the rules that apply to one principal.",
+			Action:    plugin.ActionAdminPermissions,
+			Requires:  "Permissions",
+			available: has(func(o Options) bool { return o.Permissions != nil }),
+			handler:   func(s *Server) handlerFunc { return s.principalAccess },
+		},
 
 		// ── running things on a device ──
 		{

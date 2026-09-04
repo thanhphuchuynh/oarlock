@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -641,5 +642,65 @@ func TestDeviceAccessForAnUnknownDevice(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "device_unknown") {
 		t.Fatalf("condition = %s", body)
+	}
+}
+
+// The Person page's second question — "were they allowed to?" — answered by the gateway
+// rather than by the console glob-matching principals for itself. A console that matched
+// patterns on its own could show an answer the authorizer would not enforce.
+func TestPrincipalAccessListsOnlyMatchingRules(t *testing.T) {
+	f := newAdminFixture(t, adminID)
+	f.grant(t, &plugin.Permission{
+		ID: "oncall", Principals: []string{"*@oncall.example.com"},
+		Devices: []string{"*"}, Actions: []string{"shell"},
+	})
+	f.grant(t, &plugin.Permission{
+		ID: "just-sam", Principals: []string{"sam@example.com"},
+		Devices: []string{"*"}, Actions: []string{"shell"},
+	})
+
+	status, body := f.call(t, http.MethodGet,
+		apisrv.Prefix+"/principals/"+url.PathEscape("ana@oncall.example.com")+"/access",
+		adminToken, "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var out struct {
+		Principal string `json:"principal"`
+		Rules     []struct {
+			ID string `json:"id"`
+		} `json:"rules"`
+		AdminActions []string `json:"admin_actions"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Principal != "ana@oncall.example.com" {
+		t.Errorf("principal = %q", out.Principal)
+	}
+	// The glob matches; the exact rule for somebody else does not.
+	ids := map[string]bool{}
+	for _, r := range out.Rules {
+		ids[r.ID] = true
+	}
+	if !ids["oncall"] {
+		t.Error("the matching glob rule is missing")
+	}
+	if ids["just-sam"] {
+		t.Error("another principal's rule leaked into the answer")
+	}
+	if len(out.AdminActions) == 0 {
+		t.Error("admin_actions must travel with the answer, as it does for a device")
+	}
+}
+
+// Reading policy is administrative, the same as it is for a device.
+func TestPrincipalAccessNeedsTheAdminGrant(t *testing.T) {
+	f := newAdminFixture(t) // no config-declared administrators
+	status, _ := f.call(t, http.MethodGet,
+		apisrv.Prefix+"/principals/"+url.PathEscape("ana@oncall.example.com")+"/access",
+		nobodyToken, "")
+	if status != http.StatusForbidden && status != http.StatusNotFound {
+		t.Fatalf("status %d, want a refusal", status)
 	}
 }

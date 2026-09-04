@@ -1071,6 +1071,52 @@ func (s *Server) deviceAccess(w http.ResponseWriter, r *http.Request, p *plugin.
 	})
 }
 
+// principalAccess answers "were they allowed to", the Person page's second question,
+// once "what did this person do" has already been answered from the audit log.
+//
+// Evaluated on the server with plugin.Permission's own matcher, not in the browser: a
+// second implementation of glob matching one network hop from the real one would drift,
+// and a console that tells an auditor somebody was allowed something the gateway would
+// have refused is worse than no console. There is no registry lookup here, unlike
+// deviceAccess: a principal is a string an authenticator issued, not a row to fetch.
+func (s *Server) principalAccess(w http.ResponseWriter, r *http.Request, p *plugin.Principal) {
+	if !s.authorizeAdmin(w, r, p, gatewayDevice, plugin.ActionAdminPermissions) {
+		return
+	}
+	id := r.PathValue("id")
+	permissions, err := s.o.Permissions.ListPermissions(r.Context())
+	if err != nil {
+		s.problem(w, r, http.StatusInternalServerError, "internal",
+			"Could not read the policy", err.Error(), true)
+		return
+	}
+	denies := make([]permissionJSON, 0, 4)
+	allows := make([]permissionJSON, 0, len(permissions))
+	for _, permission := range permissions {
+		if !permission.MatchesPrincipal(id) {
+			continue
+		}
+		if permission.Deny {
+			denies = append(denies, renderPermission(permission))
+			continue
+		}
+		allows = append(allows, renderPermission(permission))
+	}
+	// The administrative vocabulary travels with the answer. A reader has to separate
+	// "can open a shell on this" from "can change this record" — they are very different
+	// sentences about a person — and the alternative is the console keeping its own copy
+	// of which actions are which, which is the same drift this endpoint exists to avoid.
+	admin := make([]string, 0, 3)
+	for _, action := range plugin.AdministrativeActions() {
+		admin = append(admin, string(action))
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"principal":     id,
+		"rules":         append(denies, allows...),
+		"admin_actions": admin,
+	})
+}
+
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
 	devices := s.o.Agents.Devices()
 	sort.Strings(devices)
