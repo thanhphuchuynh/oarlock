@@ -34,9 +34,28 @@
 
 **That is correct and must not be worked around.** Reading who may do what is reading policy, and policy reading is administrative. The resolution is in how the page behaves, not in loosening the endpoint:
 
-**The grants section renders only when it can be read. A 403 hides the section; it does not fail the page.**
+**The grants section always renders. When it cannot be read it says so and names the
+action required — it does not hide, and it does not show an empty list.**
 
-This is an established pattern here, not an invention: `tests/console/console.spec.ts` already has a test called *"a device row will not invent an access list it cannot read"*. Follow it.
+An earlier draft of this plan said a 403 should hide the section. That was wrong, and it
+was wrong because I cited a precedent without reading it. `Fleet.tsx:343-376` has four
+states — loading, refused, failed with a retry, and ready — and its refusal reads:
+
+    Seeing who can reach a device needs `admin:permissions` on `gateway`.
+
+with a comment giving the reason:
+
+    A device administrator who cannot read the policy is a real configuration, not an
+    error. Saying which grant is missing beats an empty list, which would read as
+    "nobody can reach this".
+
+**That argument is sharper here than on a device row.** An empty grants list on a Person
+page does not merely read as "nobody" — it reads as *"this person is permitted nothing"*,
+on a page whose whole purpose is answering whether they were permitted what they did. A
+silent or empty section on an audit surface is not a missing feature; it is a false
+statement about a person.
+
+Mirror all four states. Read `Fleet.tsx:343-376` before writing the section.
 
 **Never evaluate policy in the browser.** `plugin.Permission.MatchesPrincipal` (`pkg/plugin/permission.go:132`) is the canonical matcher, and glob-matching principals client-side would let the console show an answer the gateway would not enforce. The endpoint exists precisely so the console never has to guess.
 
@@ -241,7 +260,10 @@ than a filter that quietly does nothing.
 
 `route.facets` carries `since`, `until`, `device`, `state` (see `web/src/router/routes.ts`). Pass them to the sessions call. **Default to the last 30 days** when no `since` is present, per the spec — and put that default in the URL via `navigate(..., { replace: true })` so the view a person is looking at is always the view its URL describes. A default that lives only in component state is a link that does not reproduce what the sender saw.
 
-**The grants section renders only if the call succeeds.** On a 403, omit the section entirely — no empty state, no error panel. The page's first question is still fully answered, and an auditor without `admin:permissions` gets a working page rather than a broken one. `tests/console/console.spec.ts`'s *"a device row will not invent an access list it cannot read"* is the precedent; read it first.
+**The grants section renders in all four states** — see "The authorization problem" above,
+and read `Fleet.tsx:343-376`, which is the implementation to mirror. On a refusal it names
+`admin:permissions`; it never shows an empty list, because an empty list on this page is a
+false statement about a person rather than a blank space.
 
 - [ ] **Step 4: Wire the route**
 
@@ -277,7 +299,12 @@ In `tests/console/console.spec.ts` — **not a new file**; its `beforeAll` start
 
 1. **A person page reached by URL lists that person's sessions.** Open a session as `admin@mail.com`, then `page.goto` `/ui/p/admin%40mail.com` and assert the session appears.
 2. **The facets are in the URL and narrow the list.** Navigate with `?since=` in the future and assert the list is empty; a link is only a link if it reproduces the view.
-3. **A person with no `admin:permissions` sees the timeline and no grants section.** `visitor@example.com` (token `visitor-token-long-enough-for-the-check`) has a shell grant and no admin rights. Assert the sessions section renders **and** the grants section is absent — not an error panel.
+3. **A person with no `admin:permissions` sees the timeline, and a grants section that
+   says why it is empty.** `visitor@example.com` (token
+   `visitor-token-long-enough-for-the-check`) has a shell grant and no admin rights.
+   Assert the sessions section renders, the grants section **is present**, that it names
+   `admin:permissions`, and that it does **not** show a rules list. Model the assertions on
+   `tests/console/console.spec.ts:399`, which does exactly this for a device row.
 
 Test 3 is the one that matters most: it is the page's behaviour for the user the page is for.
 
