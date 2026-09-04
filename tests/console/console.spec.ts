@@ -546,12 +546,7 @@ test("replay shows the integrity verdict above the recording", async ({ page }) 
   // Replay now lives at the session's own route, `/s/{id}`, reached the same way Attach
   // and Watch are: a button on the device's own row, which `Leave` already returned to
   // (reopened for the same reason "the session list explains itself" reopens it — the
-  // fleet page remounted collapsed). This is *not* a hard reload of that URL: doing that
-  // here would hit a separate, pre-existing defect that this task surfaces rather than
-  // causes — `vite.config.ts` builds the console with `base: "./"`, so a relative asset
-  // URL in `index.html` resolves one directory too deep under any two-segment route
-  // (`/s/{id}`, `/p/{principal}`, `/d/{device}`) and the bundle 404s before React ever
-  // runs. That is out of `web/src/App.tsx`'s reach; see the task report.
+  // fleet page remounted collapsed).
   const reopened = await openRow(page, "treadmill-4821");
   const replayButton = reopened.getByRole("button", { name: "Replay" }).first();
   await expect(replayButton).toBeVisible({ timeout: 30_000 });
@@ -567,6 +562,121 @@ test("replay shows the integrity verdict above the recording", async ({ page }) 
   await expect(verdict).toHaveAttribute("data-oarlock-tone", "trusted");
   await expect(verdict).toContainText("This recording is intact.");
   await expect(page.locator(".oarlock-replay .ap-player")).toBeVisible();
+
+  // A hard reload of this exact URL, not another client-side navigation. Commit 625fbde
+  // fixed the defect that used to sit here: the console was built with a relative
+  // `base: "./"`, so its `index.html` resolved its asset URLs one directory too deep
+  // under any two-segment route and the bundle 404'd before React ever ran. The base is
+  // now the absolute `/ui/`, and the click above already left us on the URL to prove it
+  // against: reload, and SessionRoute has to re-fetch this now-closed session's cast and
+  // verdict from nothing — the ticket the click minted does not survive a real page load.
+  await page.reload();
+  await expect(page.getByTestId("replay")).toBeVisible({ timeout: 30_000 });
+  await expect(verdict).toBeVisible({ timeout: 30_000 });
+  await expect(verdict).toHaveAttribute("data-oarlock-tone", "trusted");
+  await expect(verdict).toContainText("This recording is intact.");
+  await expect(page.locator(".oarlock-replay .ap-player")).toBeVisible();
+});
+
+// The increment's entire point: a session's URL survives a real reload, not only a click
+// that happened to land there. Opening the session leaves an in-memory bypass ticket
+// behind (see `SessionBypass` in App.tsx) that a hard `page.goto` cannot see, so this can
+// only pass if SessionRoute's own cold fetch — the same path a pasted link takes — works.
+test("a session URL resolves on a cold load", async ({ page }) => {
+  await signIn(page);
+
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByTestId("reason").fill("ticket AV-9500");
+  await row.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+
+  // This test's own session, not a neighbour's — the deployment is shared, so `.first()`
+  // is only unambiguous because it is scoped to the terminal this test just opened.
+  const sessionID = (await page.getByTestId("terminal").locator(".mono").first().textContent())!;
+  expect(sessionID).toMatch(/^sess_/);
+
+  // A real document load — a fresh navigation, not `navigate()`'s pushState — so nothing
+  // survives from the click above but what the URL itself and sessionStorage's token
+  // carry.
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/s/${sessionID}`);
+  await expect(page.getByTestId("terminal")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("terminal").locator(".mono").first()).toHaveText(sessionID);
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible();
+});
+
+test("the back button returns you to where you were", async ({ page }) => {
+  await signIn(page);
+  await expect(page.getByTestId("fleet")).toBeVisible();
+
+  await page.getByRole("button", { name: "Permissions", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/permissions$/);
+  await expect(page.getByTestId("permissions")).toBeVisible();
+  // Unmounted, not merely hidden — the fleet page is not on this route.
+  await expect(page.getByTestId("fleet")).toHaveCount(0);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/ui\/$/);
+  await expect(page.getByTestId("fleet")).toBeVisible();
+  await expect(page.getByTestId("permissions")).toHaveCount(0);
+});
+
+test("an unknown path renders the search screen, not an error", async ({ page }) => {
+  await signIn(page);
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/nope/whatever`);
+  await expect(page.getByTestId("fleet")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("failure")).toHaveCount(0);
+});
+
+// The regression test named in the plan: pushState does not fire popstate, so the
+// router's state has to live in one external store rather than a per-component copy, or
+// only the component that called navigate() would learn the route changed. The nav rail
+// and the page body are the two readers of that store in this app, so both are asserted
+// together after every client-side navigation below — if either lagged the other, one of
+// these pairs would disagree.
+test("every subscriber sees the same route after navigating", async ({ page }) => {
+  await signIn(page);
+
+  const fleetNav = page.getByRole("button", { name: "Fleet", exact: true });
+  const permissionsNav = page.getByRole("button", { name: "Permissions", exact: true });
+  const sqlNav = page.getByRole("button", { name: "SQL Explorer", exact: true });
+
+  await expect(fleetNav).toHaveClass(/nav-item-active/);
+  await expect(page.getByTestId("fleet")).toBeVisible();
+
+  await permissionsNav.click();
+  await expect(page).toHaveURL(/\/ui\/permissions$/);
+  await expect(permissionsNav).toHaveClass(/nav-item-active/);
+  await expect(fleetNav).not.toHaveClass(/nav-item-active/);
+  await expect(page.getByTestId("permissions")).toBeVisible();
+  await expect(page.getByTestId("fleet")).toHaveCount(0);
+
+  await sqlNav.click();
+  await expect(page).toHaveURL(/\/ui\/sql$/);
+  await expect(sqlNav).toHaveClass(/nav-item-active/);
+  await expect(permissionsNav).not.toHaveClass(/nav-item-active/);
+  await expect(page.getByTestId("sql-explorer")).toBeVisible();
+  await expect(page.getByTestId("permissions")).toHaveCount(0);
+
+  await fleetNav.click();
+  await expect(page).toHaveURL(/\/ui\/$/);
+  await expect(fleetNav).toHaveClass(/nav-item-active/);
+  await expect(sqlNav).not.toHaveClass(/nav-item-active/);
+  await expect(page.getByTestId("fleet")).toBeVisible();
+  await expect(page.getByTestId("sql-explorer")).toHaveCount(0);
+});
+
+// Task 3's report established that nothing in the suite drives the failed branch of a
+// session's own route at all. A cold link is where an operator actually meets it: a
+// session id mistyped, or copied off a system that has since forgotten it — never the
+// live session or the just-closed recording every other session test opens for itself.
+test("a cold link to a session that does not exist renders the failure screen", async ({ page }) => {
+  await signIn(page);
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/s/sess_doesnotexist`);
+  const failure = page.getByTestId("failure");
+  await expect(failure).toBeVisible({ timeout: 15_000 });
+  await expect(failure).toContainText("That isn't there, or you don't have access to it.");
+  await expect(page.getByTestId("terminal")).toHaveCount(0);
+  await expect(page.getByTestId("replay")).toHaveCount(0);
 });
 
 test("an administrator can edit, disable, and re-enable a device", async ({ page }) => {
