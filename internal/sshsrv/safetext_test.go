@@ -94,7 +94,7 @@ func TestEveryInterpolatedFieldIsEscaped(t *testing.T) {
 func TestSafeTextKeepsWhatAnOperatorNeedsToRead(t *testing.T) {
 	for _, s := range []string{
 		"treadmill-4821",
-		"phuc@example.com",
+		"admin@mail.com",
 		"not in the on-call group",
 		"session ended · gateway-terminated", // the interpunct this project uses
 		"許可されていません",                          // a backend answering in Japanese

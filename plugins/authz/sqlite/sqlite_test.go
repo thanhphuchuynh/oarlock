@@ -25,14 +25,14 @@ func TestPermissionLifecycleAndDecision(t *testing.T) {
 	ctx := context.Background()
 	store := open(t)
 	permission := &plugin.Permission{
-		ID: "support-shell", Name: "Support shell", Principals: []string{"phuc@example.com"},
+		ID: "support-shell", Name: "Support shell", Principals: []string{"admin@mail.com"},
 		Devices: []string{"samsung-*"}, Tags: map[string]string{"fleet": "qa"},
 		Actions: []string{"shell", "exec"}, Enabled: true, MaxDuration: 15 * time.Minute,
 	}
 	if err := store.CreatePermission(ctx, permission); err != nil {
 		t.Fatal(err)
 	}
-	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
+	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "admin@mail.com"},
 		&plugin.Device{ID: "samsung-s23", Tags: map[string]string{"fleet": "qa"}}, plugin.ActionShell, plugin.Target{})
 	if err != nil || !decision.Allow {
 		t.Fatalf("decision = %+v, error = %v", decision, err)
@@ -45,7 +45,7 @@ func TestPermissionLifecycleAndDecision(t *testing.T) {
 	if err := store.UpdatePermission(ctx, permission); err != nil {
 		t.Fatal(err)
 	}
-	decision, err = store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
+	decision, err = store.Authorize(ctx, &plugin.Principal{ID: "admin@mail.com"},
 		&plugin.Device{ID: "samsung-s23", Tags: map[string]string{"fleet": "qa"}}, plugin.ActionShell, plugin.Target{})
 	if err != nil || decision.Allow {
 		t.Fatalf("disabled permission decision = %+v, error = %v", decision, err)
@@ -70,7 +70,7 @@ func TestDenyBeatsHigherPriorityAllow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
+	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "admin@mail.com"},
 		&plugin.Device{ID: "pos-1", Tags: map[string]string{"scope": "pci"}}, plugin.ActionShell, plugin.Target{})
 	if err != nil || decision.Allow || decision.Reason != "change ticket required" {
 		t.Fatalf("deny decision = %+v, error = %v", decision, err)
@@ -86,7 +86,7 @@ func TestValidationAndDatabaseFailureAreDistinct(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "phuc@example.com"},
+	decision, err := store.Authorize(ctx, &plugin.Principal{ID: "admin@mail.com"},
 		&plugin.Device{ID: "samsung-s23"}, plugin.ActionShell, plugin.Target{})
 	if err == nil || decision.Allow {
 		t.Fatalf("database outage was reported as a decision: %+v, %v", decision, err)

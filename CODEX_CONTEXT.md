@@ -102,7 +102,7 @@ path was walked and confirmed before it was closed.
 - `tests/console/console.spec.ts` seeds through `authorizer.admins` and then grants real
   admin permissions, so the console's own administration runs on a grant rather than the
   break-glass; a second token (`visitor@example.com`, shell only) drives the refusal.
-- `demo/oarlock.yaml` gained `authorizer.admins: [phuc@example.com]`, and `make
+- `demo/oarlock.yaml` gained `authorizer.admins: [admin@mail.com]`, and `make
   demo-seed-permissions` now seeds `gateway-admin` and `fleet-admin`.
 - `demo/oarlock.yaml`'s `url` was stale at `ws://192.168.1.32:8443`; this machine is now
   `192.168.1.165`, which is why the agent could not dial back and `tests/live` failed.
@@ -260,7 +260,7 @@ Expected:
 
 - UI shows the registered device.
 - UI shows the connected agent.
-- Opening a shell succeeds for `phuc@example.com` after permissions are seeded.
+- Opening a shell succeeds for `admin@mail.com` after permissions are seeded.
 - The `SSH client` action downloads `oarlock_known_hosts.txt` and generates a command.
 - For the demo operator, set the identity path to
   `/path/to/oarlock/demo/operator_key`.

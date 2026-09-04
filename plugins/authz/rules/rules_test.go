@@ -46,7 +46,7 @@ func who(id string) *plugin.Principal { return &plugin.Principal{ID: id} }
 
 const basic = `
 rules:
-  - principals: ["phuc@example.com"]
+  - principals: ["admin@mail.com"]
     devices: ["treadmill-*"]
     actions: ["shell", "exec"]
   - principals: ["auditor@example.com"]
@@ -63,13 +63,13 @@ func TestGrantsWhatItSays(t *testing.T) {
 		act   plugin.Action
 		allow bool
 	}{
-		{"phuc@example.com", "treadmill-4821", plugin.ActionShell, true},
-		{"phuc@example.com", "treadmill-4821", plugin.ActionExec, true},
+		{"admin@mail.com", "treadmill-4821", plugin.ActionShell, true},
+		{"admin@mail.com", "treadmill-4821", plugin.ActionExec, true},
 		// exec does not imply shell and shell does not imply file access: the actions
 		// are coarse but they are not a hierarchy.
-		{"phuc@example.com", "treadmill-4821", plugin.ActionFileRead, false},
-		{"phuc@example.com", "treadmill-4821", plugin.ActionPassthrough, false},
-		{"phuc@example.com", "rower-7", plugin.ActionShell, false},
+		{"admin@mail.com", "treadmill-4821", plugin.ActionFileRead, false},
+		{"admin@mail.com", "treadmill-4821", plugin.ActionPassthrough, false},
+		{"admin@mail.com", "rower-7", plugin.ActionShell, false},
 		{"someone@example.com", "treadmill-4821", plugin.ActionShell, false},
 		// No devices: means every device.
 		{"auditor@example.com", "rower-7", plugin.ActionReplay, true},
@@ -146,7 +146,7 @@ func TestADenyBeatsEveryAllow(t *testing.T) {
 		a := open(t, body)
 		ctx := context.Background()
 
-		d, _ := a.Authorize(ctx, who("phuc@example.com"),
+		d, _ := a.Authorize(ctx, who("admin@mail.com"),
 			dev("pos-1", map[string]string{"scope": "pci"}), plugin.ActionShell, plugin.Target{})
 		if d.Allow {
 			t.Errorf("%s: a deny was overridden by an allow", order)
@@ -155,7 +155,7 @@ func TestADenyBeatsEveryAllow(t *testing.T) {
 			t.Errorf("%s: the deny's reason was lost: %q", order, d.Reason)
 		}
 		// And the broad grant still works everywhere else.
-		if d, _ := a.Authorize(ctx, who("phuc@example.com"), dev("treadmill-4821", nil),
+		if d, _ := a.Authorize(ctx, who("admin@mail.com"), dev("treadmill-4821", nil),
 			plugin.ActionShell, plugin.Target{}); !d.Allow {
 			t.Errorf("%s: the carve-out removed the grant entirely", order)
 		}
@@ -192,7 +192,7 @@ rules:
 func TestAnEmptyActionListIsRefused(t *testing.T) {
 	_, err := rules.Open(write(t, `
 rules:
-  - principals: ["phuc@example.com"]
+  - principals: ["admin@mail.com"]
     actions: []
 `), quiet())
 	if err == nil {
@@ -240,7 +240,7 @@ func TestABrokenReloadKeepsTheOldRules(t *testing.T) {
 		t.Fatal("a broken file reloaded successfully")
 	}
 
-	d, err := a.Authorize(context.Background(), who("phuc@example.com"),
+	d, err := a.Authorize(context.Background(), who("admin@mail.com"),
 		dev("treadmill-4821", nil), plugin.ActionShell, plugin.Target{})
 	if err != nil {
 		t.Fatalf("Authorize failed after a broken reload: %v", err)
@@ -265,7 +265,7 @@ func TestADeletedFileKeepsTheOldRules(t *testing.T) {
 	if err := a.Reload(); err == nil {
 		t.Error("reloading a deleted file succeeded")
 	}
-	if d, _ := a.Authorize(context.Background(), who("phuc@example.com"),
+	if d, _ := a.Authorize(context.Background(), who("admin@mail.com"),
 		dev("treadmill-4821", nil), plugin.ActionShell, plugin.Target{}); !d.Allow {
 		t.Error("deleting the file revoked everybody's access")
 	}
@@ -293,7 +293,7 @@ rules:
 	if d, _ := a.Authorize(ctx, who("newcomer@example.com"), dev("d", nil), plugin.ActionShell, plugin.Target{}); !d.Allow {
 		t.Error("the new rule did not take effect")
 	}
-	if d, _ := a.Authorize(ctx, who("phuc@example.com"), dev("treadmill-4821", nil),
+	if d, _ := a.Authorize(ctx, who("admin@mail.com"), dev("treadmill-4821", nil),
 		plugin.ActionShell, plugin.Target{}); d.Allow {
 		t.Error("the old rule survived the reload")
 	}
@@ -312,7 +312,7 @@ func TestConformance(t *testing.T) {
 			return a
 		},
 		Allowed: func() (*plugin.Principal, *plugin.Device, plugin.Action) {
-			return who("phuc@example.com"), dev("treadmill-4821", nil), plugin.ActionShell
+			return who("admin@mail.com"), dev("treadmill-4821", nil), plugin.ActionShell
 		},
 		Denied: func() (*plugin.Principal, *plugin.Device, plugin.Action) {
 			return who("nobody@example.com"), dev("treadmill-4821", nil), plugin.ActionShell

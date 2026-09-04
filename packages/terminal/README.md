@@ -12,7 +12,7 @@ const handle = mount(document.getElementById("shell")!, {
   url: attach.url,            // from POST /api/v1/sessions
   ticket: attach.ticket,       // single-use, 60 s
   device: "treadmill-4821",
-  principal: "phuc@example.com",
+  principal: "admin@mail.com",
   renewTicket: () => api.renewAttach(session.id),
 });
 ```

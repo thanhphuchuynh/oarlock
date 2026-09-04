@@ -184,7 +184,7 @@ func castAndManifest(t *testing.T) (cast []byte, manifest []byte, pub ed25519.Pu
 	}
 	w, err := rec.Open(context.Background(), &plugin.SessionMeta{
 		SessionID: "sess-1", DeviceID: "treadmill-4821", Profile: "shell",
-		Mode: "gateway", Principal: "phuc@example.com",
+		Mode: "gateway", Principal: "admin@mail.com",
 		Term: "xterm-256color", Cols: 80, Rows: 24, StartedAt: time.Now(),
 	})
 	if err != nil {
@@ -417,7 +417,7 @@ func TestSessionsListEndToEnd(t *testing.T) {
 		gotQuery = r.URL.RawQuery
 		_, _ = w.Write([]byte(`{"sessions":[
 			{"id":"sess_1","device_id":"treadmill-4821","profile":"shell",
-			 "principal":"phuc@example.com","state":"closed","recording_state":"recorded",
+			 "principal":"admin@mail.com","state":"closed","recording_state":"recorded",
 			 "close_reason":"operator_close"}]}`))
 	}))
 	defer srv.Close()

@@ -51,7 +51,7 @@ func TestConformance(t *testing.T) {
 		Serial:          1,
 		CertType:        ssh.UserCert,
 		KeyId:           "conformance",
-		ValidPrincipals: []string{"phuc@example.com"},
+		ValidPrincipals: []string{"admin@mail.com"},
 		ValidAfter:      uint64(now.Add(-time.Minute).Unix()),
 		ValidBefore:     uint64(now.Add(time.Hour).Unix()),
 	}
@@ -80,7 +80,7 @@ func TestConformance(t *testing.T) {
 			return a
 		},
 		GoodKey: func(*testing.T) (ssh.PublicKey, string) {
-			return good, "phuc@example.com"
+			return good, "admin@mail.com"
 		},
 		BadKey: func(*testing.T) ssh.PublicKey { return bad },
 	})

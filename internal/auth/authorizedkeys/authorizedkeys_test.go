@@ -45,7 +45,7 @@ func write(t *testing.T, body string) string {
 
 func TestCommentBecomesThePrincipal(t *testing.T) {
 	key, line := newKey(t)
-	a, err := authorizedkeys.Open(write(t, line+" phuc@example.com\n"), quiet())
+	a, err := authorizedkeys.Open(write(t, line+" admin@mail.com\n"), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +53,10 @@ func TestCommentBecomesThePrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != "phuc@example.com" {
+	if p.ID != "admin@mail.com" {
 		t.Errorf("principal %q", p.ID)
 	}
-	if p.Email != "phuc@example.com" {
+	if p.Email != "admin@mail.com" {
 		t.Errorf("email %q", p.Email)
 	}
 }
@@ -98,7 +98,7 @@ func TestKeyWithNoCommentIsRefused(t *testing.T) {
 func TestUnknownKeyIsRefusedWithoutDetail(t *testing.T) {
 	key, line := newKey(t)
 	other, _ := newKey(t)
-	a, err := authorizedkeys.Open(write(t, line+" phuc@example.com\n"), quiet())
+	a, err := authorizedkeys.Open(write(t, line+" admin@mail.com\n"), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,13 +114,13 @@ func TestUnknownKeyIsRefusedWithoutDetail(t *testing.T) {
 // operator's credentials address the whole fleet by design.
 func TestTheSSHUserIsIgnoredForAuthentication(t *testing.T) {
 	key, line := newKey(t)
-	a, err := authorizedkeys.Open(write(t, line+" phuc@example.com\n"), quiet())
+	a, err := authorizedkeys.Open(write(t, line+" admin@mail.com\n"), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, user := range []string{"treadmill-4821", "rower-1", "", "anything"} {
 		p, err := a.AuthPublicKey(context.Background(), user, key)
-		if err != nil || p.ID != "phuc@example.com" {
+		if err != nil || p.ID != "admin@mail.com" {
 			t.Errorf("user %q: %v / %+v", user, err, p)
 		}
 	}

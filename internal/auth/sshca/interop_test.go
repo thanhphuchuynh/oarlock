@@ -43,8 +43,8 @@ func TestARealOpenSSHCertificateIsAccepted(t *testing.T) {
 
 	run("-q", "-t", "ed25519", "-f", "ca", "-N", "", "-C", "test-ca")
 	run("-q", "-t", "ed25519", "-f", "user", "-N", "")
-	run("-q", "-s", "ca", "-I", "phuc@example.com",
-		"-n", "phuc@example.com,oncall", "-V", "+1h", "-z", "42", "user.pub")
+	run("-q", "-s", "ca", "-I", "admin@mail.com",
+		"-n", "admin@mail.com,oncall", "-V", "+1h", "-z", "42", "user.pub")
 
 	caKeys := filepath.Join(dir, "ca.pub")
 	a, err := sshca.Open(sshca.Options{CAKeys: caKeys, Log: quiet()})
@@ -65,7 +65,7 @@ func TestARealOpenSSHCertificateIsAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a certificate from real ssh-keygen was refused: %v", err)
 	}
-	if p.ID != "phuc@example.com" {
+	if p.ID != "admin@mail.com" {
 		t.Fatalf("principal = %q", p.ID)
 	}
 	if len(p.Groups) != 2 || p.Groups[1] != "oncall" {
@@ -101,7 +101,7 @@ func TestARealCertificateFromAnotherCAIsRefused(t *testing.T) {
 	run("-q", "-t", "ed25519", "-f", "ca", "-N", "")
 	run("-q", "-t", "ed25519", "-f", "rogue", "-N", "")
 	run("-q", "-t", "ed25519", "-f", "user", "-N", "")
-	run("-q", "-s", "rogue", "-I", "phuc@example.com", "-n", "phuc@example.com",
+	run("-q", "-s", "rogue", "-I", "admin@mail.com", "-n", "admin@mail.com",
 		"-V", "+1h", "user.pub")
 
 	a, err := sshca.Open(sshca.Options{CAKeys: filepath.Join(dir, "ca.pub"), Log: quiet()})

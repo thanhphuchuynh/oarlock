@@ -115,7 +115,7 @@ authorizer:
   #
   # Exact ids only. A pattern here is refused at boot.
   admins:
-    - phuc@example.com
+    - admin@mail.com
 
 # Optional. Required only for dispatch-mode devices that are not already connected over
 # a persistent control channel.
@@ -148,7 +148,7 @@ api:
   # For development and CI. A real deployment uses an authenticator that can validate
   # a token it did not mint.
   tokens:
-    dev-token-long-enough-for-the-check: phuc@example.com
+    dev-token-long-enough-for-the-check: admin@mail.com
   rate_per_minute: 120
 
 policy:

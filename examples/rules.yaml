@@ -6,7 +6,7 @@
 
 rules:
   # Everyone on call gets a shell on the treadmills.
-  - principals: ["*@oncall.example.com", "phuc@example.com"]
+  - principals: ["*@oncall.example.com", "admin@mail.com"]
     devices: ["treadmill-*"]
     actions: ["shell", "exec"]
 

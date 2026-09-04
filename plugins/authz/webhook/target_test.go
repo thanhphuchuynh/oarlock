@@ -124,7 +124,7 @@ func TestAnActionWithNoTargetSendsNoTargetField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Authorize(context.Background(), &plugin.Principal{ID: "phuc@example.com"},
+	if _, err := a.Authorize(context.Background(), &plugin.Principal{ID: "admin@mail.com"},
 		&plugin.Device{ID: "treadmill-4821"}, plugin.ActionShell, plugin.Target{}); err != nil {
 		t.Fatal(err)
 	}

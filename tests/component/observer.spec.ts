@@ -112,16 +112,16 @@ test("READY carries the watchers already present", async ({ page }) => {
 // ── the watcher's own terminal ──────────────────────────────────────────────────
 
 test("a watcher's terminal says READ-ONLY and names whose it is", async ({ page }) => {
-  await mountLive(page, { read_only: true, watching: "phuc@example.com" });
+  await mountLive(page, { read_only: true, watching: "admin@mail.com" });
 
   const badge = page.locator(".oarlock-bar__badge--readonly");
   await expect(badge).toBeVisible();
-  await expect(badge).toHaveText("READ-ONLY · watching phuc@example.com");
+  await expect(badge).toHaveText("READ-ONLY · watching admin@mail.com");
   await expect(page.locator(".oarlock-term")).toHaveAttribute("data-oarlock-read-only", "true");
 });
 
 test("a watcher's input is disabled, not ignored", async ({ page }) => {
-  await mountLive(page, { read_only: true, watching: "phuc@example.com" });
+  await mountLive(page, { read_only: true, watching: "admin@mail.com" });
   await page.evaluate(() => window.harness.write("$ logcat -d\r\n"));
   await expect(page.locator(".xterm-rows")).toContainText("logcat");
 
@@ -187,7 +187,7 @@ test("read-only can only be added, never taken away", async ({ page }) => {
 test("a watcher sees the watcher list too, including themselves", async ({ page }) => {
   await mountLive(page, {
     read_only: true,
-    watching: "phuc@example.com",
+    watching: "admin@mail.com",
     observers: [{ principal: "sam@example.com" }],
   });
   await expect(page.locator(".oarlock-bar__badge--readonly")).toBeVisible();

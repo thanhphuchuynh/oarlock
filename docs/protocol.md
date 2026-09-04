@@ -491,7 +491,7 @@ are the complete set of frames exempt from the one-kind rule.
   "url": "wss://gw-a.example.org/ws/session",
   "profile": "shell",
   "pty": {"cols": 132, "rows": 38, "term": "xterm-256color"},
-  "exec": null, "principal": "phuc@example.com",
+  "exec": null, "principal": "admin@mail.com",
   "expires_at": "2026-08-21T09:15:02Z" }
 ```
 

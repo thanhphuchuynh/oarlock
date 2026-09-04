@@ -40,10 +40,10 @@ func (a *authn) AuthPublicKey(_ context.Context, user string, key ssh.PublicKey)
 		return &plugin.Principal{ID: "somebody-else@example.com"}, nil
 	}
 	if a.acceptsAnyKey || (key != nil && string(key.Marshal()) == "good") {
-		return &plugin.Principal{ID: "phuc@example.com"}, nil
+		return &plugin.Principal{ID: "admin@mail.com"}, nil
 	}
 	if a.principalAndErr {
-		return &plugin.Principal{ID: "phuc@example.com"}, errors.New("refused")
+		return &plugin.Principal{ID: "admin@mail.com"}, errors.New("refused")
 	}
 	return nil, errors.New("unknown key")
 }
@@ -65,7 +65,7 @@ func (a *authn) AuthHTTP(context.Context, *http.Request) (*plugin.Principal, err
 func authnHarness(a plugin.Authenticator) AuthenticatorHarness {
 	return AuthenticatorHarness{
 		New:     func(*testing.T) plugin.Authenticator { return a },
-		GoodKey: func(*testing.T) (ssh.PublicKey, string) { return goodKey, "phuc@example.com" },
+		GoodKey: func(*testing.T) (ssh.PublicKey, string) { return goodKey, "admin@mail.com" },
 		BadKey:  func(*testing.T) ssh.PublicKey { return badKey },
 	}
 }

@@ -49,7 +49,7 @@ func TestAuthorizePostsTheDecisionRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, err := a.Authorize(context.Background(),
-		&plugin.Principal{ID: "phuc@example.com", Groups: []string{"oncall"}},
+		&plugin.Principal{ID: "admin@mail.com", Groups: []string{"oncall"}},
 		&plugin.Device{
 			ID: "treadmill-4821", Platform: plugin.PlatformAndroid,
 			Tags: map[string]string{"scope": "pci"},
@@ -62,7 +62,7 @@ func TestAuthorizePostsTheDecisionRequest(t *testing.T) {
 	if !d.Allow {
 		t.Fatal("decision did not allow")
 	}
-	if got.Principal.ID != "phuc@example.com" || got.Principal.Groups[0] != "oncall" {
+	if got.Principal.ID != "admin@mail.com" || got.Principal.Groups[0] != "oncall" {
 		t.Fatalf("principal payload = %+v", got.Principal)
 	}
 	if got.Device.ResolvedMode != plugin.ModeDispatch || got.Device.Tags["scope"] != "pci" {
@@ -88,7 +88,7 @@ func TestHTTPFailureIsUnavailableNotADenial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{})
+	d, err := a.Authorize(context.Background(), who("admin@mail.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{})
 	if err == nil {
 		t.Fatalf("Authorize error = nil, decision = %+v", d)
 	}
@@ -130,7 +130,7 @@ func TestCacheTTL(t *testing.T) {
 	}
 	a.Now = func() time.Time { return now }
 	for range 2 {
-		if _, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{}); err != nil {
+		if _, err := a.Authorize(context.Background(), who("admin@mail.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,7 +138,7 @@ func TestCacheTTL(t *testing.T) {
 		t.Fatalf("calls before expiry = %d", calls.Load())
 	}
 	now = now.Add(3 * time.Second)
-	if _, err := a.Authorize(context.Background(), who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{}); err != nil {
+	if _, err := a.Authorize(context.Background(), who("admin@mail.com"), dev("treadmill-4821"), plugin.ActionShell, plugin.Target{}); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
@@ -183,10 +183,10 @@ func TestWatchStreamsRevocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events <- plugin.RevocationEvent{PrincipalID: "phuc@example.com", DeviceID: "treadmill-4821", Reason: "left group"}
+	events <- plugin.RevocationEvent{PrincipalID: "admin@mail.com", DeviceID: "treadmill-4821", Reason: "left group"}
 	select {
 	case ev := <-ch:
-		if ev.PrincipalID != "phuc@example.com" || ev.DeviceID != "treadmill-4821" {
+		if ev.PrincipalID != "admin@mail.com" || ev.DeviceID != "treadmill-4821" {
 			t.Fatalf("event = %+v", ev)
 		}
 	case <-time.After(2 * time.Second):
@@ -253,7 +253,7 @@ func TestConformance(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if req.Principal.ID == "phuc@example.com" {
+		if req.Principal.ID == "admin@mail.com" {
 			_, _ = w.Write([]byte(`{"allow":true}`))
 			return
 		}
@@ -270,7 +270,7 @@ func TestConformance(t *testing.T) {
 			return a
 		},
 		Allowed: func() (*plugin.Principal, *plugin.Device, plugin.Action) {
-			return who("phuc@example.com"), dev("treadmill-4821"), plugin.ActionShell
+			return who("admin@mail.com"), dev("treadmill-4821"), plugin.ActionShell
 		},
 		Denied: func() (*plugin.Principal, *plugin.Device, plugin.Action) {
 			return who("nobody@example.com"), dev("treadmill-4821"), plugin.ActionShell

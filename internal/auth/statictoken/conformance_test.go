@@ -16,7 +16,7 @@ func TestConformance(t *testing.T) {
 
 	plugintest.Authenticator(t, plugintest.AuthenticatorHarness{
 		New: func(t *testing.T) plugin.Authenticator {
-			a, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+			a, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -25,7 +25,7 @@ func TestConformance(t *testing.T) {
 		GoodRequest: func(*testing.T) (*http.Request, string) {
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
 			r.Header.Set("Authorization", "Bearer "+token)
-			return r, "phuc@example.com"
+			return r, "admin@mail.com"
 		},
 		BadRequest: func(*testing.T) *http.Request {
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)

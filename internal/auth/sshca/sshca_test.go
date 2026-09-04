@@ -150,14 +150,14 @@ func TestAValidCertificateNamesItsOperator(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	p, err := auth(a, c.cert(t, []string{"phuc@example.com", "oncall"}, nil))
+	p, err := auth(a, c.cert(t, []string{"admin@mail.com", "oncall"}, nil))
 	if err != nil {
 		t.Fatalf("a valid certificate was refused: %v", err)
 	}
-	if p.ID != "phuc@example.com" {
+	if p.ID != "admin@mail.com" {
 		t.Fatalf("principal = %q, want the first valid principal", p.ID)
 	}
-	if p.Email != "phuc@example.com" {
+	if p.Email != "admin@mail.com" {
 		t.Fatalf("email = %q", p.Email)
 	}
 }
@@ -171,11 +171,11 @@ func TestEveryPrincipalBecomesAGroup(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	p, err := auth(a, c.cert(t, []string{"phuc@example.com", "oncall", "dba"}, nil))
+	p, err := auth(a, c.cert(t, []string{"admin@mail.com", "oncall", "dba"}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"phuc@example.com": true, "oncall": true, "dba": true}
+	want := map[string]bool{"admin@mail.com": true, "oncall": true, "dba": true}
 	if len(p.Groups) != len(want) {
 		t.Fatalf("groups = %v, want all three principals", p.Groups)
 	}
@@ -195,7 +195,7 @@ func TestTheSessionCannotOutliveTheCertificate(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	p, err := auth(a, c.cert(t, []string{"phuc@example.com"}, nil))
+	p, err := auth(a, c.cert(t, []string{"admin@mail.com"}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,12 +212,12 @@ func TestKeyIDCanBeTheIdentity(t *testing.T) {
 	a := c.open(t, func(o *sshca.Options) { o.PrincipalFrom = sshca.FromKeyID })
 
 	p, err := auth(a, c.cert(t, []string{"oncall"}, func(cert *ssh.Certificate) {
-		cert.KeyId = "phuc@example.com"
+		cert.KeyId = "admin@mail.com"
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != "phuc@example.com" {
+	if p.ID != "admin@mail.com" {
 		t.Fatalf("principal = %q, want the key id", p.ID)
 	}
 }
@@ -259,7 +259,7 @@ func TestARotatedCAKeepsBothKeysWorking(t *testing.T) {
 		t.Fatalf("loaded %d authorities, want 2", a.Len())
 	}
 	for name, signer := range map[string]ssh.Signer{"old": c.signer, "new": second} {
-		if _, err := auth(a, c.certSignedBy(t, signer, []string{"phuc@example.com"}, nil)); err != nil {
+		if _, err := auth(a, c.certSignedBy(t, signer, []string{"admin@mail.com"}, nil)); err != nil {
 			t.Fatalf("the %s CA's certificate was refused: %v", name, err)
 		}
 	}
@@ -294,7 +294,7 @@ func TestAHostCertificateCannotAuthenticateAnOperator(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	hostCert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	hostCert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.CertType = ssh.HostCert
 	})
 	_, err := auth(a, hostCert)
@@ -317,7 +317,7 @@ func TestAnUntrustedAuthorityIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auth(a, c.certSignedBy(t, other, []string{"phuc@example.com"}, nil)); err == nil {
+	if _, err := auth(a, c.certSignedBy(t, other, []string{"admin@mail.com"}, nil)); err == nil {
 		t.Fatal("a certificate from an unknown CA was accepted")
 	}
 }
@@ -338,7 +338,7 @@ func TestAnExpiredOrNotYetValidCertificateIsRefused(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := auth(a, c.cert(t, []string{"phuc@example.com"}, tweak)); err == nil {
+			if _, err := auth(a, c.cert(t, []string{"admin@mail.com"}, tweak)); err == nil {
 				t.Fatalf("a certificate %s was accepted", name)
 			}
 		})
@@ -361,7 +361,7 @@ func TestACertificateThatNeverExpiresIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := c.open(t, edit)
-			cert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+			cert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 				cert.ValidBefore = ssh.CertTimeInfinity
 			})
 			_, err := auth(a, cert)
@@ -384,7 +384,7 @@ func TestACertificateIssuedForTooLongIsRefused(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, func(o *sshca.Options) { o.MaxLifetime = time.Hour })
 
-	cert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	cert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.ValidAfter = uint64(c.now.Add(-time.Minute).Unix())
 		cert.ValidBefore = uint64(c.now.Add(48 * time.Hour).Unix())
 	})
@@ -400,7 +400,7 @@ func TestACertificateIssuedForTooLongIsRefused(t *testing.T) {
 	// window is measured from valid_after, which CAs routinely backdate a little for
 	// skew — so a "one hour" certificate is usually slightly more than one hour, and a
 	// cap set to exactly the issuing TTL would refuse every certificate.
-	short := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	short := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.ValidAfter = uint64(c.now.Add(-time.Minute).Unix())
 		cert.ValidBefore = uint64(c.now.Add(30 * time.Minute).Unix())
 	})
@@ -436,7 +436,7 @@ func TestAnUnknownCriticalOptionIsRefused(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	cert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	cert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.CriticalOptions = map[string]string{"force-command": "/usr/bin/true"}
 	})
 	if _, err := auth(a, cert); err == nil {
@@ -454,14 +454,14 @@ func TestARevokedSerialIsRefused(t *testing.T) {
 	}
 	a := c.open(t, func(o *sshca.Options) { o.Revocations = revocations })
 
-	revoked := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	revoked := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.Serial = 7
 	})
 	if _, err := auth(a, revoked); err == nil {
 		t.Fatal("a revoked certificate was accepted")
 	}
 	// Another serial from the same CA is unaffected.
-	fine := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	fine := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.Serial = 8
 	})
 	if _, err := auth(a, fine); err != nil {
@@ -513,7 +513,7 @@ func TestSourceAddressIsEnforced(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	cert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	cert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.CriticalOptions = map[string]string{"source-address": "198.51.100.0/24,203.0.113.7"}
 	})
 
@@ -538,7 +538,7 @@ func TestSourceAddressIsRefusedWhenTheAddressIsUnknown(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	cert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	cert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.CriticalOptions = map[string]string{"source-address": "198.51.100.0/24"}
 	})
 	_, err := auth(a, cert) // no peer recorded
@@ -556,7 +556,7 @@ func TestAnEmptySourceAddressDeniesEverything(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
 
-	cert := c.cert(t, []string{"phuc@example.com"}, func(cert *ssh.Certificate) {
+	cert := c.cert(t, []string{"admin@mail.com"}, func(cert *ssh.Certificate) {
 		cert.CriticalOptions = map[string]string{"source-address": ""}
 	})
 	if _, err := authFrom(a, cert, "198.51.100.9:5000"); err == nil {
@@ -569,7 +569,7 @@ func TestAnEmptySourceAddressDeniesEverything(t *testing.T) {
 func TestACertificateWithNoRestrictionIsUnaffectedByTheAddress(t *testing.T) {
 	c := newCA(t)
 	a := c.open(t, nil)
-	if _, err := auth(a, c.cert(t, []string{"phuc@example.com"}, nil)); err != nil {
+	if _, err := auth(a, c.cert(t, []string{"admin@mail.com"}, nil)); err != nil {
 		t.Fatalf("an unrestricted certificate needed a peer address: %v", err)
 	}
 }
@@ -601,7 +601,7 @@ func TestASHA1SignedCertificateIsRefused(t *testing.T) {
 	c.write(t, rsaSigner.PublicKey())
 	a = c.open(t, nil)
 
-	cert := c.certSignedBy(t, rsaSigner, []string{"phuc@example.com"}, nil).(*ssh.Certificate)
+	cert := c.certSignedBy(t, rsaSigner, []string{"admin@mail.com"}, nil).(*ssh.Certificate)
 	// SignCert defaults an RSA authority to rsa-sha2-512, which is correct. Relabel it as
 	// the SHA-1 algorithm a legacy CA would really produce.
 	cert.Signature.Format = ssh.KeyAlgoRSA
@@ -630,7 +630,7 @@ func TestAModernRSACertificateIsAccepted(t *testing.T) {
 	c.write(t, rsaSigner.PublicKey())
 	a := c.open(t, nil)
 
-	if _, err := auth(a, c.certSignedBy(t, rsaSigner, []string{"phuc@example.com"}, nil)); err != nil {
+	if _, err := auth(a, c.certSignedBy(t, rsaSigner, []string{"admin@mail.com"}, nil)); err != nil {
 		t.Fatalf("an rsa-sha2 certificate was refused: %v", err)
 	}
 }
@@ -658,7 +658,7 @@ func TestOpenRefusesAnUnusableConfiguration(t *testing.T) {
 	})
 	t.Run("a certificate where a CA key belongs", func(t *testing.T) {
 		bad := filepath.Join(c.dir, "cert_as_ca")
-		cert := c.cert(t, []string{"phuc@example.com"}, nil)
+		cert := c.cert(t, []string{"admin@mail.com"}, nil)
 		if err := os.WriteFile(bad, ssh.MarshalAuthorizedKey(cert), 0o600); err != nil {
 			t.Fatal(err)
 		}

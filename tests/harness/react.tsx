@@ -32,7 +32,7 @@ export function install(makeSocket: () => unknown): ReactHarness {
           url: "wss://stub.invalid/ws/attach",
           ticket: "stub-ticket-abcdef",
           device: "treadmill-4821",
-          principal: "phuc@example.com",
+          principal: "admin@mail.com",
           socket: makeSocket,
           ...opts,
         } as never),
@@ -53,7 +53,7 @@ export function install(makeSocket: () => unknown): ReactHarness {
           { className: "oarlock-term" },
           createElement(StatusBar, {
             device: "treadmill-4821",
-            principal: "phuc@example.com",
+            principal: "admin@mail.com",
             session,
             state: "attached",
           } as never),

@@ -104,7 +104,7 @@ test.describe("the four facts", () => {
   test("state carries a word, not only a colour", () => {
     expect(facts({
       device: "treadmill-4821",
-      principal: "phuc@example.com",
+      principal: "admin@mail.com",
       session: { recording: true, mode: "gateway" },
       state: "attached",
     }).recording.label).toBe("RECORDED");

@@ -49,7 +49,7 @@ type fixture struct {
 
 func newFixture(t *testing.T, ratePerMin int, opts ...func(*apisrv.Options)) *fixture {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestSSHConnectionReturnsOnlyPublicMaterial(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["host"] != "127.0.0.1" || got["port"] != "2222" || got["principal"] != "phuc@example.com" {
+	if got["host"] != "127.0.0.1" || got["port"] != "2222" || got["principal"] != "admin@mail.com" {
 		t.Fatalf("SSH connection = %+v", got)
 	}
 	if !strings.Contains(got["known_hosts"].(string), "ssh-ed25519") || got["fingerprint"] != "SHA256:test" {
@@ -132,7 +132,7 @@ func (a *auditCapture) Emit(_ context.Context, event plugin.AuditEvent) {
 
 func newSQLHandler(t *testing.T, allow bool, capture *auditCapture) http.Handler {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func (f *fixture) seed(t *testing.T, id, device, principal string) *sessions.Ses
 
 func newDeviceFixture(t *testing.T) *fixture {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func newDeviceFixture(t *testing.T) *fixture {
 
 func newPermissionFixture(t *testing.T) *fixture {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,9 +426,9 @@ func TestBackendThatCannotAuthenticateHTTPSaysSo(t *testing.T) {
 
 func TestListAndFilter(t *testing.T) {
 	f := newFixture(t, 0)
-	f.seed(t, "s1", "dev-1", "phuc@example.com")
+	f.seed(t, "s1", "dev-1", "admin@mail.com")
 	f.seed(t, "s2", "dev-2", "other@example.com")
-	f.seed(t, "s3", "dev-3", "phuc@example.com")
+	f.seed(t, "s3", "dev-3", "admin@mail.com")
 	if err := f.ledger.Finish(context.Background(), "s3",
 		sessions.Result{CloseReason: "operator_close"}); err != nil {
 		t.Fatal(err)
@@ -453,7 +453,7 @@ func TestListAndFilter(t *testing.T) {
 	for query, want := range map[string]int{
 		"?live=true":                  2,
 		"?device_id=dev-1":            1,
-		"?principal=phuc@example.com": 2,
+		"?principal=admin@mail.com": 2,
 		"?state=closed":               1,
 	} {
 		var got struct {
@@ -472,7 +472,7 @@ func TestListAndFilter(t *testing.T) {
 func TestPaginationHeaderAndCursor(t *testing.T) {
 	f := newFixture(t, 0)
 	for i := range 5 {
-		f.seed(t, "s"+strconv.Itoa(i), "dev-"+strconv.Itoa(i), "phuc@example.com")
+		f.seed(t, "s"+strconv.Itoa(i), "dev-"+strconv.Itoa(i), "admin@mail.com")
 	}
 
 	resp, body := f.do(t, "GET", apisrv.Prefix+"/sessions?limit=2", token)
@@ -528,7 +528,7 @@ func TestLimitIsClampedNotRefused(t *testing.T) {
 
 func TestGetSessionShowsWhatMatters(t *testing.T) {
 	f := newFixture(t, 0)
-	f.seed(t, "s1", "dev-1", "phuc@example.com")
+	f.seed(t, "s1", "dev-1", "admin@mail.com")
 
 	resp, body := f.do(t, "GET", apisrv.Prefix+"/sessions/s1", token)
 	if resp.StatusCode != 200 {
@@ -705,7 +705,7 @@ func TestDeviceRegistryAdminAPI(t *testing.T) {
 func TestPermissionAdminAPI(t *testing.T) {
 	f := newPermissionFixture(t)
 	create := `{
-		"id":"support-shell","name":"Support shell","principals":["phuc@example.com"],
+		"id":"support-shell","name":"Support shell","principals":["admin@mail.com"],
 		"devices":["samsung-*"],"actions":["shell","exec"],"effect":"allow",
 		"max_duration":"15m","enabled":true
 	}`
@@ -727,7 +727,7 @@ func TestPermissionAdminAPI(t *testing.T) {
 	}
 
 	resp, body = f.putJSON(t, apisrv.Prefix+"/permissions/support-shell", `{
-		"id":"support-shell","name":"Support shell","principals":["phuc@example.com"],
+		"id":"support-shell","name":"Support shell","principals":["admin@mail.com"],
 		"devices":["samsung-*"],"actions":["shell"],"effect":"deny",
 		"reason":"maintenance","enabled":false
 	}`)
@@ -754,7 +754,7 @@ func TestPermissionAdminAPI(t *testing.T) {
 
 func TestKillEndsALiveSession(t *testing.T) {
 	f := newFixture(t, 0)
-	f.seed(t, "s1", "dev-1", "phuc@example.com")
+	f.seed(t, "s1", "dev-1", "admin@mail.com")
 
 	var killed atomic.Int32
 	var reason atomic.Value
@@ -805,7 +805,7 @@ func TestKillOnTheWrongNodeSaysSo(t *testing.T) {
 	f := newFixture(t, 0, func(o *apisrv.Options) {
 		o.Owners = heldBy("wss://gw-b.example.org")
 	})
-	f.seed(t, "s1", "dev-1", "phuc@example.com") // live, but never registered here
+	f.seed(t, "s1", "dev-1", "admin@mail.com") // live, but never registered here
 
 	resp, body := f.do(t, "DELETE", apisrv.Prefix+"/sessions/s1", token)
 	if resp.StatusCode != http.StatusConflict {
@@ -829,7 +829,7 @@ func TestKillOnTheWrongNodeSaysSo(t *testing.T) {
 // that had no other node. Only a restart cleared it.
 func TestKillClosesAStaleRowOnASingleNodeGateway(t *testing.T) {
 	f := newFixture(t, 0) // no locator: one node, so nothing is held anywhere else
-	f.seed(t, "s1", "dev-1", "phuc@example.com")
+	f.seed(t, "s1", "dev-1", "admin@mail.com")
 
 	resp, body := f.do(t, "DELETE", apisrv.Prefix+"/sessions/s1", token)
 	if resp.StatusCode != http.StatusOK {
@@ -1010,7 +1010,7 @@ func (a *delegatingAuth) AuthDelegated(_ context.Context, svc *plugin.Principal,
 // invalidates its predecessor — lives in the store, not in the handler.
 func newRenewFixture(t *testing.T) (*fixture, *invite.Inviter) {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1064,7 +1064,7 @@ func (f *fixture) post(t *testing.T, path, bearer string) (*http.Response, []byt
 // second one hits the per-device cap.
 func TestRenewGivesAWayBackIn(t *testing.T) {
 	f, inv := newRenewFixture(t)
-	f.seed(t, "sess_1", "dev-1", "phuc@example.com")
+	f.seed(t, "sess_1", "dev-1", "admin@mail.com")
 
 	resp, body := f.post(t, "/api/v1/sessions/sess_1/attach", token)
 	if resp.StatusCode != http.StatusCreated {
@@ -1095,7 +1095,7 @@ func TestRenewGivesAWayBackIn(t *testing.T) {
 		t.Fatalf("the fresh ticket does not redeem: %v", err)
 	}
 	if claims.SessionID != "sess_1" || claims.DeviceID != "dev-1" ||
-		claims.Principal != "phuc@example.com" || claims.Profile != "shell" {
+		claims.Principal != "admin@mail.com" || claims.Profile != "shell" {
 		t.Errorf("claims %+v are not the session's", claims)
 	}
 
@@ -1109,7 +1109,7 @@ func TestRenewGivesAWayBackIn(t *testing.T) {
 // credentials for one session lying around.
 func TestRenewingRevokesItsPredecessor(t *testing.T) {
 	f, inv := newRenewFixture(t)
-	f.seed(t, "sess_1", "dev-1", "phuc@example.com")
+	f.seed(t, "sess_1", "dev-1", "admin@mail.com")
 
 	var tickets []string
 	for range 3 {
@@ -1141,9 +1141,9 @@ func TestRenewingRevokesItsPredecessor(t *testing.T) {
 
 func TestRenewRefusals(t *testing.T) {
 	f, _ := newRenewFixture(t)
-	f.seed(t, "sess_mine", "dev-1", "phuc@example.com")
+	f.seed(t, "sess_mine", "dev-1", "admin@mail.com")
 	f.seed(t, "sess_theirs", "dev-2", "someone@example.com")
-	closed := f.seed(t, "sess_over", "dev-3", "phuc@example.com")
+	closed := f.seed(t, "sess_over", "dev-3", "admin@mail.com")
 	if err := f.ledger.Finish(context.Background(), closed.ID,
 		sessions.Result{CloseReason: "operator_closed"}); err != nil {
 		t.Fatal(err)
@@ -1238,7 +1238,7 @@ func (s *stubAuthz) Watch(context.Context) (<-chan plugin.RevocationEvent, error
 
 func newAuthzFixture(t *testing.T, backend *stubAuthz) *fixture {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1514,7 +1514,7 @@ func newRecordPolicyFixture(t *testing.T, principal *plugin.Principal,
 
 func TestRecordInputPolicyTravelsInAttachTicket(t *testing.T) {
 	f, inv, _ := newRecordPolicyFixture(t,
-		&plugin.Principal{ID: "phuc@example.com", Groups: []string{"apac-staff"}},
+		&plugin.Principal{ID: "admin@mail.com", Groups: []string{"apac-staff"}},
 		recordpolicy.RecordInput{Rules: []recordpolicy.Rule{{
 			Name:  "pci capture",
 			When:  recordpolicy.Selector{DeviceTags: map[string]string{"pci_scope": "true"}},
@@ -1591,7 +1591,7 @@ func TestBareOnBehalfOfIsRefused(t *testing.T) {
 		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
 		map[string]string{
 			"Authorization":         "Bearer " + token,
-			apisrv.HeaderOnBehalfOf: "phuc@example.com",
+			apisrv.HeaderOnBehalfOf: "admin@mail.com",
 		})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", resp.StatusCode, raw)
@@ -1626,7 +1626,7 @@ func TestDelegatedSessionIsAttributedToTheHumanAndOpenedByTheService(t *testing.
 			"svc-token": {ID: "svc-crm"},
 		},
 		delegated: map[string]*plugin.Principal{
-			"svc-crm|assert-phuc": {ID: "phuc@example.com", Groups: []string{"oncall"}},
+			"svc-crm|assert-phuc": {ID: "admin@mail.com", Groups: []string{"oncall"}},
 		},
 		err: map[string]error{},
 	}
@@ -1635,7 +1635,7 @@ func TestDelegatedSessionIsAttributedToTheHumanAndOpenedByTheService(t *testing.
 		`{"device_id":"treadmill-4821","reason":"ticket AV-1"}`,
 		map[string]string{
 			"Authorization":            "Bearer svc-token",
-			apisrv.HeaderOnBehalfOf:    "phuc@example.com",
+			apisrv.HeaderOnBehalfOf:    "admin@mail.com",
 			apisrv.HeaderOnBehalfToken: "assert-phuc",
 		})
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized ||
@@ -1650,7 +1650,7 @@ func TestDelegatedSessionIsAttributedToTheHumanAndOpenedByTheService(t *testing.
 		t.Fatalf("rows = %d, body %s", len(rows), raw)
 	}
 	row := rows[0]
-	if row.Principal != "phuc@example.com" || row.OpenedBy != "svc-crm" || row.Unattended {
+	if row.Principal != "admin@mail.com" || row.OpenedBy != "svc-crm" || row.Unattended {
 		t.Fatalf("row attribution = principal %q opened_by %q unattended %v",
 			row.Principal, row.OpenedBy, row.Unattended)
 	}
@@ -1660,7 +1660,7 @@ func TestDelegatedSubjectHeaderMustMatchTheAssertion(t *testing.T) {
 	authn := &delegatingAuth{
 		http: map[string]*plugin.Principal{"svc-token": {ID: "svc-crm"}},
 		delegated: map[string]*plugin.Principal{
-			"svc-crm|assert-phuc": {ID: "phuc@example.com"},
+			"svc-crm|assert-phuc": {ID: "admin@mail.com"},
 		},
 		err: map[string]error{},
 	}
@@ -1703,7 +1703,7 @@ func TestInvalidDelegatedAssertionIsDistinct(t *testing.T) {
 
 func TestUnattendedSessionsAreQueryableSeparately(t *testing.T) {
 	f := newFixture(t, 0)
-	human := f.seed(t, "sess_human", "treadmill-4821", "phuc@example.com")
+	human := f.seed(t, "sess_human", "treadmill-4821", "admin@mail.com")
 	robot := f.seed(t, "sess_robot", "bike-7", "svc-crm")
 	robot.Unattended = true
 	if err := f.ledger.Update(context.Background(), human.ID, func(row *sessions.Session) error {

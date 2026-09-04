@@ -33,7 +33,7 @@ func TestConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := string(xssh.MarshalAuthorizedKey(known))
-	if err := os.WriteFile(path, []byte(line[:len(line)-1]+" phuc@example.com\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(line[:len(line)-1]+" admin@mail.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,7 +55,7 @@ func TestConformance(t *testing.T) {
 			return a
 		},
 		GoodKey: func(*testing.T) (xssh.PublicKey, string) {
-			return known, "phuc@example.com"
+			return known, "admin@mail.com"
 		},
 		BadKey: func(*testing.T) xssh.PublicKey { return unknown },
 		// No GoodRequest: a file of SSH keys has no way to authenticate an HTTP caller,

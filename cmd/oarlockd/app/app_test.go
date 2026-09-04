@@ -100,7 +100,7 @@ func deploy(t *testing.T, log *slog.Logger) *deployment {
 		t.Fatal(err)
 	}
 	akLine := strings.TrimRight(string(xssh.MarshalAuthorizedKey(opSSH)), "\n")
-	write(t, filepath.Join(dir, "authorized_keys"), akLine+" phuc@example.com\n")
+	write(t, filepath.Join(dir, "authorized_keys"), akLine+" admin@mail.com\n")
 
 	write(t, filepath.Join(dir, "devices.yaml"), fmt.Sprintf(`devices:
   - id: treadmill-4821
@@ -111,7 +111,7 @@ func deploy(t *testing.T, log *slog.Logger) *deployment {
 `, strings.TrimRight(string(xssh.MarshalAuthorizedKey(devSSH)), "\n")))
 
 	write(t, filepath.Join(dir, "rules.yaml"), `rules:
-  - principals: ["phuc@example.com"]
+  - principals: ["admin@mail.com"]
     devices: ["treadmill-*"]
     actions: ["shell", "exec", "replay", "observe", "file:read", "file:write"]
 `)
@@ -143,7 +143,7 @@ recorder:
   generate_signing_key: true
 api:
   tokens:
-    smoke-token-long-enough-for-checks: phuc@example.com
+    smoke-token-long-enough-for-checks: admin@mail.com
 `,
 		httpPort, sshPort, httpPort,
 		filepath.Join(dir, "hostkey"),
@@ -802,7 +802,7 @@ func TestExecIsAuthorisedSeparatelyFromShell(t *testing.T) {
 	d.serve(t)
 	d.startAgent(t, log)
 
-	// The rules file grants exec to phuc@example.com and nobody else, so a principal
+	// The rules file grants exec to admin@mail.com and nobody else, so a principal
 	// with no grant at all is refused before a row exists.
 	req, err := http.NewRequest(http.MethodPost,
 		"http://"+d.httpAddr+"/api/v1/devices/treadmill-4821/exec",

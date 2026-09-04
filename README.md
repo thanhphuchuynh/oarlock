@@ -158,7 +158,7 @@ mkdir demo && cd demo
 ```bash
 ../oarlock-agent -key ./device.key -generate-key
 #   writes device.key, and prints the public half for devices.yaml
-ssh-keygen -t ed25519 -N "" -f ./operator_key -C phuc@example.com
+ssh-keygen -t ed25519 -N "" -f ./operator_key -C admin@mail.com
 cat operator_key.pub > authorized_keys
 ```
 

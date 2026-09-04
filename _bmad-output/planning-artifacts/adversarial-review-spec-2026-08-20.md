@@ -65,7 +65,7 @@ closes the session, and the partial recording survives on disk for recovery. ADR
 
 **3. `On-Behalf-Of` is an unauthenticated privilege escalation.**
 `docs/sdk.md` §3 has a service present `Authorization: Bearer svc_…` and then *assert*
-`On-Behalf-Of: phuc@example.com` in a plain header. Nothing binds that assertion to
+`On-Behalf-Of: admin@mail.com` in a plain header. Nothing binds that assertion to
 anything. Any holder of any service token can claim to act for any human — including one
 with broader grants than the caller. The correct shape is a signed actor claim (an OIDC
 token with an `act` claim, or a short-lived assertion the human's own session produced),

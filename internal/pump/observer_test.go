@@ -79,7 +79,7 @@ func (w *watchable) watch(t *testing.T, principal string) (transport.Conn, pump.
 		Conn:      obGW,
 		Greet: func(list []frame.Observer) (frame.Frame, error) {
 			return frame.Marshal(frame.TypeReady, frame.Ready{
-				SessionID: "sess_1", ReadOnly: true, Watching: "phuc@example.com",
+				SessionID: "sess_1", ReadOnly: true, Watching: "admin@mail.com",
 				Observers: list,
 			})
 		},
@@ -105,7 +105,7 @@ func TestAnObserverSeesTheOutput(t *testing.T) {
 	if !ready.ReadOnly {
 		t.Error("READY does not tell the observer they are read-only")
 	}
-	if ready.Watching != "phuc@example.com" {
+	if ready.Watching != "admin@mail.com" {
 		t.Errorf("watching %q", ready.Watching)
 	}
 	if len(ready.Observers) != 1 || ready.Observers[0].Principal != "sam@example.com" {

@@ -83,7 +83,7 @@ test.beforeAll(async () => {
   // An operator key, so the SSH surface is configured even though the console does not
   // use it: the gateway needs an authenticator for both surfaces.
   execFileSync("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", join(dir, "operator_key"),
-    "-C", "phuc@example.com"], { stdio: "ignore" });
+    "-C", "admin@mail.com"], { stdio: "ignore" });
   writeFileSync(join(dir, "authorized_keys"), readFileSync(join(dir, "operator_key.pub")));
 
   writeFileSync(join(dir, "devices.yaml"), `devices:
@@ -94,10 +94,10 @@ test.beforeAll(async () => {
     profiles: [shell]
 `);
   writeFileSync(join(dir, "rules.yaml"), `rules:
-  - principals: ["phuc@example.com"]
+  - principals: ["admin@mail.com"]
     devices: ["treadmill-*"]
     actions: ["shell", "exec", "replay", "observe"]
-  - principals: ["phuc@example.com"]
+  - principals: ["admin@mail.com"]
     devices: ["gateway"]
     actions: ["sql:read"]
 `);
@@ -122,14 +122,14 @@ authorizer:
   # The bootstrap. Seeding the first device and the first permission goes through the
   # admin API, and the admin API is authorised by the policy being seeded.
   admins:
-    - phuc@example.com
+    - admin@mail.com
 recorder:
   dir: ./recordings
   signing_key: ./recording.key
   generate_signing_key: true
 api:
   tokens:
-    ${token}: phuc@example.com
+    ${token}: admin@mail.com
     ${visitorToken}: visitor@example.com
   # Twelve browser tests share one gateway and one principal, so they share one rate
   # bucket. The default budget is the right default and the wrong fixture: it made a
@@ -189,22 +189,22 @@ api:
 
   for (const permission of [
     {
-      id: "console-operator", name: "Console operator", principals: ["phuc@example.com"],
+      id: "console-operator", name: "Console operator", principals: ["admin@mail.com"],
       devices: ["treadmill-*"], actions: ["shell", "exec", "replay", "observe"],
       effect: "allow", enabled: true,
     },
     {
-      id: "console-sql", name: "Console SQL", principals: ["phuc@example.com"],
+      id: "console-sql", name: "Console SQL", principals: ["admin@mail.com"],
       devices: ["gateway"], actions: ["sql:read"], effect: "allow", enabled: true,
     },
     // Written so the console's own administration runs on a real grant rather than on
     // the config break-glass, which is what a deployment past its first hour looks like.
     {
-      id: "console-admin", name: "Console administrator", principals: ["phuc@example.com"],
+      id: "console-admin", name: "Console administrator", principals: ["admin@mail.com"],
       devices: ["gateway"], actions: ["admin:permissions"], effect: "allow", enabled: true,
     },
     {
-      id: "console-fleet", name: "Console fleet admin", principals: ["phuc@example.com"],
+      id: "console-fleet", name: "Console fleet admin", principals: ["admin@mail.com"],
       devices: ["*"], actions: ["admin:devices", "admin:kill"], effect: "allow",
       enabled: true,
     },
@@ -357,7 +357,7 @@ test("a device row says who can reach it and who administers it", async ({ page 
 
   const reach = row.getByTestId("device-access-reach");
   const administer = row.getByTestId("device-access-admin");
-  await expect(reach).toContainText("phuc@example.com");
+  await expect(reach).toContainText("admin@mail.com");
   await expect(reach).toContainText("visitor@example.com");
   // `admin:devices` is not a way to reach a device, so it does not appear under the
   // heading that asks who can.

@@ -10,7 +10,7 @@ import (
 
 func TestDefaultRecordInputIsUsedWhenNoRuleMatches(t *testing.T) {
 	got, err := (recordpolicy.RecordInput{Default: false}).Resolve(
-		&plugin.Principal{ID: "phuc@example.com"},
+		&plugin.Principal{ID: "admin@mail.com"},
 		&plugin.Device{ID: "treadmill-4821"},
 	)
 	if err != nil {
@@ -30,7 +30,7 @@ func TestRecordInputMatchesDeviceTagsAndPrincipalGroups(t *testing.T) {
 		},
 	}}
 	got, err := policy.Resolve(
-		&plugin.Principal{ID: "phuc@example.com", Groups: []string{"apac-staff"}},
+		&plugin.Principal{ID: "admin@mail.com", Groups: []string{"apac-staff"}},
 		&plugin.Device{ID: "treadmill-4821", Tags: map[string]string{"pci_scope": "true"}},
 	)
 	if err != nil {
