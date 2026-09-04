@@ -21,7 +21,13 @@
 - **`{principal}` is `encodeURIComponent`-encoded** — ids contain `@` and `.`.
 - **`/s/{id}` serves both live and closed sessions.** State picks the component, never the route.
 - **The gateway needs no change.** `cmd/oarlockd/app/ui/ui.go:45` already serves `index.html` for unknown paths.
-- **Every task ends green:** `pnpm tokens:check && pnpm typecheck && pnpm test:unit`.
+- **Every task ends green:** `pnpm tokens:check && pnpm typecheck && pnpm test:unit`,
+  **from the committed state.** A green check that depends on an uncommitted file is a
+  broken commit.
+- **`tsconfig.tests.json` reaches `web/src` by project reference**, not by widening its
+  `include`. Two `composite` projects compiling the same files emit two sets of
+  declarations for them. Add once, in Task 1:
+  `"references": [{ "path": "./tsconfig.web.json" }]`.
 - **The router's state lives in one external store, read with `useSyncExternalStore`.**
   Not `useState` per component: `pushState` does not fire `popstate`, so a per-component
   copy leaves every subscriber but the navigating one stale. Task 5 tests this.
@@ -101,8 +107,12 @@ test.describe("parsePath", () => {
   });
 
   test("an unknown facet is dropped rather than carried", () => {
-    expect(parsePath("/d/rower-9001", "?nonsense=1&since=2026-01-01").facets)
-      .toEqual({ since: "2026-01-01" });
+    // Narrow before reading a variant-specific field. The alternative — widening every
+    // Route variant with `facets?: undefined` so the union is uniform — bends a
+    // production type to make a test compile.
+    const route = parsePath("/d/rower-9001", "?nonsense=1&since=2026-01-01");
+    if (route.kind !== "device") throw new Error(`expected a device route, got ${route.kind}`);
+    expect(route.facets).toEqual({ since: "2026-01-01" });
   });
 
   // An unknown path must not throw inside the SPA. The gateway serves index.html for
