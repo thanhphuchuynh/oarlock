@@ -131,6 +131,25 @@ var set = []Condition{
 		Headline:   "This device isn’t connected.",
 		NextAction: "It may be powered off or off the network. Check it, then try again.",
 	},
+	// ── the caller's own retries ─────────────────────────────────────────────────
+	{
+		// Two different requests under one Idempotency-Key. Refused rather than
+		// answered with the first request's session, because answering would hand
+		// somebody a shell on a device they did not ask for.
+		ID: "idempotency_key_reused", Kind: Error, Audience: Operator,
+		Fault: FaultClient, Retryable: false,
+		Headline:   "That idempotency key was already used for a different request.",
+		NextAction: "Use a new key, or send the original request again unchanged.",
+	},
+	{
+		// The caller retried before its first attempt finished. Retryable on purpose:
+		// waiting and asking again is exactly the right move, and it is an answer an
+		// SDK can act on without a human.
+		ID: "idempotency_in_flight", Kind: Error, Audience: Operator,
+		Fault: FaultClient, Retryable: true,
+		Headline:   "An earlier request with this idempotency key is still running.",
+		NextAction: "Wait a moment and send the same request again.",
+	},
 	{
 		// Told apart from device_not_connected because they send somebody to different
 		// places. "Not connected" sends an operator to look at hardware; this one is a
