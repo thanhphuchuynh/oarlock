@@ -864,6 +864,12 @@ paths:
       description: Scoped by the caller's own identity rather than by a grant. **Optional:** present only when the gateway is configured with Registry and Inviter; otherwise this path answers 404.
       tags:
         - sessions
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: An opaque key the client chooses, at most 255 bytes. A retry carrying the same key returns the session the first request opened, with a freshly minted attach ticket, and answers 200 rather than 201. The same key with a different body is refused as `idempotency_key_reused`; a retry that arrives while the first is still running is refused as `idempotency_in_flight` and is retryable.
+          schema:
+            type: string
       responses:
         "200":
           description: Done.

@@ -161,7 +161,46 @@ RFC 9457 `application/problem+json`, with the machine-readable code from
 `instance` is the correlation id and appears in the gateway's logs, the audit event, and
 every SDK error. It is the one string to quote in a bug report.
 
-### 2.2 Long-poll, don't poll
+### 2.2 Retrying safely
+
+`POST /sessions` does real work — it creates a row, wakes a device and mints a credential —
+so a client that times out cannot tell whether any of it happened. Send an
+`Idempotency-Key` and the retry is safe:
+
+```
+POST /api/v1/sessions
+Idempotency-Key: 018f2c1e-9b3a-7c4d-8e1f-2a5b6c7d8e9f
+```
+
+The key is an opaque string you choose, at most 255 bytes, scoped to your own principal —
+two callers picking the same key never see each other's sessions.
+
+| what happened | what you get |
+|---|---|
+| first request | `201 Created`, the new session |
+| retry, same body | `200 OK`, **the same session**, with a freshly minted attach ticket |
+| retry, different body | `400`, `idempotency_key_reused` |
+| retry while the first is still running | `409`, `idempotency_in_flight`, retryable |
+| the first request failed | the key is free; retry it |
+| the session has since ended | `409`, `session_closed` — open a new one with a new key |
+
+Two details worth knowing, because they are the ones an integration gets wrong:
+
+- **A replay returns 200, not 201.** If you branch on "did I create this", branch on the
+  status. The body is the same shape either way.
+- **The ticket in a replay is a new one.** Nothing is cached: the gateway looks the session
+  up as it is now and mints a fresh attach ticket. A cached response would carry the first
+  request's 60-second ticket, and a retry two minutes later would hand you a dead credential
+  and call it success.
+
+A failed request frees its key deliberately. The common failure is a device that did not
+answer, which is exactly when you want to retry the same key — a key that stayed consumed
+after a transient failure would be one you could never use again, for a session that does
+not exist.
+
+Idempotency records are held for 24 hours, in memory, on the node that served the request.
+
+### 2.3 Long-poll, don't poll
 
 A session opens asynchronously — `waking` while the doorbell rings, `opening` while the
 agent dials. `GET /sessions/{id}?wait=30s` blocks until the state changes or the timeout

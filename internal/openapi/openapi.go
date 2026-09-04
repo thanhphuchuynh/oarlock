@@ -169,6 +169,22 @@ func parametersFor(r apisrv.RouteInfo) []parameter {
 			})
 		}
 	}
+	// The one endpoint that does real work a client might do twice. Named here for the
+	// same reason as the paging parameters below: the alternative is every SDK author
+	// discovering it from prose, and a retry that opens a second shell is the failure
+	// this header exists to prevent.
+	if r.OperationID == "openSession" {
+		out = append(out, parameter{
+			Name: "Idempotency-Key", In: "header", Schema: &schema{Type: "string"},
+			Description: "An opaque key the client chooses, at most 255 bytes. " +
+				"A retry carrying the same key returns the session the first request " +
+				"opened, with a freshly minted attach ticket, and answers 200 rather " +
+				"than 201. The same key with a different body is refused as " +
+				"`idempotency_key_reused`; a retry that arrives while the first is " +
+				"still running is refused as `idempotency_in_flight` and is retryable.",
+		})
+	}
+
 	// Listing endpoints page with a cursor. Named here rather than inferred, because the
 	// alternative was every SDK author discovering it from a header.
 	if r.Method == "GET" && !strings.Contains(r.Path, "{") &&

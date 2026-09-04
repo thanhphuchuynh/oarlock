@@ -30,6 +30,7 @@ import (
 
 	"github.com/oarlock/oarlock/internal/authz"
 	"github.com/oarlock/oarlock/internal/hub"
+	"github.com/oarlock/oarlock/internal/idempotency"
 	"github.com/oarlock/oarlock/internal/invite"
 	"github.com/oarlock/oarlock/internal/pump"
 	"github.com/oarlock/oarlock/internal/recordpolicy"
@@ -85,6 +86,13 @@ type Options struct {
 	SQL SQLExplorer
 	// RecordInput resolves whether a session recording captures keystrokes.
 	RecordInput recordpolicy.RecordInput
+
+	// Idempotency remembers which POST /sessions requests have already been done, so a
+	// client that retries a timed-out request gets its first session back instead of a
+	// second one. Nil makes the Idempotency-Key header a no-op rather than an error:
+	// a header a deployment cannot honour must not refuse a request it would otherwise
+	// have served.
+	Idempotency idempotency.Store
 
 	// The collaborators below are needed only by the exec endpoint, which is the one
 	// place this server runs a session itself rather than handing back a ticket. Leaving
@@ -1382,6 +1390,59 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 		req.Profile = "shell"
 	}
 
+	// Idempotency, before any work: a row, an invitation and a ticket are all real
+	// effects, and the point is to not have two of each.
+	//
+	// complete is called once the session exists *and* the device answered. Completing
+	// earlier would leave a consumed key naming a session that was rejected, and the
+	// caller could never retry it.
+	complete := func(string) {}
+	key, ok := s.idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	if key != "" && s.o.Idempotency != nil {
+		if fp := fingerprint(&req); fp != "" {
+			rec, replay, err := s.o.Idempotency.Begin(r.Context(), p.ID, key, fp)
+			switch {
+			case errors.Is(err, idempotency.ErrFingerprintMismatch):
+				s.problemFor(w, r, "idempotency_key_reused", "")
+				return
+			case errors.Is(err, idempotency.ErrInFlight):
+				s.problemFor(w, r, "idempotency_in_flight", "")
+				return
+			case err != nil:
+				// A store that cannot answer must not refuse the request. Losing
+				// idempotency for one call costs a possible duplicate session; refusing
+				// costs the operator their shell, and only one of those is recoverable
+				// by trying again.
+				s.log.Warn("the idempotency store could not be reached; serving without it",
+					"principal", p.ID, "request", requestID(r), "error", err)
+			case replay:
+				s.replaySession(w, r, p, rec.SessionID)
+				return
+			default:
+				// Release is deferred unconditionally. It is a no-op once the key has
+				// been completed, so the success path needs no branch — and a branch
+				// is what would eventually leak a key on some path nobody thought of.
+				defer func() {
+					ctx := context.WithoutCancel(r.Context())
+					if err := s.o.Idempotency.Release(ctx, p.ID, key); err != nil {
+						s.log.Warn("could not release an idempotency key",
+							"principal", p.ID, "request", requestID(r), "error", err)
+					}
+				}()
+				complete = func(sessionID string) {
+					ctx := context.WithoutCancel(r.Context())
+					if err := s.o.Idempotency.Complete(ctx, p.ID, key, sessionID); err != nil {
+						s.log.Warn("could not record an idempotency key",
+							"principal", p.ID, "session", sessionID, "error", err)
+					}
+				}
+			}
+		}
+	}
+
 	dev, err := s.o.Registry.Get(r.Context(), req.DeviceID)
 	if err != nil || dev.Disabled {
 		// `device_unknown` rather than a generic `not_found`: the console renders a
@@ -1459,6 +1520,7 @@ func (s *Server) openSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 	if err != nil {
 		fresh = row
 	}
+	complete(sessionID)
 	s.log.Info("session opened via the API",
 		"session", sessionID, "device", dev.ID, "principal", p.ID,
 		"request", requestID(r))
@@ -1496,8 +1558,11 @@ var statusExceptions = map[string]int{
 	"session_closed":   http.StatusConflict,
 	"wrong_node":       http.StatusConflict,
 	"policy_conflict":  http.StatusConflict,
-	"doorbell_failed":  http.StatusBadGateway,
-	"gateway_shutdown": http.StatusServiceUnavailable,
+	// A duplicate request that is still running is a conflict, not a bad request: the
+	// body was fine and the answer is to wait.
+	"idempotency_in_flight": http.StatusConflict,
+	"doorbell_failed":       http.StatusBadGateway,
+	"gateway_shutdown":      http.StatusServiceUnavailable,
 }
 
 // statusFor maps a condition to an HTTP status.

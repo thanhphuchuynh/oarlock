@@ -62,6 +62,7 @@ import (
 	"github.com/oarlock/oarlock/internal/controlsrv"
 	"github.com/oarlock/oarlock/internal/handshake"
 	"github.com/oarlock/oarlock/internal/hub"
+	"github.com/oarlock/oarlock/internal/idempotency"
 	"github.com/oarlock/oarlock/internal/invite"
 	"github.com/oarlock/oarlock/internal/metrics"
 	"github.com/oarlock/oarlock/internal/ratelimit"
@@ -374,6 +375,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		Recorder: recorder, Limits: cfg.PumpLimits(), Deadlines: cfg.Deadlines(),
 		AuthzSupervisor: g.supervisor,
 		RecordInput:     cfg.Policy.RecordInput,
+		// In memory, which is the right scope for the deployment this gateway supports:
+		// a retry lands on the connection it was made on, and there is one node. A
+		// gateway behind a load balancer needs a shared store, and carries the same
+		// caveat as every other piece of per-node state here.
+		Idempotency:     idempotency.NewMemory(0, nil),
 		Audit:           g.audit,
 		AttachURL:       strings.TrimRight(cfg.URL, "/") + "/ws/attach",
 		RatePerMinute:   cfg.API.RatePerMinute,
