@@ -1206,6 +1206,10 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, _ *plugin.
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request, _ *plugin.Principal) {
+	wait, ok := s.parseWait(w, r)
+	if !ok {
+		return
+	}
 	row, err := s.o.Sessions.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, sessions.ErrNotFound) {
@@ -1216,6 +1220,10 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, _ *plugin.Pr
 			"Could not read the session", err.Error(), true)
 		return
 	}
+	// A session opens asynchronously — waking while the doorbell rings, opening while
+	// the agent dials — so the interesting answer is usually the *next* one. `?wait=`
+	// holds the request for it instead of making the caller ask again every 200 ms.
+	row = s.awaitChange(r.Context(), row, wait)
 	s.writeJSON(w, http.StatusOK, s.render(row))
 }
 

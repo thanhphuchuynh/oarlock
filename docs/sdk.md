@@ -203,9 +203,33 @@ Idempotency records are held for 24 hours, in memory, on the node that served th
 ### 2.3 Long-poll, don't poll
 
 A session opens asynchronously — `waking` while the doorbell rings, `opening` while the
-agent dials. `GET /sessions/{id}?wait=30s` blocks until the state changes or the timeout
-expires. Polling every 200 ms to watch a state machine that moves twice is a waste on both
-ends, and the SDKs use the long-poll form.
+agent dials. `GET /sessions/{id}?wait=30s` holds the request until the state changes.
+Polling every 200 ms to watch a state machine that moves twice is a waste of a TLS
+handshake, an authentication and a rate-limit slot per tick.
+
+```
+GET /api/v1/sessions/sess_01J8Y…?wait=30s&state=waking
+```
+
+**Send `state` — the one you already have.** Without it the wait is relative to whatever
+the state is when your request *arrives*, so a transition between your last read and this
+request is one you will not be told about: you will wait for the one after it. With it,
+a state that has already moved on comes back immediately.
+
+- `wait` is a Go duration, clamped to **60 s**. Absent or `0` answers straight away, which
+  is what every existing caller does and what they keep doing.
+- **A wait that expires is a `200` with the unchanged session, not an error.** "Still the
+  same" is the ordinary outcome of a long-poll; re-issue the request. A client that had
+  to special-case a timeout would be special-casing its most common answer.
+- A session that has already finished answers immediately. It will never move again, and
+  holding your request to tell you that would waste the whole timeout.
+- The states are `waking`, `opening`, `attached`, `closed`, `rejected`. Only `state`
+  changes release a wait; bytes moving do not.
+
+On the default single-node gateway the wait is event-driven — the store wakes it the
+moment the row moves. A store shared with another process cannot see writes it did not
+make, so the gateway polls it internally instead. The behaviour you see is the same; the
+difference is how quickly the answer arrives.
 
 ## 3. Service authentication, and who the session belongs to
 
