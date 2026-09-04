@@ -215,6 +215,23 @@ func parametersFor(r apisrv.RouteInfo) []parameter {
 				Description: "Page size. The gateway may return fewer."},
 		)
 	}
+
+	// The session list can be bounded by when a session was created. Named here rather
+	// than left to prose, because which end of the range is inclusive is exactly the
+	// kind of thing an SDK author guesses wrong without the spec saying so.
+	if r.OperationID == "listSessions" {
+		out = append(out,
+			parameter{Name: "since", In: "query", Schema: &schema{Type: "string"},
+				Description: "Only sessions created at or after this instant, RFC 3339 " +
+					"(e.g. `2026-06-01T00:00:00Z`). Half-open together with `until`: " +
+					"`since` is inclusive."},
+			parameter{Name: "until", In: "query", Schema: &schema{Type: "string"},
+				Description: "Only sessions created before this instant, RFC 3339. " +
+					"Half-open together with `since`: `until` is exclusive, so two " +
+					"adjacent ranges never overlap and a boundary instant belongs to " +
+					"only one of them."},
+		)
+	}
 	return out
 }
 

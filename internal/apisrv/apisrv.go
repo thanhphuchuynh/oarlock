@@ -1200,6 +1200,24 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, _ *plugin.
 		}
 		q.Limit = n
 	}
+	if v := r.URL.Query().Get("since"); v != "" {
+		since, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.problem(w, r, http.StatusBadRequest, "invalid_argument",
+				"since must be RFC 3339", "got "+v, false)
+			return
+		}
+		q.Since = since
+	}
+	if v := r.URL.Query().Get("until"); v != "" {
+		until, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			s.problem(w, r, http.StatusBadRequest, "invalid_argument",
+				"until must be RFC 3339", "got "+v, false)
+			return
+		}
+		q.Until = until
+	}
 
 	rows, next, err := s.o.Sessions.List(r.Context(), q)
 	if err != nil {

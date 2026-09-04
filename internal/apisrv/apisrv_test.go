@@ -257,6 +257,24 @@ func (f *fixture) seed(t *testing.T, id, device, principal string) *sessions.Ses
 	return row
 }
 
+// seedAt is seed's counterpart for a row that is in the past.
+//
+// Closed, not attached, and that is the point rather than a way around the per-device
+// cap: this helper exists to place history, and history has ended. A live row would also
+// hold the device, so two of them on one device would trip Limits.PerDevice before any
+// request was made — which is a fixture failing, dressed as a filter failing.
+func (f *fixture) seedAt(t *testing.T, id, device, principal string, createdAt time.Time) *sessions.Session {
+	t.Helper()
+	row := &sessions.Session{ID: id, DeviceID: device, Principal: principal,
+		Profile: "shell", Mode: "dispatch", State: sessions.StateClosed,
+		RecordingState: sessions.Recorded, Reason: "ticket AV-9182",
+		CloseReason: "operator_close", CreatedAt: createdAt}
+	if err := f.ledger.Create(context.Background(), row); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
 func newDeviceFixture(t *testing.T) *fixture {
 	t.Helper()
 	authn, err := statictoken.Open("test", map[string]string{token: "admin@mail.com"})
@@ -466,6 +484,42 @@ func TestListAndFilter(t *testing.T) {
 		if len(got.Sessions) != want {
 			t.Errorf("%s: %d sessions, want %d", query, len(got.Sessions), want)
 		}
+	}
+}
+
+// A filter that silently does nothing is worse than one that refuses: the caller is
+// shown more than they asked for and told it is everything.
+func TestAMalformedTimeRangeIsRefused(t *testing.T) {
+	f := newFixture(t, 0)
+	for _, q := range []string{"?since=yesterday", "?until=2026-13-45", "?since=1717200000"} {
+		resp, body := f.do(t, "GET", apisrv.Prefix+"/sessions"+q, token)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s gave status %d, want 400: %s", q, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestATimeRangeNarrowsTheList(t *testing.T) {
+	f := newFixture(t, 0)
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	f.seedAt(t, "s_old", "dev-1", "admin@mail.com", base.Add(-48*time.Hour))
+	f.seedAt(t, "s_new", "dev-1", "admin@mail.com", base.Add(48*time.Hour))
+
+	resp, body := f.do(t, "GET",
+		apisrv.Prefix+"/sessions?since="+base.Format(time.RFC3339), token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Sessions []struct {
+			ID string `json:"id"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sessions) != 1 || out.Sessions[0].ID != "s_new" {
+		t.Fatalf("since returned %+v, want just s_new", out.Sessions)
 	}
 }
 
