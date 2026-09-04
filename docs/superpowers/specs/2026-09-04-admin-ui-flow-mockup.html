@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oarlock console — flow mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Tokens copied verbatim from web/src/tokens.css — generated from tokens/tokens.json.
+   A mockup that invents colours is a mockup that lies about what shipping costs. */
+:root {
+  --bg:#f2efe6; --bg-raised:#fbfaf6; --bg-terminal:#1a1a1e;
+  --border:#d9d4c7; --border-strong:#14161a;
+  --fg:#14161a; --fg-muted:#5f646a; --fg-faint:#878b91; --fg-inverse:#fbfaf6;
+  --fg-terminal:#eceaeb;
+  --recorded:#256b4a; --unrecorded:#9c5a1e; --observed:#6b4fb0;
+  --reconnecting:#8a6a12; --ended:#5f646a; --refused:#b3231c;
+  --sans:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono","SF Mono",ui-monospace,"Menlo",monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#10161d; --bg-raised:#18212b; --bg-terminal:#0e0e11;
+    --border:#2b3947; --border-strong:#8199ae;
+    --fg:#dfe7ee; --fg-muted:#95a5b5; --fg-faint:#7d8d9d; --fg-inverse:#10161d;
+    --recorded:#58b98d; --unrecorded:#d8924f; --observed:#a892e0;
+    --reconnecting:#cfae4a; --ended:#95a5b5; --refused:#e8706e;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#10161d; --bg-raised:#18212b; --bg-terminal:#0e0e11;
+  --border:#2b3947; --border-strong:#8199ae;
+  --fg:#dfe7ee; --fg-muted:#95a5b5; --fg-faint:#7d8d9d; --fg-inverse:#10161d;
+  --recorded:#58b98d; --unrecorded:#d8924f; --observed:#a892e0;
+  --reconnecting:#cfae4a; --ended:#95a5b5; --refused:#e8706e;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--mono);font-size:.9em;letter-spacing:-.01em}
+a{color:inherit;text-decoration:none;cursor:pointer}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+/* ── mockup chrome ─────────────────────────────────────────────────── */
+.note{max-width:1180px;margin:0 auto;padding:14px 20px 0;
+  color:var(--fg-muted);font-size:13px;display:flex;gap:14px;align-items:baseline;
+  flex-wrap:wrap}
+.note strong{color:var(--fg)}
+.note .spacer{margin-left:auto}
+.frame{max-width:1180px;margin:10px auto 40px;border:1px solid var(--border);
+  border-radius:10px;overflow:hidden;background:var(--bg-raised);
+  box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px -12px rgba(0,0,0,.18)}
+.urlbar{display:flex;align-items:center;gap:10px;padding:9px 14px;
+  background:var(--bg);border-bottom:1px solid var(--border)}
+.dots{display:flex;gap:6px}
+.dots i{width:10px;height:10px;border-radius:50%;background:var(--border);display:block}
+.nav-btns{display:flex;gap:2px}
+.nav-btns button{width:26px;height:26px;border-radius:5px;color:var(--fg-faint);
+  font-size:15px;line-height:1}
+.nav-btns button:hover{background:var(--border);color:var(--fg)}
+.url{flex:1;background:var(--bg-raised);border:1px solid var(--border);
+  border-radius:6px;padding:5px 11px;font-family:var(--mono);font-size:12.5px;
+  color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.url b{color:var(--fg);font-weight:500}
+
+/* ── app shell ─────────────────────────────────────────────────────── */
+.shell{display:grid;grid-template-columns:210px 1fr;min-height:660px}
+.side{border-right:1px solid var(--border);padding:20px 16px;background:var(--bg)}
+.brand{font-weight:700;letter-spacing:-.02em;font-size:16px;margin-bottom:2px}
+.brand span{color:var(--fg-faint);font-weight:400}
+.who{font-size:12px;color:var(--fg-faint);margin-bottom:22px}
+.side nav{display:flex;flex-direction:column;gap:2px}
+.side nav a{padding:7px 10px;border-radius:6px;font-size:14px;color:var(--fg-muted)}
+.side nav a:hover{background:var(--border);color:var(--fg)}
+.side nav a.on{background:var(--fg);color:var(--fg-inverse);font-weight:500}
+.side .sub{margin-top:26px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.09em;color:var(--fg-faint);padding:0 10px 7px}
+.recent a{display:block;padding:5px 10px;border-radius:6px;font-size:13px;
+  color:var(--fg-muted);font-family:var(--mono);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.recent a:hover{background:var(--border);color:var(--fg)}
+.main{padding:26px 30px 40px;min-width:0}
+
+/* ── page furniture ────────────────────────────────────────────────── */
+.crumb{font-size:12px;color:var(--fg-faint);margin-bottom:5px}
+h1{font-size:23px;font-weight:600;letter-spacing:-.02em;margin-bottom:3px;
+  overflow-wrap:anywhere}
+h1.mono{font-size:21px}
+.sub-line{color:var(--fg-muted);font-size:13.5px;margin-bottom:22px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--fg-faint);font-weight:600;margin:30px 0 11px;
+  display:flex;align-items:baseline;gap:10px}
+h2 .hint{text-transform:none;letter-spacing:0;font-weight:400;font-size:12px}
+.card{background:var(--bg-raised);border:1px solid var(--border);border-radius:9px}
+
+/* ── facets ────────────────────────────────────────────────────────── */
+.facets{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.facet{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;
+  border:1px solid var(--border);border-radius:999px;background:var(--bg-raised);
+  font-size:13px}
+.facet b{font-weight:500;font-family:var(--mono);font-size:12px}
+.facet .x{color:var(--fg-faint);font-size:14px;line-height:1}
+.facet.add{color:var(--fg-faint);border-style:dashed}
+.linked{margin-left:auto;font-size:12px;color:var(--fg-faint);
+  display:inline-flex;align-items:center;gap:6px}
+
+/* ── tables ────────────────────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;font-size:11px;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--fg-faint);font-weight:600;
+  padding:9px 13px;border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td{padding:11px 13px;border-bottom:1px solid var(--border);
+  font-size:13.5px;vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr.click:hover{background:var(--bg)}
+td.n{white-space:nowrap}
+.dim{color:var(--fg-muted)}
+.faint{color:var(--fg-faint)}
+
+/* ── state pills ───────────────────────────────────────────────────── */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
+  font-weight:500;padding:2px 9px;border-radius:999px;white-space:nowrap;
+  border:1px solid currentColor}
+.pill i{width:5px;height:5px;border-radius:50%;background:currentColor;display:block}
+.p-rec{color:var(--recorded)} .p-unrec{color:var(--unrecorded)}
+.p-obs{color:var(--observed)} .p-live{color:var(--recorded)}
+.p-end{color:var(--ended)} .p-ref{color:var(--refused)}
+@keyframes blink{50%{opacity:.35}}
+.p-live i{animation:blink 1.6s ease-in-out infinite}
+.act{font-family:var(--mono);font-size:12px;color:var(--fg-muted);
+  border:1px solid var(--border);border-radius:4px;padding:1px 6px}
+
+/* ── search ────────────────────────────────────────────────────────── */
+.search-wrap{max-width:640px;margin:56px auto 0;text-align:center}
+.search-wrap h1{font-size:27px;margin-bottom:8px}
+.search-box{display:flex;align-items:center;gap:11px;padding:13px 17px;
+  border:1px solid var(--border-strong);border-radius:9px;
+  background:var(--bg-raised);margin:26px 0 12px;text-align:left}
+.search-box input{flex:1;border:0;background:none;font:inherit;color:inherit;
+  outline:none;font-size:15px}
+.search-box input::placeholder{color:var(--fg-faint)}
+.kbd{font-family:var(--mono);font-size:11px;color:var(--fg-faint);
+  border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+.suggest{text-align:left;margin-top:22px}
+.suggest .row{display:flex;align-items:center;gap:11px;padding:10px 13px;
+  border-radius:7px}
+.suggest .row:hover{background:var(--bg-raised)}
+.kind{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--fg-faint);border:1px solid var(--border);border-radius:4px;
+  padding:1px 6px;font-weight:600}
+
+/* ── grants ────────────────────────────────────────────────────────── */
+.grant{display:flex;align-items:center;gap:12px;padding:11px 13px;
+  border-bottom:1px solid var(--border);font-size:13.5px}
+.grant:last-child{border-bottom:0}
+.grant .eff{font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.06em;width:52px;flex:none}
+.eff.allow{color:var(--recorded)} .eff.deny{color:var(--refused)}
+.grant .acts{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+
+/* ── session page ──────────────────────────────────────────────────── */
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));
+  gap:1px;background:var(--border);border:1px solid var(--border);
+  border-radius:9px;overflow:hidden;margin-bottom:22px}
+.meta div{background:var(--bg-raised);padding:11px 14px}
+.meta dt{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--fg-faint);font-weight:600;margin-bottom:3px}
+.meta dd{font-size:13.5px;font-family:var(--mono);overflow-wrap:anywhere}
+.term{background:var(--bg-terminal);color:var(--fg-terminal);border-radius:9px;
+  padding:17px 19px;font-family:var(--mono);font-size:12.5px;line-height:1.65;
+  overflow-x:auto;border:1px solid var(--border)}
+.term .g{color:#6fc48c} .term .y{color:#e0bb5c} .term .f{color:#5c5a5f}
+.player{display:flex;align-items:center;gap:13px;padding:11px 15px;
+  border-top:1px solid var(--border);background:var(--bg-raised);
+  border-radius:0 0 9px 9px;font-size:12.5px}
+.scrub{flex:1;height:4px;background:var(--border);border-radius:999px;position:relative}
+.scrub b{position:absolute;inset:0 62% 0 0;background:var(--fg);border-radius:999px}
+.evidence{display:flex;gap:13px;align-items:flex-start;padding:15px;
+  border:1px solid var(--recorded);border-radius:9px;background:var(--bg-raised);
+  margin-top:22px}
+.evidence .tick{color:var(--recorded);font-size:18px;line-height:1.2}
+.evidence h3{font-size:13.5px;font-weight:600;margin-bottom:3px}
+.evidence p{font-size:12.5px;color:var(--fg-muted);margin-bottom:9px}
+.btn{border:1px solid var(--border-strong);border-radius:6px;padding:5px 12px;
+  font-size:12.5px;font-weight:500;background:var(--bg)}
+.btn:hover{background:var(--fg);color:var(--fg-inverse)}
+.btn.q{border-color:var(--border);color:var(--fg-muted);font-weight:400}
+
+.empty{padding:26px;text-align:center;color:var(--fg-faint);font-size:13.5px}
+[hidden]{display:none!important}
+@media (max-width:820px){
+  .shell{grid-template-columns:1fr}
+  .side{border-right:0;border-bottom:1px solid var(--border)}
+  .side nav{flex-direction:row;flex-wrap:wrap}
+  .recent{display:none}
+  .main{padding:20px 16px 30px}
+}
+</style>
+</head>
+<body>
+
+<div class="note">
+  <strong>Flow mockup</strong>
+  <span>approach B — people and devices as addressable spines. Static; data is invented.</span>
+  <span class="spacer"></span>
+  <button class="btn q" onclick="toggleTheme()">light / dark</button>
+</div>
+
+<div class="frame">
+  <div class="urlbar">
+    <div class="dots"><i></i><i></i><i></i></div>
+    <div class="nav-btns">
+      <button onclick="history.back()" title="back">‹</button>
+      <button onclick="history.forward()" title="forward">›</button>
+    </div>
+    <div class="url" id="url"></div>
+  </div>
+
+  <div class="shell">
+    <aside class="side">
+      <div class="brand">Oarlock <span>console</span></div>
+      <div class="who mono">admin@mail.com</div>
+      <nav>
+        <a href="#/" id="nav-search">Search</a>
+        <a href="#/permissions" id="nav-perm">Permissions</a>
+        <a href="#/sql" id="nav-sql">SQL Explorer</a>
+      </nav>
+      <div class="sub">Recent</div>
+      <div class="recent">
+        <a href="#/p/contractor@partner.example.com">contractor@partner…</a>
+        <a href="#/d/treadmill-4821">treadmill-4821</a>
+        <a href="#/p/admin@mail.com">admin@mail.com</a>
+        <a href="#/d/rower-9001">rower-9001</a>
+      </div>
+    </aside>
+
+    <main class="main">
+
+      <!-- ── SEARCH ────────────────────────────────────────────────── -->
+      <section id="v-search" hidden>
+        <div class="search-wrap">
+          <h1>Who, or what?</h1>
+          <div class="sub-line">Every answer here starts with a person or a device.</div>
+          <div class="search-box">
+            <span class="faint">⌕</span>
+            <input placeholder="contractor@partner.example.com, treadmill-4821, sess_…" >
+            <span class="kbd">⌘K</span>
+          </div>
+          <div class="suggest">
+            <a class="row" href="#/p/contractor@partner.example.com">
+              <span class="kind">Person</span>
+              <span class="mono">contractor@partner.example.com</span>
+              <span class="faint" style="margin-left:auto">14 sessions</span>
+            </a>
+            <a class="row" href="#/d/treadmill-4821">
+              <span class="kind">Device</span>
+              <span class="mono">treadmill-4821</span>
+              <span class="faint" style="margin-left:auto">connected</span>
+            </a>
+            <a class="row" href="#/s/sess_iw31he82d8gg">
+              <span class="kind">Session</span>
+              <span class="mono">sess_iw31he82d8gg</span>
+              <span class="faint" style="margin-left:auto">4 Sep, closed</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── PERSON ────────────────────────────────────────────────── -->
+      <section id="v-person" hidden>
+        <div class="crumb">Person</div>
+        <h1 class="mono">contractor@partner.example.com</h1>
+        <div class="sub-line">Authenticated by OIDC · first seen 12 Jun 2026 · 14 sessions</div>
+
+        <h2>What they did <span class="hint">— the timeline, live and closed in one list</span></h2>
+        <div class="facets">
+          <span class="facet">since <b>2026-06-01</b> <span class="x">×</span></span>
+          <span class="facet">until <b>2026-09-01</b> <span class="x">×</span></span>
+          <span class="facet">device <b>treadmill-4821</b> <span class="x">×</span></span>
+          <span class="facet add">+ state</span>
+          <span class="linked">↗ this view is a link</span>
+        </div>
+
+        <div class="card">
+          <table>
+            <thead><tr>
+              <th>Opened</th><th>Device</th><th>Action</th><th>Outcome</th>
+              <th>Recording</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr class="click" onclick="go('#/s/sess_iw31he82d8gg')">
+                <td class="n mono dim">4 Sep 09:22</td>
+                <td class="n mono">treadmill-4821</td>
+                <td class="n"><span class="act">shell</span></td>
+                <td class="n"><span class="pill p-end"><i></i>operator_close</span></td>
+                <td class="n"><span class="pill p-rec"><i></i>recorded</span></td>
+                <td class="n faint">›</td>
+              </tr>
+              <tr class="click" onclick="go('#/s/sess_lwwzwa2gpdfj')">
+                <td class="n mono dim">2 Sep 16:04</td>
+                <td class="n mono">treadmill-4821</td>
+                <td class="n"><span class="act">file:read</span></td>
+                <td class="n"><span class="pill p-end"><i></i>operator_close</span></td>
+                <td class="n"><span class="pill p-unrec"><i></i>not recorded</span></td>
+                <td class="n faint">›</td>
+              </tr>
+              <tr class="click" onclick="go('#/s/sess_9fnlh6qduzu1')">
+                <td class="n mono dim">28 Aug 11:47</td>
+                <td class="n mono">treadmill-4821</td>
+                <td class="n"><span class="act">exec</span></td>
+                <td class="n"><span class="pill p-ref"><i></i>not_authorized</span></td>
+                <td class="n faint">—</td>
+                <td class="n faint">›</td>
+              </tr>
+              <tr class="click" onclick="go('#/s/sess_31bca090aof7')">
+                <td class="n mono dim">21 Aug 08:15</td>
+                <td class="n mono">treadmill-4821</td>
+                <td class="n"><span class="act">shell</span></td>
+                <td class="n"><span class="pill p-end"><i></i>idle_timeout</span></td>
+                <td class="n"><span class="pill p-rec"><i></i>recorded</span></td>
+                <td class="n faint">›</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2>What they were allowed to do
+          <span class="hint">— read-only; the answer to “was this permitted?”</span></h2>
+        <div class="card">
+          <div class="grant">
+            <span class="eff allow">allow</span>
+            <span class="mono">contractor-shell</span>
+            <span class="dim">on <span class="mono">treadmill-4821</span> · expires in 10s · max 15m</span>
+            <span class="acts"><span class="act">shell</span></span>
+          </div>
+          <div class="grant">
+            <span class="eff deny">deny</span>
+            <span class="mono">deny-pci</span>
+            <span class="dim">on devices tagged <span class="mono">pci_scope=true</span> · PCI change control</span>
+            <span class="acts"><span class="act">*</span></span>
+          </div>
+        </div>
+        <div style="margin-top:11px">
+          <a class="btn q" href="#/permissions">Open the policy editor →</a>
+        </div>
+      </section>
+
+      <!-- ── DEVICE ────────────────────────────────────────────────── -->
+      <section id="v-device" hidden>
+        <div class="crumb">Device</div>
+        <h1 class="mono">treadmill-4821</h1>
+        <div class="sub-line">
+          android · dispatch · <span style="color:var(--recorded)">connected</span>
+          · agent dev · profiles shell
+        </div>
+
+        <div style="display:flex;gap:9px;margin-bottom:6px">
+          <button class="btn">Open a shell</button>
+          <button class="btn q">Disconnect agent</button>
+          <button class="btn q">Edit device</button>
+        </div>
+
+        <h2>What was done to it</h2>
+        <div class="facets">
+          <span class="facet">since <b>2026-08-01</b> <span class="x">×</span></span>
+          <span class="facet add">+ person</span>
+          <span class="facet add">+ state</span>
+          <span class="linked">↗ this view is a link</span>
+        </div>
+        <div class="card">
+          <table>
+            <thead><tr>
+              <th>Opened</th><th>Person</th><th>Action</th><th>Outcome</th>
+              <th>Recording</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr class="click" onclick="go('#/s/sess_live0001')">
+                <td class="n mono dim">now</td>
+                <td class="n mono">admin@mail.com</td>
+                <td class="n"><span class="act">shell</span></td>
+                <td class="n"><span class="pill p-live"><i></i>attached</span></td>
+                <td class="n"><span class="pill p-rec"><i></i>recording</span></td>
+                <td class="n faint">›</td>
+              </tr>
+              <tr class="click" onclick="go('#/s/sess_iw31he82d8gg')">
+                <td class="n mono dim">4 Sep 09:22</td>
+                <td class="n mono">contractor@partner…</td>
+                <td class="n"><span class="act">shell</span></td>
+                <td class="n"><span class="pill p-end"><i></i>operator_close</span></td>
+                <td class="n"><span class="pill p-rec"><i></i>recorded</span></td>
+                <td class="n faint">›</td>
+              </tr>
+              <tr class="click" onclick="go('#/s/sess_obs00002')">
+                <td class="n mono dim">3 Sep 14:31</td>
+                <td class="n mono">auditor@example.com</td>
+                <td class="n"><span class="act">observe</span></td>
+                <td class="n"><span class="pill p-obs"><i></i>observed</span></td>
+                <td class="n faint">—</td>
+                <td class="n faint">›</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2>Who can reach it</h2>
+        <div class="card">
+          <div class="grant">
+            <span class="eff allow">allow</span>
+            <span class="mono">operator-shell</span>
+            <span class="dim"><span class="mono">*@oncall.example.com</span>, <span class="mono">admin@mail.com</span></span>
+            <span class="acts"><span class="act">shell</span><span class="act">exec</span></span>
+          </div>
+          <div class="grant">
+            <span class="eff allow">allow</span>
+            <span class="mono">contractor-shell</span>
+            <span class="dim"><span class="mono">contractor@partner.example.com</span> · ttl 10s</span>
+            <span class="acts"><span class="act">shell</span></span>
+          </div>
+          <div class="grant">
+            <span class="eff deny">deny</span>
+            <span class="mono">deny-pci</span>
+            <span class="dim">everyone, while tagged <span class="mono">pci_scope=true</span></span>
+            <span class="acts"><span class="act">*</span></span>
+          </div>
+        </div>
+
+        <h2>Who can administer it</h2>
+        <div class="card">
+          <div class="grant">
+            <span class="eff allow">allow</span>
+            <span class="mono">fleet-admin</span>
+            <span class="dim"><span class="mono">admin@mail.com</span></span>
+            <span class="acts"><span class="act">admin:devices</span><span class="act">admin:kill</span></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── SESSION (closed) ──────────────────────────────────────── -->
+      <section id="v-session" hidden>
+        <div class="crumb">
+          <a href="#/p/contractor@partner.example.com" class="mono">contractor@partner.example.com</a>
+          · <a href="#/d/treadmill-4821" class="mono">treadmill-4821</a>
+        </div>
+        <h1 class="mono">sess_iw31he82d8gg</h1>
+        <div class="sub-line">Gateway-terminated · 4 Sep 2026, 09:22:28 → 09:24:11 · 1m 43s</div>
+
+        <dl class="meta">
+          <div><dt>Person</dt><dd>contractor@partner…</dd></div>
+          <div><dt>Device</dt><dd>treadmill-4821</dd></div>
+          <div><dt>Profile</dt><dd>shell</dd></div>
+          <div><dt>Closed</dt><dd>operator_close</dd></div>
+          <div><dt>Bytes out</dt><dd>230</dd></div>
+          <div><dt>Recording</dt><dd style="color:var(--recorded)">recorded</dd></div>
+        </dl>
+
+        <div class="term">
+<span class="f">oarlock: waking treadmill-4821…</span>
+<span class="f">oarlock: treadmill-4821 · gateway-terminated · </span><span class="y">this session is recorded</span>
+sh-3.2$ <span class="g">uname -a</span>
+Linux treadmill-4821 5.15.0 #1 SMP aarch64 GNU/Linux
+sh-3.2$ <span class="g">cat /etc/oarlock/agent.yaml</span>
+device: treadmill-4821
+shell: /bin/sh
+sh-3.2$ <span class="g">exit</span>
+        </div>
+        <div class="player">
+          <button class="btn q">▶</button>
+          <span class="mono faint">01:04</span>
+          <span class="scrub"><b></b></span>
+          <span class="mono faint">01:43</span>
+          <span class="btn q">1×</span>
+        </div>
+
+        <div class="evidence">
+          <span class="tick">✓</span>
+          <div style="flex:1">
+            <h3>Signature verified · hash chain intact</h3>
+            <p class="mono" style="font-size:11.5px">
+              ed25519 · key dev-recording-key · head 24c07339c874775f6919f0c5808206151…
+            </p>
+            <div style="display:flex;gap:9px">
+              <button class="btn">Export verified bundle</button>
+              <button class="btn q">Copy link</button>
+              <button class="btn q">Download .cast</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── SESSION (live) ───────────────────────────────────────── -->
+      <section id="v-session-live" hidden>
+        <div class="crumb">
+          <a href="#/p/admin@mail.com" class="mono">admin@mail.com</a>
+          · <a href="#/d/treadmill-4821" class="mono">treadmill-4821</a>
+        </div>
+        <h1 class="mono">sess_live0001</h1>
+        <div class="sub-line">
+          <span class="pill p-live" style="vertical-align:middle"><i></i>attached</span>
+          — same URL as when it closes. That is the point.
+        </div>
+
+        <dl class="meta">
+          <div><dt>Person</dt><dd>admin@mail.com</dd></div>
+          <div><dt>Device</dt><dd>treadmill-4821</dd></div>
+          <div><dt>Profile</dt><dd>shell</dd></div>
+          <div><dt>Started</dt><dd>2m ago</dd></div>
+          <div><dt>Observers</dt><dd>1</dd></div>
+          <div><dt>Recording</dt><dd style="color:var(--recorded)">recording</dd></div>
+        </dl>
+
+        <div class="term">
+<span class="f">oarlock: treadmill-4821 · gateway-terminated · </span><span class="y">this session is recorded</span>
+<span class="f">oarlock: auditor@example.com is observing this session</span>
+sh-3.2$ <span class="g">tail -f /var/log/oarlock/agent.log</span>
+09:31:02 control channel up
+09:31:44 session open profile=shell
+<span style="background:var(--fg-terminal);color:var(--bg-terminal)"> </span>
+        </div>
+        <div class="player">
+          <button class="btn q">Detach</button>
+          <button class="btn q">Observe read-only</button>
+          <span style="margin-left:auto" class="faint mono">live · 00:02:11</span>
+        </div>
+
+        <div class="evidence" style="border-color:var(--border)">
+          <span class="tick faint">◷</span>
+          <div>
+            <h3>Recording in progress</h3>
+            <p>The chain is sealed and signed when the session ends. Nothing to verify yet.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── stubs ────────────────────────────────────────────────── -->
+      <section id="v-permissions" hidden>
+        <div class="crumb">Policy</div>
+        <h1>Permissions</h1>
+        <div class="sub-line">
+          Unchanged by this redesign. It stays the <em>editor</em> — writing policy is an
+          admin's job, and the read view of grants now lives on the person and device pages.
+        </div>
+        <div class="card empty">The existing Permissions.tsx table, as-is.</div>
+      </section>
+
+      <section id="v-sql" hidden>
+        <div class="crumb">Tool</div>
+        <h1>SQL Explorer</h1>
+        <div class="sub-line">Unchanged. Read-only operational data.</div>
+        <div class="card empty">The existing SQLExplorer.tsx, as-is.</div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+// The mockup navigates by hash so it works from file://, but the address bar shows
+// the real path this design specifies. What is being reviewed is the flow and the
+// addressability, not this shim.
+const views = {
+  "/":            ["v-search",       "/",                                       "nav-search"],
+  "/permissions": ["v-permissions",  "/permissions",                            "nav-perm"],
+  "/sql":         ["v-sql",          "/sql",                                    "nav-sql"],
+};
+function resolve(hash) {
+  const path = (hash || "#/").slice(1) || "/";
+  if (views[path]) return { id: views[path][0], url: views[path][1], nav: views[path][2] };
+  if (path.startsWith("/p/")) {
+    return { id: "v-person",
+      url: "/p/" + path.slice(3) +
+           "?since=2026-06-01&until=2026-09-01&device=treadmill-4821" };
+  }
+  if (path.startsWith("/d/")) return { id: "v-device", url: "/d/" + path.slice(3) + "?since=2026-08-01" };
+  if (path === "/s/sess_live0001") return { id: "v-session-live", url: path };
+  if (path.startsWith("/s/")) return { id: "v-session", url: path };
+  return { id: "v-search", url: "/", nav: "nav-search" };
+}
+function render() {
+  const r = resolve(location.hash);
+  for (const el of document.querySelectorAll("main > section")) el.hidden = true;
+  document.getElementById(r.id).hidden = false;
+  for (const id of ["nav-search", "nav-perm", "nav-sql"]) {
+    document.getElementById(id).classList.toggle("on", id === r.nav);
+  }
+  const [p, q] = r.url.split("?");
+  document.getElementById("url").innerHTML =
+    'console.oarlock.internal<b>' + p + '</b>' + (q ? '<span>?' + q + '</span>' : '');
+  window.scrollTo(0, 0);
+}
+function go(h) { location.hash = h; }
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const dark = cur ? cur === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+}
+addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>
