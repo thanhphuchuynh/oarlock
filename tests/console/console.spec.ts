@@ -646,14 +646,47 @@ test("navigating away from a dead wait actually renders the destination, not jus
   // the wait is gone and the destination is actually on screen.
   await expect(waits).toHaveCount(0);
   await expect(page.getByTestId("permissions")).toBeVisible();
+});
 
-  // The bug report's second symptom: Back did nothing, because nothing had cleared
-  // `opening` for it to fall back to. It works now because the nav click above already
-  // cleared it — Back only has to restore a URL, not resurrect a dead screen.
-  await page.goBack();
-  await expect(page).toHaveURL(/\/ui\/$/);
-  await expect(waits).toHaveCount(0);
+// The scoped re-review's finding: a version of this fix that only wired the nav rail's
+// own click handler left the browser's Back button dead, because Back fires `popstate`
+// directly — it is never a click on the rail, so nothing routed through it. A test that
+// presses Back only *after* a nav-rail click has already cleared the wedge (as an earlier
+// version of this test did) cannot see that gap: Back then has nothing left to resurrect,
+// and passes whether or not popstate itself is handled. This one builds history with a
+// nav click, returns to Fleet the same way, and only *then* wedges the screen — so Back is
+// the first and only thing that touches the wedge, with no preceding click doing the
+// clearing for it.
+test("the browser's own Back unwedges a dead wait too, not only the nav rail", async ({ page }) => {
+  await signIn(page);
   await expect(page.getByTestId("fleet")).toBeVisible();
+
+  // History now has an entry to go back to, and clicking through it (rather than
+  // `page.goBack()` twice) is what proves the wedge below survives entirely on its own,
+  // with no earlier click already having cleared it.
+  await page.getByRole("button", { name: "Permissions", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/permissions$/);
+  await page.getByRole("button", { name: "Fleet", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/$/);
+
+  // Wedge the screen — same repro as above — without navigating anywhere: `openSession`'s
+  // failure path never calls `navigate()`, so this leaves `opening` set on the *current*
+  // history entry rather than pushing a new one.
+  await page.getByTestId("open-by-id").click();
+  await page.getByTestId("open-by-id-device").fill("no-such-device");
+  await page.getByTestId("open-by-id-submit").click();
+  const waits = page.getByTestId("waits");
+  await expect(waits).toBeVisible();
+  await expect(waits).toContainText("No such device, or you don't have access to it.", {
+    timeout: 20_000,
+  });
+
+  // No nav-rail click between here and Back — this is the one action under test.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/ui\/permissions$/);
+  // Rendered content, not the URL: the URL changing is exactly what the bug also did.
+  await expect(waits).toHaveCount(0);
+  await expect(page.getByTestId("permissions")).toBeVisible();
 });
 
 test("an unknown path renders the search screen, not an error", async ({ page }) => {

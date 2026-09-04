@@ -168,6 +168,29 @@ export function App() {
     setToken(t);
   }
 
+  // The browser's own Back/Forward is the one way to change `route` that `goToPage`
+  // cannot reach — it fires `popstate` directly, never a click on the nav rail — so a
+  // wedged wait or failure survived it exactly as it survived everything else before this
+  // fix. A `useEffect` keyed on `[route]` would also catch this, but it would catch
+  // `attach`/`observe`/`replay`'s own navigate calls too, and those need to be left
+  // alone: Fleet stays mounted while one of them is in flight (none of them touch
+  // `opening`), so clicking Shell on another device while a Watch ticket is still
+  // pending is reachable, and a route-keyed effect clearing `opening` there tears a wait
+  // that is genuinely still pending out from under `openSession` — reproduced: the
+  // in-flight open's *later* resolution calls `setOpening` again, unmounting the very
+  // `SessionRoute` the popstate-style clear had just revealed and replacing it with a
+  // stale, unrelated wait/failure screen while the URL still names the session. Listening
+  // for `popstate` specifically reaches Back/Forward without going anywhere near that
+  // path, because `pushState` — what every one of those calls uses — never fires it.
+  useEffect(() => {
+    const onPopState = () => {
+      setOpening(null);
+      setFailure(null);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   async function openSession(device: string, reason: string) {
     if (!device) return;
     setOpenByID(null);
