@@ -12,16 +12,7 @@
 // verifier — rather than being re-stated here where they could drift. An integrator
 // embedding `<Terminal>` inherits none of this file, and should not have to.
 
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Terminal } from "@oarlock/react";
-
-// The replay player is loaded on demand. It carries its own terminal emulator, and most
-// sessions are never replayed — making every page load pay for it would be charging the
-// common case for the rare one.
-const Player = lazy(async () => {
-  const mod = await import("@oarlock/react/player");
-  return { default: mod.Player };
-});
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { get as getCondition, type Condition } from "@oarlock/terminal/conditions";
 import type { Verdict } from "@oarlock/terminal";
 import {
@@ -41,6 +32,7 @@ import { Permissions } from "./Permissions";
 import { SSHAccess } from "./SSHAccess";
 import { SQLExplorer } from "./SQLExplorer";
 import { Waits, type Step } from "./Waits";
+import { SessionPage } from "./pages/SessionPage";
 
 type View =
   | { kind: "list" }
@@ -59,17 +51,6 @@ const pages: { id: AdminPage; label: string; blurb: string }[] = [
   { id: "permissions", label: "Permissions", blurb: "Who may perform which actions on which devices." },
   { id: "sql", label: "SQL Explorer", blurb: "Read-only access to operational SQLite data." },
 ];
-
-function sameOriginSocketURL(advertised: string): string {
-  try {
-    const url = new URL(advertised);
-    url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    url.host = window.location.host;
-    return url.toString();
-  } catch {
-    return advertised;
-  }
-}
 
 export function App() {
   // The token lives in sessionStorage, not localStorage: a shared secret in a browser
@@ -619,81 +600,53 @@ export function App() {
           )}
 
           {view.kind === "terminal" && (
-            <section className="flex flex-col gap-3" data-testid="terminal">
-              <div className="flex items-center justify-between gap-3">
-            <span className="mono text-sm text-fg-muted">{view.session.id}</span>
-            <button
-              className="btn"
-              onClick={() => {
+            <SessionPage
+              session={view.session}
+              attach={view.attach}
+              readOnly={view.readOnly}
+              {...(view.watching ? { watching: view.watching } : {})}
+              onClose={() => setView({ kind: "list" })}
+              onLeave={() => {
                 setView({ kind: "list" });
                 void refresh();
               }}
-            >
-              Leave
-            </button>
-          </div>
-          <Terminal
-            url={sameOriginSocketURL(view.attach.url)}
-            ticket={view.attach.ticket}
-            device={view.session.device_id}
-            principal={view.session.principal}
-            {...(view.readOnly ? { readOnly: true } : {})}
-            renewTicket={() =>
-              client.current.renewAttach(view.session.id).then((a) => a.ticket)
-            }
-            onClosed={() => void refresh()}
-            style={{ height: "70vh" }}
-          />
-            </section>
+              onSessionEnded={() => void refresh()}
+              renewTicket={() =>
+                client.current.renewAttach(view.session.id).then((a) => a.ticket)
+              }
+            />
           )}
 
           {view.kind === "replay" && (
-            <section className="flex flex-col gap-3" data-testid="replay">
-              <div className="flex items-center justify-between gap-3">
-            <span className="mono text-sm text-fg-muted">{view.session.id}</span>
-            <button className="btn" onClick={() => setView({ kind: "list" })}>
-              Back
-            </button>
-          </div>
-          <Suspense
-            fallback={<p className="text-fg-muted">Loading the player…</p>}
-          >
-            <Player
+            <SessionPage
+              session={view.session}
               cast={view.cast}
-              verdict={view.verdict}
-              sessionID={view.session.id}
-              style={{ height: "70vh" }}
+              {...(view.verdict ? { verdict: view.verdict } : {})}
+              readOnly={false}
+              onClose={() => setView({ kind: "list" })}
+              onLeave={() => setView({ kind: "list" })}
+              onSessionEnded={() => {}}
+              renewTicket={() =>
+                client.current.renewAttach(view.session.id).then((a) => a.ticket)
+              }
             />
-          </Suspense>
-            </section>
           )}
 
           {view.kind === "failed" && (
-            <section
-          className="rounded-md border border-state-refused bg-bg-raised p-5"
-          data-testid="failure"
-          role="alert"
-        >
-          <h2 className="pb-1 text-lg font-semibold">{view.condition.headline}</h2>
-          {view.condition.nextAction && (
-            <p className="pb-3 text-fg-muted">{view.condition.nextAction}</p>
-          )}
-          <dl className="mono grid grid-cols-[auto_1fr] gap-x-3 text-sm text-fg-faint">
-            <dt className="not-mono">Reason</dt>
-            <dd className="select-all">{view.condition.id}</dd>
-            {view.reference && (
-              <>
-                <dt className="not-mono">Reference (for support)</dt>
-                <dd className="select-all">{view.reference}</dd>
-              </>
-            )}
-          </dl>
-          <div className="pt-4">
-            <button className="btn" onClick={() => setView({ kind: "list" })}>
-              Back
-            </button>
-          </div>
-            </section>
+            <SessionPage
+              readOnly={false}
+              failure={{
+                condition: view.condition,
+                detail: view.detail,
+                reference: view.reference,
+              }}
+              onClose={() => setView({ kind: "list" })}
+              onLeave={() => setView({ kind: "list" })}
+              onSessionEnded={() => {}}
+              renewTicket={() =>
+                Promise.reject(new Error("renewTicket has no session to renew a ticket for"))
+              }
+            />
           )}
         </div>
       </main>
