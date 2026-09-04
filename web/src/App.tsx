@@ -437,6 +437,28 @@ export function App() {
     setToken("");
   };
 
+  // The nav rail renders unconditionally — it is meant to stay reachable even while a
+  // wait or a full-page failure owns the body — so it is the one gesture that has to
+  // clear what it is leaving behind. `View` used to hold "which screen" and "am I mid
+  // flow" in one variable, so `setView({kind:"list"})` cleared both at once; splitting
+  // that into `route` + `opening` + `failure` means the nav click has to make both
+  // assignments itself rather than getting the second one for free.
+  //
+  // This is deliberately *not* a `useEffect` on `[route]`: `attach`, `observe` and
+  // `replay` also navigate to a session, and `observe`'s ticket can resolve while an
+  // unrelated `openSession` wait is genuinely still in flight (click Watch, then click
+  // Shell on another device before the watch ticket lands). An effect keyed on `route`
+  // cannot tell "the operator just escaped a dead screen" from "some other in-flight
+  // action just finished and happened to navigate" — it would clear the still-live wait
+  // out from under `openSession`, which is the exact "replacing one bug with a worse
+  // one" this fix has to avoid. Clearing only at the rail's own click handler reaches
+  // every case the review reproduced without touching those other flows.
+  function goToPage(id: NavPage) {
+    setOpening(null);
+    setFailure(null);
+    navigate({ kind: id });
+  }
+
   // Person and device render the fleet page unchanged for now — increments 3 and 4 give
   // them their own page — so both count as "on the fleet page" for the chrome below.
   const section: NavPage = route.kind === "person" || route.kind === "device" ? "search" : (route.kind as NavPage);
@@ -469,7 +491,7 @@ export function App() {
             <button
               key={page.id}
               className={`nav-item text-left ${section === page.id ? "nav-item-active" : ""}`}
-              onClick={() => navigate({ kind: page.id })}
+              onClick={() => goToPage(page.id)}
             >
               {page.label}
             </button>
@@ -501,7 +523,7 @@ export function App() {
               <button
                 key={page.id}
                 className={`nav-item whitespace-nowrap ${section === page.id ? "nav-item-active" : ""}`}
-                onClick={() => navigate({ kind: page.id })}
+                onClick={() => goToPage(page.id)}
               >
                 {page.label}
               </button>
@@ -697,8 +719,31 @@ function SessionRoute({
         const session = await client.session(id);
         if (cancelled) return;
         if (session.live) {
-          const attach = await client.renewAttach(id);
-          if (!cancelled) setState({ kind: "live", session, attach, readOnly: false });
+          // The session's own operator reattaches — `renewAttach` is refused to anyone
+          // else (apisrv.go's renewAttach: "Only the operator who opened it"). Try that
+          // first rather than pre-judging ownership from client-side state: `me` is
+          // only ever learned from opening a session yourself or an OIDC handoff, so on
+          // a cold link — the case this route exists for — it is routinely still ""
+          // when this runs, same as every other principal's `me` would be. Ownership
+          // is a fact the gateway already has to check, so ask it.
+          //
+          // A `not_found` here, after `client.session(id)` already proved the session
+          // exists, can only mean this principal is not its operator (renewAttach's
+          // check happens before it mints or revokes anything, so a non-owner's attempt
+          // costs nothing) — the same fact Fleet's own Watch button already acts on by
+          // minting through `observe` instead (api.ts's `observe`, not `renewAttach`).
+          // So the deep link falls back to the ticket that button would have minted,
+          // with the same shape: read-only, watching whoever the session belongs to.
+          try {
+            const attach = await client.renewAttach(id);
+            if (!cancelled) setState({ kind: "live", session, attach, readOnly: false });
+          } catch (err) {
+            if (!(err instanceof ApiError) || err.code !== "not_found") throw err;
+            const attach = await client.observe(id);
+            if (!cancelled) {
+              setState({ kind: "live", session, attach, readOnly: true, watching: session.principal });
+            }
+          }
           return;
         }
         if (session.recording_state === "recorded") {

@@ -620,6 +620,42 @@ test("the back button returns you to where you were", async ({ page }) => {
   await expect(page.getByTestId("permissions")).toHaveCount(0);
 });
 
+// The final review's B1: `opening` and `failure` gate every page body, but nothing used
+// to clear them when the nav rail navigated away — the URL changed and the clicked tab
+// lit up while the dead wait or failure stayed on screen underneath, and the browser's
+// own Back button was just as stuck. Reproduced the same way the review did: fail fast on
+// a device with no row to click, which leaves `opening` set on a failed step.
+test("navigating away from a dead wait actually renders the destination, not just the URL", async ({ page }) => {
+  await signIn(page);
+  await page.getByTestId("open-by-id").click();
+  await page.getByTestId("open-by-id-device").fill("no-such-device");
+  await page.getByTestId("open-by-id-submit").click();
+
+  const waits = page.getByTestId("waits");
+  await expect(waits).toBeVisible();
+  await expect(waits).toContainText("No such device, or you don't have access to it.", {
+    timeout: 20_000,
+  });
+
+  // The nav rail renders unconditionally — clicking it is the escape gesture this test
+  // exists to prove works, not merely that it does not throw.
+  await page.getByRole("button", { name: "Permissions", exact: true }).click();
+  await expect(page).toHaveURL(/\/ui\/permissions$/);
+  // The URL and the active tab agreeing is not enough — the bug produced exactly that
+  // while the old screen stayed mounted underneath. This is the assertion that matters:
+  // the wait is gone and the destination is actually on screen.
+  await expect(waits).toHaveCount(0);
+  await expect(page.getByTestId("permissions")).toBeVisible();
+
+  // The bug report's second symptom: Back did nothing, because nothing had cleared
+  // `opening` for it to fall back to. It works now because the nav click above already
+  // cleared it — Back only has to restore a URL, not resurrect a dead screen.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/ui\/$/);
+  await expect(waits).toHaveCount(0);
+  await expect(page.getByTestId("fleet")).toBeVisible();
+});
+
 test("an unknown path renders the search screen, not an error", async ({ page }) => {
   await signIn(page);
   await page.goto(`http://127.0.0.1:${dep!.http}/ui/nope/whatever`);
@@ -627,12 +663,15 @@ test("an unknown path renders the search screen, not an error", async ({ page })
   await expect(page.getByTestId("failure")).toHaveCount(0);
 });
 
-// The regression test named in the plan: pushState does not fire popstate, so the
-// router's state has to live in one external store rather than a per-component copy, or
-// only the component that called navigate() would learn the route changed. The nav rail
-// and the page body are the two readers of that store in this app, so both are asserted
-// together after every client-side navigation below — if either lagged the other, one of
-// these pairs would disagree.
+// Named for the regression the plan asked to guard: pushState does not fire popstate, so
+// the router's state has to live in one external store rather than a per-component copy,
+// or only the component that called navigate() would learn the route changed. What this
+// test actually exercises is narrower than the name suggests — production has exactly
+// one `useRouter()` call site (`App.tsx`), so a `useState` implementation would pass this
+// too; there is only one copy of `route` to disagree with itself. What is genuinely
+// checked, and worth having: that `navigate()` triggers a re-render at all, and that the
+// URL, the active nav class and the mounted page body agree after it — asserted as pairs
+// below so a lagging body or a stuck nav class would show up as a mismatch.
 test("every subscriber sees the same route after navigating", async ({ page }) => {
   await signIn(page);
 
@@ -677,6 +716,49 @@ test("a cold link to a session that does not exist renders the failure screen", 
   await expect(failure).toContainText("That isn't there, or you don't have access to it.");
   await expect(page.getByTestId("terminal")).toHaveCount(0);
   await expect(page.getByTestId("replay")).toHaveCount(0);
+});
+
+// The final review's B2: `/s/{id}`'s cold load called `client.renewAttach(id)`
+// unconditionally on a live session, and apisrv.go refuses that to anyone but the
+// session's own operator — so a principal who was not the one who opened it saw the same
+// "not_found" screen as a link to a session that never existed, even though the same
+// session is one click away through Fleet's own Watch button (which mints through
+// `observe` instead). visitor@example.com is seeded above with a shell grant on
+// treadmill-* but no observe grant, so the honest answer once the fix stops pre-empting
+// the gateway's own check is *that* refusal — not the sentence reserved for "there is
+// nothing here".
+test("a deep link to a live session you do not own reports why, not that it does not exist", async ({
+  page,
+  browser,
+}) => {
+  await signIn(page);
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByTestId("reason").fill("ticket AV-9700");
+  await row.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+
+  // This test's own session — the deployment is shared, so `.first()` is only
+  // unambiguous scoped to the terminal this test just opened.
+  const sessionID = (await page.getByTestId("terminal").locator(".mono").first().textContent())!;
+  expect(sessionID).toMatch(/^sess_/);
+
+  // A context of its own: sessionStorage is per browser context, and admin@mail.com —
+  // not this principal — is the one who opened the session above.
+  const visitorContext = await browser.newContext();
+  try {
+    const visitorPage = await visitorContext.newPage();
+    await signIn(visitorPage, visitorToken);
+    await visitorPage.goto(`http://127.0.0.1:${dep!.http}/ui/s/${sessionID}`);
+
+    const failure = visitorPage.getByTestId("failure");
+    await expect(failure).toBeVisible({ timeout: 15_000 });
+    await expect(failure).not.toContainText("That isn't there, or you don't have access to it.");
+    await expect(failure).toContainText("not_authorized");
+    await expect(failure).toContainText("don’t have access to do that here");
+    await expect(visitorPage.getByTestId("terminal")).toHaveCount(0);
+  } finally {
+    await visitorContext.close();
+  }
 });
 
 test("an administrator can edit, disable, and re-enable a device", async ({ page }) => {
