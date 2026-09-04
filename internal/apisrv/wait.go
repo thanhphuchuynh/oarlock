@@ -168,3 +168,17 @@ func (s *Server) awaitChange(ctx context.Context, row *sessions.Session,
 		}
 	}
 }
+
+// heldElsewhere names another node holding the device, or "" for nobody this gateway
+// knows of.
+//
+// A single-node gateway has no locator and always answers "". That is the whole
+// distinction the kill path needs: without it, "not running here" and "running on
+// another replica" are the same observation, and treating them as the same answer
+// leaves a stale row unkillable on the deployment where there is no other replica.
+func (s *Server) heldElsewhere(ctx context.Context, deviceID string) string {
+	if s.o.Owners == nil || deviceID == "" {
+		return ""
+	}
+	return s.o.Owners.Elsewhere(ctx, deviceID)
+}

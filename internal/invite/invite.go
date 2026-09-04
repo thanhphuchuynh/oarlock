@@ -179,6 +179,21 @@ type Inviter struct {
 	// is a shell running with nobody attached.
 	CollectDeadline time.Duration
 
+	// OnAbandoned is called when a device dialled in for a session and no operator
+	// ever collected it.
+	//
+	// It exists because the two surfaces have different shapes. Over SSH one goroutine
+	// invites and then blocks until the device arrives, so it is still there to write
+	// the session row whatever happens. The API returns as soon as it has a ticket —
+	// and if the operator never spends that ticket, there is nobody left holding the
+	// session at all. Without this the row stays `waking` for the life of the process
+	// while nothing runs, and at the default `sessions_per_device: 1` that device
+	// cannot be used again until the gateway restarts.
+	//
+	// This package deliberately knows nothing about the ledger, so the caller that
+	// owns it does the writing. Called from a timer goroutine: it must not block.
+	OnAbandoned func(sessionID, deviceID, reason string)
+
 	mu          sync.Mutex
 	pending     map[string]*Pending
 	attachments map[string]*Attachment
@@ -550,6 +565,12 @@ func (i *Inviter) Attach(ctx context.Context, token string, want ticket.Want,
 			i.log().Warn("no operator collected an attached device; releasing it",
 				"session", claims.SessionID, "device", claims.DeviceID, "after", collectBy)
 			a.Done()
+			// Releasing the device is only half of it. The session row has to stop
+			// saying it is live, or the device's slot is held by a session that is not
+			// running and nothing can ever free it.
+			if i.OnAbandoned != nil {
+				i.OnAbandoned(claims.SessionID, claims.DeviceID, "operator_gave_up")
+			}
 		}
 	}))
 

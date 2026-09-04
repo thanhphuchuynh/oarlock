@@ -47,7 +47,7 @@ type fixture struct {
 	agents *agentControls
 }
 
-func newFixture(t *testing.T, ratePerMin int) *fixture {
+func newFixture(t *testing.T, ratePerMin int, opts ...func(*apisrv.Options)) *fixture {
 	t.Helper()
 	authn, err := statictoken.Open("test", map[string]string{token: "phuc@example.com"})
 	if err != nil {
@@ -58,14 +58,18 @@ func newFixture(t *testing.T, ratePerMin int) *fixture {
 		live:   sessions.NewRegistry(),
 		agents: &agentControls{devices: []string{"rower-9001", "treadmill-4821"}},
 	}
-	api, err := apisrv.New(apisrv.Options{
+	o := apisrv.Options{
 		Sessions: f.ledger, Live: f.live, Authenticator: authn,
 		Agents: f.agents, RatePerMinute: ratePerMin, Log: quiet(),
 		SSH: &apisrv.SSHConnection{
 			Host: "127.0.0.1", Port: "2222", HostKey: "ssh-ed25519 AAAAtest",
 			KnownHosts: "[127.0.0.1]:2222 ssh-ed25519 AAAAtest", Fingerprint: "SHA256:test",
 		},
-	})
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	api, err := apisrv.New(o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -785,10 +789,22 @@ func TestKillEndsALiveSession(t *testing.T) {
 	}
 }
 
-// TestKillOnTheWrongNodeSaysSo: live in the ledger but not here means it is running
-// on another replica. A 404 would be a lie and a 500 would suggest we are broken.
+// heldBy is an ownership locator with a fixed answer.
+type heldBy string
+
+func (h heldBy) Elsewhere(context.Context, string) string { return string(h) }
+
+// TestKillOnTheWrongNodeSaysSo: live in the ledger, not running here, and another
+// replica holds the device. A 404 would be a lie and a 500 would suggest we are broken.
+//
+// This test used to omit the locator, which made it assert that *any* row live in the
+// ledger and absent here is remote. On a single-node gateway that is never true, and
+// the assumption made a stale row unkillable — see the test below, which is the case
+// this one was accidentally covering.
 func TestKillOnTheWrongNodeSaysSo(t *testing.T) {
-	f := newFixture(t, 0)
+	f := newFixture(t, 0, func(o *apisrv.Options) {
+		o.Owners = heldBy("wss://gw-b.example.org")
+	})
 	f.seed(t, "s1", "dev-1", "phuc@example.com") // live, but never registered here
 
 	resp, body := f.do(t, "DELETE", apisrv.Prefix+"/sessions/s1", token)
@@ -802,6 +818,44 @@ func TestKillOnTheWrongNodeSaysSo(t *testing.T) {
 	}
 	if !p.Retryable {
 		t.Error("a wrong-node conflict should be marked retryable")
+	}
+}
+
+// The bug this pair exists for, found by running the gateway locally.
+//
+// A session opened through the API whose operator never attached left a row saying
+// `waking` while nothing ran. With sessions_per_device at 1 that device was then
+// unusable: POST answered session_limit and DELETE answered wrong_node, on a gateway
+// that had no other node. Only a restart cleared it.
+func TestKillClosesAStaleRowOnASingleNodeGateway(t *testing.T) {
+	f := newFixture(t, 0) // no locator: one node, so nothing is held anywhere else
+	f.seed(t, "s1", "dev-1", "phuc@example.com")
+
+	resp, body := f.do(t, "DELETE", apisrv.Prefix+"/sessions/s1", token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Killed bool   `json:"killed"`
+		State  string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Killed || out.State != string(sessions.StateClosed) {
+		t.Fatalf("killed=%v state=%q, want true/closed", out.Killed, out.State)
+	}
+
+	// The point of closing it: the ledger stops claiming the device is busy.
+	row, err := f.ledger.Get(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Live() {
+		t.Fatalf("the row is still live: state %q", row.State)
+	}
+	if row.CloseReason != "admin_kill" {
+		t.Fatalf("close reason %q, want admin_kill", row.CloseReason)
 	}
 }
 
