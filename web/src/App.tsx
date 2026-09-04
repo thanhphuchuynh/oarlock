@@ -26,31 +26,39 @@ import {
   type LoginMode,
   type Session,
 } from "./api";
-import { SessionList } from "./SessionList";
 import { Fleet } from "./Fleet";
 import { Permissions } from "./Permissions";
 import { SSHAccess } from "./SSHAccess";
 import { SQLExplorer } from "./SQLExplorer";
 import { Waits, type Step } from "./Waits";
 import { SessionPage } from "./pages/SessionPage";
-
-type View =
-  | { kind: "list" }
-  | { kind: "opening"; device: string; steps: Step[]; reference?: string }
-  | { kind: "terminal"; session: Session; attach: Attach; readOnly: boolean; watching?: string }
-  | { kind: "replay"; session: Session; cast: string; verdict: Verdict | undefined }
-  | { kind: "failed"; condition: Condition; detail: string; reference: string };
+import { useRouter } from "./router/useRouter";
 
 const tokenKey = "oarlock.token";
 
-type AdminPage = "fleet" | "sessions" | "permissions" | "sql";
+// The three destinations left on the nav rail once routes replace the tabs. "Sessions"
+// had no route of its own in Task 2's design — a session is reached from its device's own
+// row, from a person's page (a later increment), or by the link in `route.session` — so
+// it is not a page here either.
+type NavPage = "search" | "permissions" | "sql";
 
-const pages: { id: AdminPage; label: string; blurb: string }[] = [
-  { id: "fleet", label: "Fleet", blurb: "Devices, who can reach them, and what has been run on them." },
-  { id: "sessions", label: "Sessions", blurb: "Every session the gateway has brokered, and why." },
+const pages: { id: NavPage; label: string; blurb: string }[] = [
+  { id: "search", label: "Fleet", blurb: "Devices, who can reach them, and what has been run on them." },
   { id: "permissions", label: "Permissions", blurb: "Who may perform which actions on which devices." },
   { id: "sql", label: "SQL Explorer", blurb: "Read-only access to operational SQLite data." },
 ];
+
+// What a click on Attach, Watch, Replay or "open a shell" already produced, waiting to be
+// picked up the one time its route is reached. `/s/{id}` always loads its own data (see
+// `SessionRoute` below) — that is what lets a pasted link work cold — but a ticket already
+// in hand needs no second round trip, and `renewAttach` is refused to anyone but the
+// session's own operator (internal/apisrv/apisrv.go's renewAttach: "Only the operator who
+// opened it"), which is exactly wrong for a Watch ticket minted for somebody else's
+// session. So the click handlers below keep minting through the endpoint that already
+// grants the right thing, and hand the result to the route rather than re-deriving it.
+type SessionBypass =
+  | { sessionID: string; kind: "live"; session: Session; attach: Attach; readOnly: boolean; watching?: string }
+  | { sessionID: string; kind: "replay"; session: Session; cast: string; verdict?: Verdict };
 
 export function App() {
   // The token lives in sessionStorage, not localStorage: a shared secret in a browser
@@ -61,7 +69,8 @@ export function App() {
   const client = useRef(new Client("", token));
   client.current.setToken(token);
 
-  const [view, setView] = useState<View>({ kind: "list" });
+  const { route, navigate } = useRouter();
+
   const [sessions, setSessions] = useState<Session[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [me, setMe] = useState("");
@@ -73,7 +82,15 @@ export function App() {
   // not in front of you, and how an unregistered id gets its own failure screen instead
   // of being unreachable through the UI.
   const [openByID, setOpenByID] = useState<{ device: string; reason: string } | null>(null);
-  const [adminPage, setAdminPage] = useState<AdminPage>("fleet");
+  // The wait between clicking Shell and having a session id to route to — there is no URL
+  // for "a device is waking up", so this stays local state rather than a route.
+  const [opening, setOpening] = useState<{ device: string; steps: Step[]; reference?: string } | null>(null);
+  // The full-page failure screen for an action taken from the fleet page (kill, disable,
+  // delete, and the like) — as before, it replaces whatever page it interrupted.
+  const [failure, setFailure] = useState<{ condition: Condition; detail: string; reference: string } | null>(null);
+  // A ticket a click just minted, waiting for `/s/{id}`'s render to pick it up once. See
+  // `SessionBypass` above for why this exists at all.
+  const [bypass, setBypass] = useState<SessionBypass | null>(null);
 
   // What each poll asks for, and how often.
   //
@@ -82,21 +99,17 @@ export function App() {
   // idle tab, and enough to start collecting 429s with a second tab open. Two changes.
   //
   // **Ask for what is on screen.** Permissions and SQL Explorer are not live views, so
-  // they poll nothing at all; the other two ask only for the lists they render.
+  // they poll nothing at all; the fleet page asks for both lists it renders.
   //
   // **Stop asking for `/agents`.** The gateway computes `device.connected` from exactly
   // the list that endpoint returns, so fetching both was the same duplication the fleet
   // page used to show: one fact, two sources, and a window where they disagree.
-  const refresh = useCallback(async (scope: AdminPage | "all" = "all") => {
+  const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const wantsDevices = scope === "all" || scope === "fleet";
-      const [live, fleet] = await Promise.all([
-        client.current.sessions(),
-        wantsDevices ? client.current.devices() : Promise.resolve(null),
-      ]);
+      const [live, fleet] = await Promise.all([client.current.sessions(), client.current.devices()]);
       setSessions(live.sessions);
-      if (fleet) setDevices(fleet.devices);
+      setDevices(fleet.devices);
       setListError(null);
       if (live.sessions.length > 0 && !me) setMe(live.sessions[0]!.principal);
     } catch (err) {
@@ -107,11 +120,12 @@ export function App() {
   useEffect(() => {
     void refresh();
     // A page that renders neither list has nothing to poll for.
-    if (adminPage !== "fleet" && adminPage !== "sessions") return;
+    const rendersFleet = route.kind === "search" || route.kind === "person" || route.kind === "device";
+    if (!rendersFleet) return;
     const t = setInterval(() => {
       // A background tab polling a rate-limited API is pure waste.
       if (document.hidden) return;
-      void refresh(adminPage);
+      void refresh();
     }, 4000);
     // A tab coming back to the front is behind by however long it was away, so it asks
     // for everything once rather than waiting out the interval.
@@ -123,7 +137,7 @@ export function App() {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh, adminPage]);
+  }, [refresh, route.kind]);
 
   // Two things happen before anything is rendered, and only when there is no token yet.
   //
@@ -171,7 +185,7 @@ export function App() {
       },
       { key: "tunnel", label: "Opening the tunnel", state: "pending" },
     ];
-    setView({ kind: "opening", device, steps });
+    setOpening({ device, steps });
 
     try {
       const { session, attach } = await client.current.open(device, reason, {
@@ -179,8 +193,7 @@ export function App() {
         rows: 32,
       });
       setMe(session.principal);
-      setView({
-        kind: "opening",
+      setOpening({
         device,
         steps: steps.map((s) =>
           s.key === "wake"
@@ -190,16 +203,19 @@ export function App() {
               : s,
         ),
       });
-      // The steps disappear on success: they are scaffolding for a wait, not a log.
-      setView({ kind: "terminal", session, attach, readOnly: false });
+      // The steps disappear on success: they are scaffolding for a wait, not a log. What
+      // opened this session already has its ticket, so the route that renders it does not
+      // have to mint a second one.
+      setBypass({ sessionID: session.id, kind: "live", session, attach, readOnly: false });
+      setOpening(null);
+      navigate({ kind: "session", session: session.id });
       void refresh();
     } catch (err) {
       const e = err instanceof ApiError ? err : null;
       const condition = e?.condition ?? getCondition("internal");
       // The step that failed *is* the diagnosis, so the failure replaces its own line
       // rather than appearing as a banner somewhere else.
-      setView({
-        kind: "opening",
+      setOpening({
         device,
         // `exactOptionalPropertyTypes` is on, so an absent field is absent rather than
         // present-and-undefined. That is the setting doing its job: "there is no
@@ -223,7 +239,8 @@ export function App() {
   async function attach(s: Session) {
     try {
       const a = await client.current.renewAttach(s.id);
-      setView({ kind: "terminal", session: s, attach: a, readOnly: false });
+      setBypass({ sessionID: s.id, kind: "live", session: s, attach: a, readOnly: false });
+      navigate({ kind: "session", session: s.id });
     } catch (err) {
       fail(err);
     }
@@ -232,13 +249,15 @@ export function App() {
   async function observe(s: Session) {
     try {
       const a = await client.current.observe(s.id);
-      setView({
-        kind: "terminal",
+      setBypass({
+        sessionID: s.id,
+        kind: "live",
         session: s,
         attach: a,
         readOnly: true,
         watching: s.principal,
       });
+      navigate({ kind: "session", session: s.id });
     } catch (err) {
       fail(err);
     }
@@ -246,21 +265,29 @@ export function App() {
 
   async function replay(s: Session) {
     try {
-      const res = await fetch(`/api/v1/recordings/${encodeURIComponent(s.id)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const body: unknown = await res.json().catch(() => ({}));
-        throw new ApiError(res.status, body as Record<string, unknown>);
-      }
-      const payload = (await res.json()) as { cast: string; verdict?: Verdict };
+      const { cast, verdict } = await fetchRecording(s.id);
       // The verdict comes from the gateway, which is the only place that has the manifest
       // and a key the deployment trusts. If it did not send one, the player renders
       // "unverified" — which is the honest answer, and not the same as fine.
-      setView({ kind: "replay", session: s, cast: payload.cast, verdict: payload.verdict });
+      setBypass({ sessionID: s.id, kind: "replay", session: s, cast, ...(verdict ? { verdict } : {}) });
+      navigate({ kind: "session", session: s.id });
     } catch (err) {
       fail(err);
     }
+  }
+
+  // The one place that reads a recording — the click that already has the `Session` row,
+  // and the cold load of `/s/{id}` that has only its id. Kept as a fetch rather than a
+  // `Client` method because it returns a raw cast file next to the JSON, same as before.
+  async function fetchRecording(sessionID: string): Promise<{ cast: string; verdict?: Verdict }> {
+    const res = await fetch(`/api/v1/recordings/${encodeURIComponent(sessionID)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const body: unknown = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, body as Record<string, unknown>);
+    }
+    return (await res.json()) as { cast: string; verdict?: Verdict };
   }
 
   async function kill(s: Session) {
@@ -336,8 +363,7 @@ export function App() {
 
   function fail(err: unknown) {
     const e = err instanceof ApiError ? err : null;
-    setView({
-      kind: "failed",
+    setFailure({
       condition: e?.condition ?? getCondition("internal"),
       detail: e?.detail ?? String(err),
       reference: e?.reference ?? "",
@@ -411,12 +437,15 @@ export function App() {
     setToken("");
   };
 
-  function showAdmin(page: AdminPage) {
-    setView({ kind: "list" });
-    setAdminPage(page);
-  }
-
-  const current = pages.find((p) => p.id === adminPage)!;
+  // Person and device render the fleet page unchanged for now — increments 3 and 4 give
+  // them their own page — so both count as "on the fleet page" for the chrome below.
+  const section: NavPage = route.kind === "person" || route.kind === "device" ? "search" : (route.kind as NavPage);
+  const current = pages.find((p) => p.id === section)!;
+  const rendersFleet = route.kind === "search" || route.kind === "person" || route.kind === "device";
+  // The title, blurb, sheet index and per-page toolbar belong to the three list-like
+  // pages. The wait, the session page and the full-page failure each carry their own
+  // heading (or none), exactly as the View union's non-"list" members did.
+  const showChrome = !opening && !failure && route.kind !== "session";
 
   return (
     <div className="min-h-screen bg-bg lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)]">
@@ -439,8 +468,8 @@ export function App() {
           {pages.map((page) => (
             <button
               key={page.id}
-              className={`nav-item text-left ${adminPage === page.id ? "nav-item-active" : ""}`}
-              onClick={() => showAdmin(page.id)}
+              className={`nav-item text-left ${section === page.id ? "nav-item-active" : ""}`}
+              onClick={() => navigate({ kind: page.id })}
             >
               {page.label}
             </button>
@@ -471,8 +500,8 @@ export function App() {
             {pages.map((page) => (
               <button
                 key={page.id}
-                className={`nav-item whitespace-nowrap ${adminPage === page.id ? "nav-item-active" : ""}`}
-                onClick={() => showAdmin(page.id)}
+                className={`nav-item whitespace-nowrap ${section === page.id ? "nav-item-active" : ""}`}
+                onClick={() => navigate({ kind: page.id })}
               >
                 {page.label}
               </button>
@@ -486,24 +515,24 @@ export function App() {
           <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border-strong pb-4">
             <div className="min-w-0">
               <h1 className="text-xl font-semibold">
-                {view.kind === "list" ? current.label : "Oarlock"}
+                {showChrome ? current.label : "Oarlock"}
               </h1>
-              {view.kind === "list" && (
+              {showChrome && (
                 <p className="mt-1 text-sm text-fg-muted">{current.blurb}</p>
               )}
             </div>
             {/* The title block. A sheet says which one it is out of how many, and the
                 navigation on the left is that index — so the number is wayfinding rather
                 than an ornament counting sections. */}
-            {view.kind === "list" && (
+            {showChrome && (
               <p className="label shrink-0 text-right leading-relaxed">
                 <span className="block text-fg">
-                  Sheet {pages.findIndex((p) => p.id === adminPage) + 1} of {pages.length}
+                  Sheet {pages.findIndex((p) => p.id === section) + 1} of {pages.length}
                 </span>
                 File no. OARLOCK-v0
               </p>
             )}
-            {view.kind === "list" && adminPage === "fleet" && (
+            {showChrome && rendersFleet && (
               <div className="flex gap-2">
                 <button
                   className="btn"
@@ -519,7 +548,7 @@ export function App() {
             )}
           </header>
 
-          {view.kind === "list" && (
+          {showChrome && (
             <>
               {listError && (
                 <p className="rounded-md border border-state-refused/50 bg-bg-raised p-4" role="alert">
@@ -528,7 +557,7 @@ export function App() {
                 </p>
               )}
 
-              {adminPage === "fleet" && (
+              {rendersFleet && (
                 <Fleet
                   client={client.current}
                   devices={devices}
@@ -546,28 +575,8 @@ export function App() {
                 />
               )}
 
-              {adminPage === "sessions" && (
-                <section className="panel" id="sessions">
-                  <div className="panel-header">
-                    <p className="text-sm text-fg-muted">
-                      <span className="font-semibold text-fg">{sessions.length}</span> recorded
-                      {" · "}
-                      {sessions.filter((s) => s.live).length} live now
-                    </p>
-                  </div>
-                  <SessionList
-                    sessions={sessions}
-                    me={me}
-                    onAttach={(s) => void attach(s)}
-                    onObserve={(s) => void observe(s)}
-                    onReplay={(s) => void replay(s)}
-                    onKill={(s) => void kill(s)}
-                  />
-                </section>
-              )}
-
-              {adminPage === "permissions" && <Permissions client={client.current} />}
-              {adminPage === "sql" && <SQLExplorer client={client.current} />}
+              {route.kind === "permissions" && <Permissions client={client.current} />}
+              {route.kind === "sql" && <SQLExplorer client={client.current} />}
 
               {deviceDialog && (
                 <DeviceDrawer
@@ -588,60 +597,35 @@ export function App() {
             </>
           )}
 
-          {view.kind === "opening" && (
+          {opening && (
             <section className="flex flex-col gap-4" data-testid="waits">
-              <Waits steps={view.steps} {...(view.reference ? { reference: view.reference } : {})} />
+              <Waits steps={opening.steps} {...(opening.reference ? { reference: opening.reference } : {})} />
               <div>
-                <button className="btn" onClick={() => setView({ kind: "list" })}>
+                <button className="btn" onClick={() => setOpening(null)}>
                   Back
                 </button>
               </div>
             </section>
           )}
 
-          {view.kind === "terminal" && (
-            <SessionPage
-              session={view.session}
-              attach={view.attach}
-              readOnly={view.readOnly}
-              {...(view.watching ? { watching: view.watching } : {})}
-              onClose={() => setView({ kind: "list" })}
-              onLeave={() => {
-                setView({ kind: "list" });
-                void refresh();
-              }}
-              onSessionEnded={() => void refresh()}
-              renewTicket={() =>
-                client.current.renewAttach(view.session.id).then((a) => a.ticket)
-              }
+          {route.kind === "session" && !opening && !failure && (
+            <SessionRoute
+              client={client.current}
+              id={route.session}
+              bypass={bypass}
+              onConsumeBypass={() => setBypass(null)}
+              fetchRecording={fetchRecording}
+              onBack={() => navigate({ kind: "search" })}
+              refresh={() => void refresh()}
             />
           )}
 
-          {view.kind === "replay" && (
-            <SessionPage
-              session={view.session}
-              cast={view.cast}
-              {...(view.verdict ? { verdict: view.verdict } : {})}
-              readOnly={false}
-              onClose={() => setView({ kind: "list" })}
-              onLeave={() => setView({ kind: "list" })}
-              onSessionEnded={() => {}}
-              renewTicket={() =>
-                client.current.renewAttach(view.session.id).then((a) => a.ticket)
-              }
-            />
-          )}
-
-          {view.kind === "failed" && (
+          {failure && (
             <SessionPage
               readOnly={false}
-              failure={{
-                condition: view.condition,
-                detail: view.detail,
-                reference: view.reference,
-              }}
-              onClose={() => setView({ kind: "list" })}
-              onLeave={() => setView({ kind: "list" })}
+              failure={failure}
+              onClose={() => setFailure(null)}
+              onLeave={() => setFailure(null)}
               onSessionEnded={() => {}}
               renewTicket={() =>
                 Promise.reject(new Error("renewTicket has no session to renew a ticket for"))
@@ -651,6 +635,151 @@ export function App() {
         </div>
       </main>
     </div>
+  );
+}
+
+// One session, three bodies, and how it gets whichever one applies.
+//
+// `/s/{id}` loads its own data: fetch the session, and branch on what it is. A live
+// session mints an attach ticket the same way a reload would (renewAttach is refused to
+// anyone but the session's own operator, so this is exactly the ticket an owner reattaching
+// gets); a closed, recorded one fetches the cast; anything else is the failed body. A
+// `bypass` from a click that already minted the right ticket — including a Watch ticket
+// renewAttach could never grant — is used once and then forgotten, so a later visit to the
+// same URL (a reload, the back button) goes through the same fetch as a pasted link.
+type SessionRouteState =
+  | { kind: "loading" }
+  | { kind: "live"; session: Session; attach: Attach; readOnly: boolean; watching?: string }
+  | { kind: "replay"; session: Session; cast: string; verdict?: Verdict }
+  | { kind: "failed"; condition: Condition; detail: string; reference: string };
+
+function SessionRoute({
+  client,
+  id,
+  bypass,
+  onConsumeBypass,
+  fetchRecording,
+  onBack,
+  refresh,
+}: {
+  client: Client;
+  id: string;
+  bypass: SessionBypass | null;
+  onConsumeBypass: () => void;
+  fetchRecording: (sessionID: string) => Promise<{ cast: string; verdict?: Verdict }>;
+  onBack: () => void;
+  /** Refreshes the fleet page's session/device lists — void refresh() from App. */
+  refresh: () => void;
+}) {
+  const [state, setState] = useState<SessionRouteState>({ kind: "loading" });
+
+  useEffect(() => {
+    if (bypass && bypass.sessionID === id) {
+      setState(
+        bypass.kind === "live"
+          ? {
+              kind: "live",
+              session: bypass.session,
+              attach: bypass.attach,
+              readOnly: bypass.readOnly,
+              ...(bypass.watching ? { watching: bypass.watching } : {}),
+            }
+          : { kind: "replay", session: bypass.session, cast: bypass.cast, ...(bypass.verdict ? { verdict: bypass.verdict } : {}) },
+      );
+      onConsumeBypass();
+      return;
+    }
+
+    let cancelled = false;
+    setState({ kind: "loading" });
+    void (async () => {
+      try {
+        const session = await client.session(id);
+        if (cancelled) return;
+        if (session.live) {
+          const attach = await client.renewAttach(id);
+          if (!cancelled) setState({ kind: "live", session, attach, readOnly: false });
+          return;
+        }
+        if (session.recording_state === "recorded") {
+          const { cast, verdict } = await fetchRecording(id);
+          if (!cancelled) setState({ kind: "replay", session, cast, ...(verdict ? { verdict } : {}) });
+          return;
+        }
+        if (!cancelled) {
+          setState({
+            kind: "failed",
+            condition: getCondition("not_found"),
+            detail: "No recording for this session.",
+            reference: "",
+          });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const e = err instanceof ApiError ? err : null;
+        setState({
+          kind: "failed",
+          condition: e?.condition ?? getCondition("internal"),
+          detail: e?.detail ?? String(err),
+          reference: e?.reference ?? "",
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `bypass` is deliberately not a dependency beyond the id check above: it is consumed
+    // at most once, the moment its own route is reached, never re-applied to a later
+    // render of the same id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, id]);
+
+  if (state.kind === "loading") {
+    return <Waits steps={[{ key: "session", label: "Loading the session…", state: "waiting" }]} />;
+  }
+
+  if (state.kind === "live") {
+    return (
+      <SessionPage
+        session={state.session}
+        attach={state.attach}
+        readOnly={state.readOnly}
+        {...(state.watching ? { watching: state.watching } : {})}
+        onClose={onBack}
+        onLeave={() => {
+          onBack();
+          refresh();
+        }}
+        onSessionEnded={refresh}
+        renewTicket={() => client.renewAttach(state.session.id).then((a) => a.ticket)}
+      />
+    );
+  }
+
+  if (state.kind === "replay") {
+    return (
+      <SessionPage
+        session={state.session}
+        cast={state.cast}
+        {...(state.verdict ? { verdict: state.verdict } : {})}
+        readOnly={false}
+        onClose={onBack}
+        onLeave={onBack}
+        onSessionEnded={() => {}}
+        renewTicket={() => client.renewAttach(state.session.id).then((a) => a.ticket)}
+      />
+    );
+  }
+
+  return (
+    <SessionPage
+      readOnly={false}
+      failure={{ condition: state.condition, detail: state.detail, reference: state.reference }}
+      onClose={onBack}
+      onLeave={onBack}
+      onSessionEnded={() => {}}
+      renewTicket={() => Promise.reject(new Error("renewTicket has no session to renew a ticket for"))}
+    />
   );
 }
 

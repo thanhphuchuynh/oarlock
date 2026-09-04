@@ -319,11 +319,15 @@ test("the session list explains itself", async ({ page }) => {
   await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Leave" }).click();
 
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  // There is no standalone session list to click a tab to: a session's history lives on
+  // its device's own row now, which `Leave` returns to. `Leave` unmounts the fleet page
+  // (the route was "session" while attached) and remounts it collapsed, same as it always
+  // did going back to "list" — so the row is reopened rather than assumed still expanded.
+  const reopened = await openRow(page, "treadmill-4821");
   // The reason the operator gave is on the row, which is what turns a list into an
   // explanation.
-  await expect(page.getByText("ticket AV-9300").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Not recorded")).toHaveCount(0);
+  await expect(reopened.getByText("ticket AV-9300")).toBeVisible({ timeout: 30_000 });
+  await expect(reopened.getByText("Not recorded")).toHaveCount(0);
 });
 
 // A connected agent is a state of its device, not a second list of the same devices. The
@@ -518,11 +522,43 @@ test("replay shows the integrity verdict above the recording", async ({ page }) 
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Leave" }).click();
 
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
-  const finished = page.locator(`tr[data-session="${sessionID}"]`);
-  await expect(finished).toBeVisible({ timeout: 30_000 });
-  await finished.getByRole("button", { name: "Replay" }).click({ timeout: 30_000 });
+  // The device's row lists its 5 most recent sessions with no id of its own to target by
+  // (that is what the old aggregate table's `data-session` was for), only "newest first" —
+  // so this waits for *this* session's own close and recording to finalise before the row
+  // is asked for its Replay button, the same way the old table's poll was waited out. Ours
+  // being newest is what then makes `.first()` unambiguous rather than a second race.
+  await waitFor(async () => {
+    const res = await fetch(`http://127.0.0.1:${dep!.http}/api/v1/sessions/${sessionID}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { live: boolean; recording_state: string };
+    return !body.live && body.recording_state === "recorded";
+  }, "the session to close and its recording to finalise");
+  // The fleet page polls on its own four-second timer, so confirming the server's state
+  // is not the same as the page already showing it — the reload after "Leave" may well
+  // have landed before this session closed. A reload here (safe: this is `/ui/`, the one
+  // path depth that is not affected by the asset defect noted below) asks fresh rather
+  // than waiting out the poll, which is what let an older, already-recorded session on
+  // this device answer `.first()` before this one did.
+  await page.reload();
+
+  // Replay now lives at the session's own route, `/s/{id}`, reached the same way Attach
+  // and Watch are: a button on the device's own row, which `Leave` already returned to
+  // (reopened for the same reason "the session list explains itself" reopens it — the
+  // fleet page remounted collapsed). This is *not* a hard reload of that URL: doing that
+  // here would hit a separate, pre-existing defect that this task surfaces rather than
+  // causes — `vite.config.ts` builds the console with `base: "./"`, so a relative asset
+  // URL in `index.html` resolves one directory too deep under any two-segment route
+  // (`/s/{id}`, `/p/{principal}`, `/d/{device}`) and the bundle 404s before React ever
+  // runs. That is out of `web/src/App.tsx`'s reach; see the task report.
+  const reopened = await openRow(page, "treadmill-4821");
+  const replayButton = reopened.getByRole("button", { name: "Replay" }).first();
+  await expect(replayButton).toBeVisible({ timeout: 30_000 });
+  await replayButton.click();
   await expect(page.getByTestId("replay")).toBeVisible();
+  // The click navigated, so the URL is now this session's own — the point of the route.
+  await expect(page).toHaveURL(new RegExp(`/ui/s/${sessionID}$`));
 
   // The verdict, above the player, from the gateway's own verifier — a page cannot
   // compute this for itself without also being able to be lied to about it.
