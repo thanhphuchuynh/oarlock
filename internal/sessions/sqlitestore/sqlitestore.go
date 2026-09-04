@@ -82,6 +82,38 @@ CREATE INDEX IF NOT EXISTS sessions_by_state     ON sessions(state, created_at);
 // rows the ledger considers finished.
 const liveState = `state NOT IN ('closed','rejected')`
 
+// createdAtCanon reformats the TEXT created_at column to a fixed-width shape before
+// it is compared to a Since/Until bound.
+//
+// created_at is written by ts() below using time.RFC3339Nano, which trims a *zero*
+// fraction entirely rather than padding it. That makes a raw `created_at >= ?`
+// string comparison wrong at a second boundary: "…T00:00:00.5Z" (half a second
+// after midnight) sorts *before* "…T00:00:00Z" (exactly midnight), because '.'
+// (0x2E) is less than 'Z' (0x5A) — a row created later in the same second compares
+// as earlier. Since most rows carry a fraction (they are stamped from the wall
+// clock) and a bound landing exactly on a second often does not, a naive
+// comparison silently drops real rows in the boundary second.
+//
+// strftime() reformats both the column and the bound to the same fixed-width
+// "…HH:MM:SS.mmm" shape first (confirmed against this driver: it parses the 'Z'
+// suffix and any 0-9 digit fraction, and always emits exactly three), so the
+// comparison that follows is between strings of matching precision and is
+// therefore chronological rather than lexicographic-by-accident. The cost: it
+// makes created_at, not the bare column, the left-hand side of the predicate, so
+// the query planner cannot use it to narrow an index range — a device/principal/
+// state equality filter combined with a range still uses the index for its
+// equality prefix, and this table has no created_at-only index for a bare range
+// query to lose anyway. Padding the *bound* alone (formatting Since as
+// "…T00:00:00.000000000Z") was rejected: it fixes a whole-second bound but still
+// mis-orders a bound that itself carries a sub-second fraction against a row that
+// happens to land exactly on a second, for the same '.' < 'Z' reason.
+const createdAtCanon = `strftime('%Y-%m-%dT%H:%M:%f', created_at)`
+
+// boundCanon is createdAtCanon's counterpart for a query argument: it must go
+// through the identical reformatting, or the two sides are being compared at
+// different precisions.
+const boundCanon = `strftime('%Y-%m-%dT%H:%M:%f', ?)`
+
 // holdsDevice and isForward are sessions.HoldsDevice expressed in SQL, split so a
 // query can ask for either side. The two definitions have to agree; a test asserts it
 // rather than trusting that whoever adds the next profile reads both files.
@@ -352,6 +384,16 @@ func (s *Store) List(ctx context.Context, q sessions.Query) ([]*sessions.Session
 	if q.Unattended != nil {
 		where = append(where, "unattended = ?")
 		args = append(args, boolToInt(*q.Unattended))
+	}
+	// Half-open [Since, Until): Since is inclusive, Until is not — see createdAtCanon
+	// above for why this is not a bare `created_at >= ?` / `created_at < ?`.
+	if !q.Since.IsZero() {
+		where = append(where, createdAtCanon+" >= "+boundCanon)
+		args = append(args, ts(q.Since))
+	}
+	if !q.Until.IsZero() {
+		where = append(where, createdAtCanon+" < "+boundCanon)
+		args = append(args, ts(q.Until))
 	}
 	if q.After != "" {
 		where = append(where, "id > ?")

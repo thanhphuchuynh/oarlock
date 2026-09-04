@@ -138,6 +138,14 @@ type Query struct {
 	Unattended *bool
 	Limit      int
 	After      string
+
+	// Since and Until bound the range on CreatedAt, half-open: [Since, Until).
+	//
+	// Half-open so that two adjacent ranges partition without overlap and a month
+	// boundary belongs to exactly one of them. Zero means absent, the same as every
+	// other optional field here — not "the beginning of time".
+	Since time.Time
+	Until time.Time
 }
 
 // Store is the ledger.
@@ -329,6 +337,15 @@ func (m *Memory) List(_ context.Context, q Query) ([]*Session, string, error) {
 			continue
 		}
 		if q.Unattended != nil && s.Unattended != *q.Unattended {
+			continue
+		}
+		// Half-open [Since, Until): Since is inclusive, Until is not. Memory holds
+		// real time.Time, so this is a direct comparison — the reference the SQL
+		// side (sqlitestore.List) has to agree with despite its TEXT encoding.
+		if !q.Since.IsZero() && s.CreatedAt.Before(q.Since) {
+			continue
+		}
+		if !q.Until.IsZero() && !s.CreatedAt.Before(q.Until) {
 			continue
 		}
 		cp := *s
