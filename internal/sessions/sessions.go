@@ -164,6 +164,9 @@ type Memory struct {
 
 	mu sync.Mutex
 	by map[string]*Session
+	// changed is closed and replaced whenever any session's State moves. See
+	// bumpLocked in wait.go.
+	changed chan struct{}
 }
 
 var _ Store = (*Memory)(nil)
@@ -182,7 +185,8 @@ func NewMemory(l Limits, now func() time.Time) *Memory {
 	if now == nil {
 		now = time.Now
 	}
-	return &Memory{limits: l, now: now, by: make(map[string]*Session)}
+	return &Memory{limits: l, now: now, by: make(map[string]*Session),
+		changed: make(chan struct{})}
 }
 
 // Create inserts under one lock, so the check and the insert cannot be separated.
@@ -253,7 +257,15 @@ func (m *Memory) Update(_ context.Context, id string, f func(*Session) error) er
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	return f(s)
+	// The callback is handed the live row, so what it did to State is only knowable by
+	// comparing. Waking waiters for any other field would be waking them for changes
+	// nobody is waiting on.
+	before := s.State
+	err := f(s)
+	if s.State != before {
+		m.bumpLocked()
+	}
+	return err
 }
 
 // Finish finalises a row. The close reason is written once: a session that already
@@ -278,6 +290,10 @@ func (m *Memory) Finish(_ context.Context, id string, r Result) error {
 	}
 	s.BytesIn, s.BytesOut, s.BytesDropped = r.BytesIn, r.BytesOut, r.BytesDropped
 	s.ClosedAt = m.now()
+	// The transition that matters most to somebody waiting: it is the last one this
+	// session will ever make, and a waiter that missed it would block until its
+	// deadline for a state machine that has stopped.
+	m.bumpLocked()
 	return nil
 }
 

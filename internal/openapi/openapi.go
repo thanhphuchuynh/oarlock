@@ -185,6 +185,24 @@ func parametersFor(r apisrv.RouteInfo) []parameter {
 		})
 	}
 
+	// The state a session is in changes on its own, so the useful read is usually the
+	// *next* one. Named here because an SDK cannot long-poll an endpoint whose spec
+	// does not admit the parameters.
+	if r.OperationID == "getSession" {
+		out = append(out,
+			parameter{Name: "wait", In: "query", Schema: &schema{Type: "string"},
+				Description: "Hold the request until the session's state changes, as a " +
+					"Go duration such as `30s`. Clamped to 60s. Absent or `0` answers " +
+					"immediately. A wait that expires is still a 200 with the unchanged " +
+					"session: \"still the same\" is an answer, not an error."},
+			parameter{Name: "state", In: "query", Schema: &schema{Type: "string"},
+				Description: "The state you already have. With it, a transition that " +
+					"happened between your last read and this request is reported " +
+					"immediately instead of being missed; without it, the wait is " +
+					"relative to whatever the state is when the request arrives."},
+		)
+	}
+
 	// Listing endpoints page with a cursor. Named here rather than inferred, because the
 	// alternative was every SDK author discovering it from a header.
 	if r.Method == "GET" && !strings.Contains(r.Path, "{") &&

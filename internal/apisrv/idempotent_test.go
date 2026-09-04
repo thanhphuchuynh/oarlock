@@ -33,10 +33,17 @@ type fakeInviter struct {
 	// gate, when non-nil, holds Invite until it is closed — which is how a second
 	// request can arrive while the first is still running.
 	gate chan struct{}
+	// entered is closed the first time Invite is reached, so a test can know the
+	// first request is genuinely parked rather than hoping it got there first.
+	entered chan struct{}
+	once    sync.Once
 }
 
 func (f *fakeInviter) Invite(_ context.Context, _ *plugin.Device,
 	req invite.Request) (*invite.Pending, error) {
+	if f.entered != nil {
+		f.once.Do(func() { close(f.entered) })
+	}
 	if f.gate != nil {
 		<-f.gate
 	}
@@ -64,11 +71,20 @@ type keyFixture struct {
 	srv     *httptest.Server
 	inviter *fakeInviter
 	keys    *idempotency.Memory
+	ledger  sessions.Store
 }
 
 const keyToken = "idempotency-test-token-0123456789"
 
 func newKeyFixture(t *testing.T, perDevice int) *keyFixture {
+	t.Helper()
+	return newKeyFixtureWithStore(t, sessions.NewMemory(
+		sessions.Limits{PerDevice: perDevice, PerPrincipal: 100}, nil))
+}
+
+// newKeyFixtureWithStore lets a test supply the ledger, so the long-poll fallback can be
+// exercised against a store that does not implement sessions.Waiter.
+func newKeyFixtureWithStore(t *testing.T, ledger sessions.Store) *keyFixture {
 	t.Helper()
 	authn, err := statictoken.Open("test", map[string]string{keyToken: "phuc@example.com"})
 	if err != nil {
@@ -89,10 +105,10 @@ func newKeyFixture(t *testing.T, perDevice int) *keyFixture {
 	f := &keyFixture{
 		inviter: &fakeInviter{},
 		keys:    idempotency.NewMemory(0, nil),
+		ledger:  ledger,
 	}
 	api, err := apisrv.New(apisrv.Options{
-		Sessions: sessions.NewMemory(
-			sessions.Limits{PerDevice: perDevice, PerPrincipal: 100}, nil),
+		Sessions:      f.ledger,
 		Live:          sessions.NewRegistry(),
 		Authenticator: authn,
 		Registry:      reg,
@@ -123,17 +139,36 @@ const openBody = `{"device_id":"treadmill-4821","profile":"shell","reason":"a re
 
 func (f *keyFixture) open(t *testing.T, key, body string) (*http.Response, map[string]any) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, f.srv.URL+apisrv.Prefix+"/sessions",
-		strings.NewReader(body))
+	return f.request(t, http.MethodPost, apisrv.Prefix+"/sessions", body,
+		func(r *http.Request) {
+			r.Header.Set("Content-Type", "application/json")
+			if key != "" {
+				r.Header.Set(apisrv.IdempotencyHeader, key)
+			}
+		})
+}
+
+// request runs one authenticated call and decodes whatever came back, so a test that
+// cares about a status can still print the body when it is not the one expected.
+func (f *keyFixture) request(t *testing.T, method, path, body string,
+	decorate ...func(*http.Request)) (*http.Response, map[string]any) {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, f.srv.URL+path, rdr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+keyToken)
-	req.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		req.Header.Set(apisrv.IdempotencyHeader, key)
+	for _, d := range decorate {
+		d(req)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Long enough to outlast a deliberate wait, short enough that a hang fails the test
+	// rather than the package timeout.
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,6 +275,7 @@ func TestTheSameKeyWithADifferentBodyIsRefused(t *testing.T) {
 func TestAConcurrentRetryIsToldToWait(t *testing.T) {
 	f := newKeyFixture(t, 10)
 	f.inviter.gate = make(chan struct{})
+	f.inviter.entered = make(chan struct{})
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -248,17 +284,19 @@ func TestAConcurrentRetryIsToldToWait(t *testing.T) {
 		f.open(t, "key-1", openBody)
 	}()
 
-	// The first request is parked inside Invite. The second must not be.
-	var resp *http.Response
-	var body map[string]any
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, body = f.open(t, "key-1", openBody)
-		if resp.StatusCode == http.StatusConflict {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Wait for the first request to be genuinely inside Invite, holding the key.
+	//
+	// The first version of this test raced the goroutine against the loop below and
+	// deadlocked when the loop won: its own request took the key, parked on the gate,
+	// and nothing was left to close the gate. Waiting for the signal removes the race
+	// rather than making it rarer.
+	select {
+	case <-f.inviter.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first request never reached the inviter")
 	}
+
+	resp, body := f.open(t, "key-1", openBody)
 	close(f.inviter.gate)
 	wg.Wait()
 

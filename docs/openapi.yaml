@@ -921,6 +921,16 @@ paths:
           description: The resource's id.
           schema:
             type: string
+        - name: wait
+          in: query
+          description: 'Hold the request until the session''s state changes, as a Go duration such as `30s`. Clamped to 60s. Absent or `0` answers immediately. A wait that expires is still a 200 with the unchanged session: "still the same" is an answer, not an error.'
+          schema:
+            type: string
+        - name: state
+          in: query
+          description: The state you already have. With it, a transition that happened between your last read and this request is reported immediately instead of being missed; without it, the wait is relative to whatever the state is when the request arrives.
+          schema:
+            type: string
       responses:
         "200":
           description: OK.
