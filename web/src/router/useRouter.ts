@@ -9,6 +9,26 @@ import { formatPath, parsePath, type Route } from "./routes";
 // other one renders the previous route forever. useSyncExternalStore is the primitive
 // for exactly this shape — one external source, every subscriber on one snapshot.
 
+// Where the console is mounted. The gateway serves it under a prefix —
+// cmd/oarlockd/app/app.go does `mux.Handle("/ui/", ui.Handler("/ui"))` — while
+// `pnpm dev:ui` serves it at the root, so the prefix cannot be a constant and cannot be
+// read from Vite's `base` (that is "./", and it is about assets, not routes).
+//
+// Derived once, at module load: whatever the app's own URL is when it starts tells us
+// where it is mounted. A deep link under the gateway still begins with `/ui/`; one on the
+// dev server does not. A device or principal whose id begins with "ui" is unaffected —
+// the test is on the path root, so `/ui/d/ui` strips to `/d/ui`.
+const BASE =
+  window.location.pathname === "/ui" || window.location.pathname.startsWith("/ui/")
+    ? "/ui"
+    : "";
+
+function stripBase(pathname: string): string {
+  if (pathname === BASE) return "/";
+  if (BASE && pathname.startsWith(BASE + "/")) return pathname.slice(BASE.length);
+  return pathname;
+}
+
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -25,7 +45,7 @@ function snapshot(): Route {
   const url = window.location.pathname + window.location.search;
   if (url !== cachedURL) {
     cachedURL = url;
-    cachedRoute = parsePath(window.location.pathname, window.location.search);
+    cachedRoute = parsePath(stripBase(window.location.pathname), window.location.search);
   }
   return cachedRoute;
 }
@@ -49,7 +69,12 @@ export function useRouter() {
   const route = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
 
   const navigate = useCallback((to: Route | string, opts?: { replace?: boolean }) => {
-    const path = typeof to === "string" ? to : formatPath(to);
+    // Both branches are a clean, unmounted path — a string is just a hand-formatted
+    // Route, not a raw href — so BASE goes on once, here, after the branch. That keeps
+    // /ui knowledge inside this file: a caller building a string never has to know where
+    // the console is mounted, the same as one passing a Route never does.
+    const clean = typeof to === "string" ? to : formatPath(to);
+    const path = BASE + clean;
     if (path === window.location.pathname + window.location.search) return;
     if (opts?.replace) window.history.replaceState(null, "", path);
     else window.history.pushState(null, "", path);
