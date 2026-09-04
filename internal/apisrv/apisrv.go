@@ -87,6 +87,11 @@ type Options struct {
 	// RecordInput resolves whether a session recording captures keystrokes.
 	RecordInput recordpolicy.RecordInput
 
+	// Owners answers which node holds a device, in a deployment with more than one
+	// replica. Nil is a single-node gateway — and there, a ledger row that claims to be
+	// live while nothing on this node is running it is stale, not remote.
+	Owners SessionLocator
+
 	// Idempotency remembers which POST /sessions requests have already been done, so a
 	// client that retries a timed-out request gets its first session back instead of a
 	// second one. Nil makes the Idempotency-Key header a no-op rather than an error:
@@ -412,6 +417,13 @@ type Inviter interface {
 	MintAttach(ctx context.Context, c ticket.Claims, ttl time.Duration) (string, time.Time, error)
 	MintObserve(ctx context.Context, c ticket.Claims, ttl time.Duration) (string, time.Time, error)
 	Cancel(ctx context.Context, sessionID, reason string)
+}
+
+// SessionLocator answers which *other* node holds a device, or "" for nobody this node
+// knows of. Satisfied by *ownership.Keeper; declared here so this package does not have
+// to import it to ask one question.
+type SessionLocator interface {
+	Elsewhere(ctx context.Context, deviceID string) string
 }
 
 // AgentControls is the administrative surface for live control channels.
@@ -1254,15 +1266,42 @@ func (s *Server) killSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 		}
 	}
 
+	state := row.State
 	if row.Live() {
 		if err := s.o.Live.Kill(r.Context(), id, "admin_kill"); err != nil {
-			// Live in the ledger but not on this node: it is running on another
-			// replica. Saying so beats a 404, which would be a lie, and beats a 500,
-			// which would suggest we are broken.
-			s.problem(w, r, http.StatusConflict, "wrong_node",
-				"That session is live on another gateway node",
-				"retry against the node holding it, or wait for the ledger to catch up",
-				true)
+			// Live in the ledger, not running here. That used to be reported as
+			// `wrong_node` unconditionally, on the assumption that another replica must
+			// have it — and on a single-node gateway that assumption is a lie the
+			// caller can never get past. A row left live by a session nobody collected,
+			// or by a node that died, would then hold its device's only slot until the
+			// gateway restarted: `POST /sessions` answered `session_limit` and `DELETE`
+			// answered `wrong_node`, forever.
+			if node := s.heldElsewhere(r.Context(), row.DeviceID); node != "" {
+				s.problem(w, r, http.StatusConflict, "wrong_node",
+					"That session is live on another gateway node",
+					"retry against the node holding it, or wait for the ledger to catch up",
+					true)
+				return
+			}
+			// Nothing is running it, here or anywhere this gateway can see. The row is
+			// stale, and the caller's intent — "this session must not be running" — is
+			// already true of the world and merely absent from the ledger. Make the
+			// ledger agree rather than refusing forever.
+			if err := s.o.Sessions.Finish(r.Context(), id,
+				sessions.Result{CloseReason: "admin_kill"}); err != nil {
+				s.problem(w, r, http.StatusInternalServerError, "internal",
+					"Could not close the session", err.Error(), true)
+				return
+			}
+			state = sessions.StateClosed
+			s.log.Info("closed a stale session row nothing was running",
+				"session", id, "device", row.DeviceID, "was", row.State,
+				"by", p.ID, "request", requestID(r))
+			s.auditAdmin(r.Context(), p, row.DeviceID, plugin.ActionAdminKill,
+				"closed_stale", "")
+			s.writeJSON(w, http.StatusOK, map[string]any{
+				"id": id, "killed": true, "state": string(state),
+			})
 			return
 		}
 		s.log.Info("session killed by an administrator",
@@ -1270,7 +1309,7 @@ func (s *Server) killSession(w http.ResponseWriter, r *http.Request, p *plugin.P
 		s.auditAdmin(r.Context(), p, row.DeviceID, plugin.ActionAdminKill, "killed", "")
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"id": id, "killed": row.Live(), "state": string(row.State),
+		"id": id, "killed": row.Live(), "state": string(state),
 	})
 }
 

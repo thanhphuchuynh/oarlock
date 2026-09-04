@@ -333,6 +333,28 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		NodeURL:    strings.TrimRight(cfg.URL, "/") + "/ws/session",
 		AttachURL:  strings.TrimRight(cfg.URL, "/") + "/ws/attach",
 		Log:        log,
+		// A session opened through the API whose operator never attaches: the device
+		// is released after the collect deadline, and this is what stops the ledger
+		// row from outliving it. `operator_gave_up` and `rejected` for the same reason
+		// every other site that withdraws an uncollected invitation uses them — the
+		// operator asked, and then nothing was opened for them.
+		OnAbandoned: func(sessionID, deviceID, reason string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := ledger.Update(ctx, sessionID, func(row *sessions.Session) error {
+				if !row.Live() {
+					return nil
+				}
+				row.State = sessions.StateRejected
+				row.CloseReason = reason
+				row.ClosedAt = time.Now()
+				return nil
+			})
+			if err != nil {
+				log.Warn("could not close the row for an uncollected session",
+					"session", sessionID, "device", deviceID, "error", err)
+			}
+		},
 	}
 
 	// ── operator authentication ──
@@ -379,7 +401,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		// a retry lands on the connection it was made on, and there is one node. A
 		// gateway behind a load balancer needs a shared store, and carries the same
 		// caveat as every other piece of per-node state here.
-		Idempotency:     idempotency.NewMemory(0, nil),
+		Idempotency: idempotency.NewMemory(0, nil),
+		// Nil until a shared ownership registry exists, which is the correct answer for
+		// a single node: nothing is held anywhere else, so a live row nothing is running
+		// is stale and the kill path may close it.
+		Owners:          nil,
 		Audit:           g.audit,
 		AttachURL:       strings.TrimRight(cfg.URL, "/") + "/ws/attach",
 		RatePerMinute:   cfg.API.RatePerMinute,
