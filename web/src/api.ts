@@ -78,6 +78,25 @@ export interface DeviceAccess {
   admin_actions: string[];
 }
 
+/** What one principal was allowed to do — the Person page's second question. */
+export interface PrincipalAccess {
+  principal: string;
+  rules: Permission[];
+  /** Which actions are administrative, named by the gateway rather than guessed here. */
+  admin_actions: string[];
+}
+
+/** A `/api/v1/sessions` query. Every field is optional, and an absent one is an absent
+ *  URL parameter rather than an empty one — see `sessions()` below. */
+export interface SessionQuery {
+  principal?: string;
+  since?: string;
+  until?: string;
+  device?: string;
+  state?: string;
+  limit?: number;
+}
+
 export interface SSHInfo {
   host: string;
   port: string;
@@ -209,8 +228,29 @@ export class Client {
     return parsed as T;
   }
 
-  sessions(): Promise<{ sessions: Session[] }> {
-    return this.call("GET", "/api/v1/sessions?limit=50");
+  /**
+   * sessions lists sessions, optionally narrowed by principal, time range, device or
+   * state.
+   *
+   * `query` is optional and every field within it is too, on purpose: `App.tsx`'s
+   * `refresh()` calls this with no arguments at all, and that call has to keep producing
+   * exactly `?limit=50` — the string increment 1's tests were written against — so a
+   * caller that passes nothing gets nothing added to the query beyond the same default
+   * limit. An absent facet is an absent parameter rather than `&since=`, so a hand-edited
+   * link that omits one narrows on nothing rather than filtering on the empty string.
+   */
+  sessions(query?: SessionQuery): Promise<{ sessions: Session[] }> {
+    const params = new URLSearchParams();
+    params.set("limit", String(query?.limit ?? 50));
+    if (query?.principal) params.set("principal", query.principal);
+    if (query?.since) params.set("since", query.since);
+    if (query?.until) params.set("until", query.until);
+    // The wire parameter is `device_id` (apisrv.go's listSessions reads
+    // r.URL.Query().Get("device_id")) — kept as `device` on this side only because
+    // that is the vocabulary `route.facets` already uses.
+    if (query?.device) params.set("device_id", query.device);
+    if (query?.state) params.set("state", query.state);
+    return this.call("GET", `/api/v1/sessions?${params.toString()}`);
   }
 
   agents(): Promise<{ agents: Agent[] }> {
@@ -236,6 +276,12 @@ export class Client {
   /** Who can reach one device, evaluated by the gateway's own matcher. */
   deviceAccess(id: string): Promise<DeviceAccess> {
     return this.call("GET", `/api/v1/devices/${encodeURIComponent(id)}/access`);
+  }
+
+  /** What one principal was allowed to do, evaluated by the gateway's own matcher.
+   *  Encoded: a principal id routinely contains `@` and `.`. */
+  principalAccess(id: string): Promise<PrincipalAccess> {
+    return this.call("GET", `/api/v1/principals/${encodeURIComponent(id)}/access`);
   }
 
   permissions(): Promise<{ permissions: Permission[] }> {

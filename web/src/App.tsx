@@ -32,14 +32,14 @@ import { SSHAccess } from "./SSHAccess";
 import { SQLExplorer } from "./SQLExplorer";
 import { Waits, type Step } from "./Waits";
 import { SessionPage } from "./pages/SessionPage";
+import { PersonPage } from "./pages/PersonPage";
 import { useRouter } from "./router/useRouter";
 
 const tokenKey = "oarlock.token";
 
 // The three destinations left on the nav rail once routes replace the tabs. "Sessions"
-// had no route of its own in Task 2's design — a session is reached from its device's own
-// row, from a person's page (a later increment), or by the link in `route.session` — so
-// it is not a page here either.
+// has no route of its own — a session is reached from its device's own row, from a
+// person's page, or by the link in `route.session` — so it is not a page here either.
 type NavPage = "search" | "permissions" | "sql";
 
 const pages: { id: NavPage; label: string; blurb: string }[] = [
@@ -119,8 +119,9 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-    // A page that renders neither list has nothing to poll for.
-    const rendersFleet = route.kind === "search" || route.kind === "person" || route.kind === "device";
+    // A page that renders neither list has nothing to poll for. The person page fetches
+    // its own, principal-scoped session list instead of reading this one.
+    const rendersFleet = route.kind === "search" || route.kind === "device";
     if (!rendersFleet) return;
     const t = setInterval(() => {
       // A background tab polling a rate-limited API is pure waste.
@@ -482,11 +483,13 @@ export function App() {
     navigate({ kind: id });
   }
 
-  // Person and device render the fleet page unchanged for now — increments 3 and 4 give
-  // them their own page — so both count as "on the fleet page" for the chrome below.
+  // Device still renders the fleet page unchanged — increment 4 gives it its own page.
+  // Person has its own page now, but both count as "on the fleet page" for the chrome
+  // below: reaching either means having drilled in from Fleet, and neither is a separate
+  // top-level destination on the nav rail.
   const section: NavPage = route.kind === "person" || route.kind === "device" ? "search" : (route.kind as NavPage);
   const current = pages.find((p) => p.id === section)!;
-  const rendersFleet = route.kind === "search" || route.kind === "person" || route.kind === "device";
+  const rendersFleet = route.kind === "search" || route.kind === "device";
   // The title, blurb, sheet index and per-page toolbar belong to the three list-like
   // pages. The wait, the session page and the full-page failure each carry their own
   // heading (or none), exactly as the View union's non-"list" members did.
@@ -617,6 +620,15 @@ export function App() {
                   onObserve={(session) => void observe(session)}
                   onReplay={(session) => void replay(session)}
                   onKill={(session) => void kill(session)}
+                />
+              )}
+
+              {route.kind === "person" && (
+                <PersonPage
+                  client={client.current}
+                  principal={route.principal}
+                  facets={route.facets}
+                  navigate={navigate}
                 />
               )}
 
