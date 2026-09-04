@@ -870,6 +870,27 @@ test("a person page reached by URL lists that person's sessions", async ({ page 
 test("the facets in the URL narrow the timeline", async ({ page }) => {
   await signIn(page);
 
+  // This test makes its own session rather than relying on one a sibling left behind.
+  //
+  // Without it the assertion below is order-dependent: a window starting in the future is
+  // empty whether or not `since` reaches the query, so with no sessions in the ledger the
+  // test passes against a page that ignores the facet entirely. It only fails in sequence,
+  // after an earlier test has created something to leak. That is a test which proves the
+  // feature works when run one way and nothing at all when run another, and `--grep` runs
+  // it the second way.
+  const seedRow = await openRow(page, "treadmill-4821");
+  await seedRow.getByTestId("reason").fill("ticket AV-9310");
+  await seedRow.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Leave" }).click();
+
+  // The default window shows it, which is what makes the future window's emptiness mean
+  // something: the same page, the same principal, one facet apart.
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/p/admin%40mail.com`);
+  await expect(page.getByTestId("person-sessions")).toContainText("treadmill-4821", {
+    timeout: 30_000,
+  });
+
   const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   await page.goto(
     `http://127.0.0.1:${dep!.http}/ui/p/admin%40mail.com?since=${encodeURIComponent(future)}`,

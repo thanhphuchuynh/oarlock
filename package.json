@@ -7,7 +7,7 @@
     "tokens": "node tokens/generate.mjs",
     "tokens:check": "node tokens/generate.mjs --check",
     "typecheck": "tsc --build tsconfig.json",
-    "test": "pnpm tokens:check && pnpm typecheck && playwright test",
+    "test": "pnpm tokens:check && pnpm typecheck && pnpm build:ui && playwright test",
     "test:unit": "playwright test --project=unit",
     "test:component": "playwright test --project=component",
     "harness": "vite dev --mode harness",
