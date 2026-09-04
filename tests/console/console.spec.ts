@@ -840,3 +840,88 @@ test("an administrator can edit, disable, and re-enable a device", async ({ page
   }, "the re-enabled agent to reconnect");
   await expect(summary).toContainText("Online", { timeout: 15_000 });
 });
+
+// The Person page's first question: what did this person do. A cold `page.goto`, not a
+// click from somewhere already inside the app — the route's whole point is that a pasted
+// link works on its own.
+test("a person page reached by URL lists that person's sessions", async ({ page }) => {
+  await signIn(page);
+
+  // This test's own session, not a neighbour's — the deployment is shared across the
+  // file, so the assertion below is scoped to the row this test made rather than to
+  // "the list is non-empty".
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByTestId("reason").fill("ticket AV-9800");
+  await row.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+  const sessionID = (await page.getByTestId("terminal").locator(".mono").first().textContent())!;
+  expect(sessionID).toMatch(/^sess_/);
+
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/p/admin%40mail.com`);
+  await expect(page.getByTestId("person-page")).toBeVisible({ timeout: 30_000 });
+  const sessions = page.getByTestId("person-sessions");
+  await expect(sessions.locator(`[data-session="${sessionID}"]`)).toBeVisible({ timeout: 30_000 });
+});
+
+// The Person page's default window lands in the URL rather than staying only in state
+// (see the effect in PersonPage.tsx), and every other facet round-trips the same way. A
+// link is only a link if it reproduces the view the sender saw — so a `since` supplied in
+// the URL has to actually narrow the query, not just decorate it.
+test("the facets in the URL narrow the timeline", async ({ page }) => {
+  await signIn(page);
+
+  const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await page.goto(
+    `http://127.0.0.1:${dep!.http}/ui/p/admin%40mail.com?since=${encodeURIComponent(future)}`,
+  );
+  await expect(page.getByTestId("person-page")).toBeVisible({ timeout: 30_000 });
+
+  // The facet survived rather than being silently replaced by the 30-day default: the
+  // effect that lands that default only fires when `since` is absent.
+  const url = new URL(page.url());
+  expect(url.searchParams.get("since")).toBe(future);
+
+  // A window that starts in the future contains nothing — including every session the
+  // tests above and below this one create — so the ready-but-empty state is the only one
+  // that can render here. Asserting the literal text (rather than merely that the
+  // section exists) is what rules out a page stuck loading or a request that failed.
+  const sessions = page.getByTestId("person-sessions");
+  await expect(sessions).toContainText("No sessions in this window.", { timeout: 30_000 });
+});
+
+// The Person page's second question, for the principal it is actually built for: an
+// auditor who very often will not hold `admin:permissions` themselves. Modelled on "a
+// device row will not invent an access list it cannot read" (above) — the same design,
+// applied to a person instead of a device: the grants section stays on screen and names
+// the missing grant, rather than going quiet in a way that would read as "permitted
+// nothing".
+test("a visitor sees the timeline, and a grants section that says why it is empty", async ({
+  page,
+}) => {
+  await signIn(page, visitorToken);
+
+  // This principal's own session, so the sessions section has something real to show —
+  // not merely a section that renders without crashing.
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByTestId("reason").fill("ticket AV-9900");
+  await row.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+  const sessionID = (await page.getByTestId("terminal").locator(".mono").first().textContent())!;
+  expect(sessionID).toMatch(/^sess_/);
+
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/p/visitor%40example.com`);
+  await expect(page.getByTestId("person-page")).toBeVisible({ timeout: 30_000 });
+
+  const sessions = page.getByTestId("person-sessions");
+  await expect(sessions.locator(`[data-session="${sessionID}"]`)).toBeVisible({ timeout: 30_000 });
+
+  // The grants section itself: present, not hidden — visitor@example.com holds a shell
+  // grant and nothing administrative, so this section has to name what is missing rather
+  // than disappear or render an empty rule list.
+  const access = page.getByTestId("person-access");
+  await expect(access).toBeVisible();
+  await expect(access).toContainText("don’t have access", { timeout: 30_000 });
+  await expect(access).toContainText("admin:permissions");
+  await expect(access).not.toContainText("Allowed");
+  await expect(access.locator("ul")).toHaveCount(0);
+});
