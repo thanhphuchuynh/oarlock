@@ -194,7 +194,7 @@ func TestInviteReachesTheAgent(t *testing.T) {
 	want := frame.Invitation{
 		SessionID: "sess_1", Ticket: "hK3", URL: "wss://gw-a.example.org/ws/session",
 		Profile: "shell", PTY: &frame.PTY{Cols: 132, Rows: 38, Term: "xterm-256color"},
-		Principal: "phuc@example.com",
+		Principal: "admin@mail.com",
 	}
 	if err := f.hub.Invite(context.Background(), deviceID, want); err != nil {
 		t.Fatal(err)
@@ -606,7 +606,7 @@ func TestInviterDeliversThroughTheRealHub(t *testing.T) {
 
 	dev := &plugin.Device{ID: deviceID, Platform: plugin.PlatformLinux}
 	p, err := inviter.Invite(context.Background(), dev, invite.Request{
-		SessionID: "sess_e2e", Profile: "shell", Principal: "phuc@example.com",
+		SessionID: "sess_e2e", Profile: "shell", Principal: "admin@mail.com",
 	})
 	if err != nil {
 		t.Fatal(err)

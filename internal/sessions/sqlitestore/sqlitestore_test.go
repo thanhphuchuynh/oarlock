@@ -40,14 +40,14 @@ func TestSameContractAsMemory(t *testing.T) {
 		"sqlite": open(t, sessions.Limits{PerDevice: 1, PerPrincipal: 2}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := s.Create(ctx, row("s1", "dev-1", "phuc@example.com")); err != nil {
+			if err := s.Create(ctx, row("s1", "dev-1", "admin@mail.com")); err != nil {
 				t.Fatal(err)
 			}
 			got, err := s.Get(ctx, "s1")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Principal != "phuc@example.com" || got.Profile != "shell" {
+			if got.Principal != "admin@mail.com" || got.Profile != "shell" {
 				t.Errorf("row: %+v", got)
 			}
 			// Never blank: an unrecorded session must be queryable as a fact.
@@ -67,10 +67,10 @@ func TestSameContractAsMemory(t *testing.T) {
 				t.Errorf("per-device: got %v, want ErrLimit", err)
 			}
 			// Per-principal cap.
-			if err := s.Create(ctx, row("s3", "dev-2", "phuc@example.com")); err != nil {
+			if err := s.Create(ctx, row("s3", "dev-2", "admin@mail.com")); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.Create(ctx, row("s4", "dev-3", "phuc@example.com")); !errors.Is(err, sessions.ErrLimit) {
+			if err := s.Create(ctx, row("s4", "dev-3", "admin@mail.com")); !errors.Is(err, sessions.ErrLimit) {
 				t.Errorf("per-principal: got %v, want ErrLimit", err)
 			}
 

@@ -64,7 +64,7 @@ func buildLongRecording(t *testing.T) (cast []byte, manifest []byte, pub ed25519
 	started := time.Date(2026, 8, 21, 11, 0, 0, 0, time.UTC)
 	w, err := rec.Open(ctx, &plugin.SessionMeta{
 		SessionID: "sess_long", DeviceID: "treadmill-4821", Profile: "shell",
-		Mode: "gateway", Principal: "phuc@example.com",
+		Mode: "gateway", Principal: "admin@mail.com",
 		Term: "xterm-256color", Cols: 80, Rows: 24, StartedAt: started,
 	})
 	if err != nil {
@@ -135,7 +135,7 @@ func buildRecording(t *testing.T) (cast []byte, manifest []byte, pub ed25519.Pub
 	started := time.Date(2026, 8, 21, 10, 14, 2, 0, time.UTC)
 	w, err := rec.Open(ctx, &plugin.SessionMeta{
 		SessionID: "sess_fixture", DeviceID: "treadmill-4821", Profile: "shell",
-		Mode: "gateway", Principal: "phuc@example.com",
+		Mode: "gateway", Principal: "admin@mail.com",
 		Term: "xterm-256color", Cols: 80, Rows: 24, StartedAt: started,
 	})
 	if err != nil {

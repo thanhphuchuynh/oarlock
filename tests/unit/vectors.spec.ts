@@ -74,7 +74,7 @@ test("the observer fields survive the crossing", () => {
 
   const watcher = parse("ready-watcher") as { read_only: boolean; watching: string };
   expect(watcher.read_only).toBe(true);
-  expect(watcher.watching).toBe("phuc@example.com");
+  expect(watcher.watching).toBe("admin@mail.com");
 
   const watched = parse("ready-watched") as { observers: { principal: string }[] };
   expect(watched.observers[0]!.principal).toBe("sam@example.com");

@@ -30,7 +30,7 @@ func signer(t *testing.T) (*record.KeySigner, ed25519.PublicKey) {
 func meta() *plugin.SessionMeta {
 	return &plugin.SessionMeta{
 		SessionID: "sess_test", DeviceID: "treadmill-4821", Profile: "shell",
-		Mode: "gateway", Principal: "phuc@example.com",
+		Mode: "gateway", Principal: "admin@mail.com",
 		Term: "xterm-256color", Cols: 132, Rows: 38,
 		StartedAt: time.Unix(1787218725, 0).UTC(),
 	}
@@ -98,7 +98,7 @@ func TestHeaderMatchesTheV3Spec(t *testing.T) {
 	if !strings.Contains(h.Title, "treadmill-4821") {
 		t.Errorf("title %q", h.Title)
 	}
-	if strings.Contains(r.cast.String(), "phuc@example.com") {
+	if strings.Contains(r.cast.String(), "admin@mail.com") {
 		t.Error("the principal was written into the .cast")
 	}
 }

@@ -69,7 +69,7 @@ spec that drifts from the code is worse than no spec, because people trust it.
 POST /api/v1/sessions
 Authorization: Bearer svc_…
 On-Behalf-Of-Token: eyJhbGciOi…
-On-Behalf-Of: phuc@example.com
+On-Behalf-Of: admin@mail.com
 Idempotency-Key: 01J8Z6QK4M7N2P
 Content-Type: application/json
 
@@ -83,7 +83,7 @@ Content-Type: application/json
 ```json
 201 Created
 { "session": { "id": "sess_01J8Z…", "state": "waking", "device_id": "treadmill-4821",
-               "principal": "phuc@example.com", "opened_by": "svc-crm",
+               "principal": "admin@mail.com", "opened_by": "svc-crm",
                "recording": true, "mode": "gateway", "created_at": "2026-08-20T09:14:02Z" },
   "attach": { "ticket": "hK3…", "url": "wss://gw.example.org/ws/attach",
               "expires_at": "2026-08-20T09:15:02Z" } }
@@ -242,7 +242,7 @@ Then it must answer a second question, and this is the part integrations get wro
 ```
 Authorization: Bearer svc_…          ← which service is calling
 On-Behalf-Of-Token: eyJhbGciOi…      ← proof of who is at the keyboard  (authoritative)
-On-Behalf-Of: phuc@example.com       ← the same subject, for logs; must match, or 400
+On-Behalf-Of: admin@mail.com       ← the same subject, for logs; must match, or 400
 ```
 
 **The proof is not optional, and a bare identifier is not proof.** A plain
@@ -289,7 +289,7 @@ api:
   delegation_max_ttl: 60s
   may_act_for:
     svc-crm:
-      - phuc@example.com
+      - admin@mail.com
       - "group:oncall-*"
 ```
 
@@ -419,7 +419,7 @@ import "@oarlock/terminal/oarlock.css";
   url={attach.url}
   ticket={attach.ticket}
   device="treadmill-4821"
-  principal="phuc@example.com"
+  principal="admin@mail.com"
   renewTicket={() => api.renewAttach(session.id)}   // POST /sessions/{id}/attach
   onState={(s) => setState(s)}          // connecting | attached | reconnecting | closed
   onClosed={(reason) => showSummary(reason)}
@@ -665,5 +665,5 @@ What your backend actually wrote: one HTTP call, one component, two webhook hand
 it did not write: a tunnel, a PTY, a recorder, a ticket scheme, a reconnect path, or a
 terminal emulator.
 
-What lands in the audit trail: `phuc@example.com` opened a shell on `treadmill-4821`
+What lands in the audit trail: `admin@mail.com` opened a shell on `treadmill-4821`
 via `svc-crm`, for ticket AV-9182, for four minutes, and here is the recording.

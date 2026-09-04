@@ -321,10 +321,10 @@ func TestWatchClosesMatchingSessions(t *testing.T) {
 	go sup.WatchRevocations(ctx)
 	<-b.subscribe
 
-	b.send(plugin.RevocationEvent{PrincipalID: "phuc@example.com", Reason: "left"})
+	b.send(plugin.RevocationEvent{PrincipalID: "admin@mail.com", Reason: "left"})
 	waitUntil(t, func() bool { return len(k.matches()) == 1 }, "the revocation to be applied")
 
-	if got := k.matches()[0]; got != "phuc@example.com//revoked" {
+	if got := k.matches()[0]; got != "admin@mail.com//revoked" {
 		t.Errorf("matched %q", got)
 	}
 	if sup.WatchStatus() != authz.WatchConnected {
@@ -386,7 +386,7 @@ func TestADroppedStreamIsNotARevocation(t *testing.T) {
 		"the status to return to connected")
 
 	// And the reconnected stream works.
-	b.send(plugin.RevocationEvent{PrincipalID: "phuc@example.com"})
+	b.send(plugin.RevocationEvent{PrincipalID: "admin@mail.com"})
 	waitUntil(t, func() bool { return len(k.matches()) == 1 }, "an event after reconnecting")
 }
 

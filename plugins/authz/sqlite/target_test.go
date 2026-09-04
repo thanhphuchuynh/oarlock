@@ -108,7 +108,7 @@ func TestOpeningADatabaseTwiceIsFine(t *testing.T) {
 		t.Fatalf("first open: %v", err)
 	}
 	if err := first.CreatePermission(context.Background(), &plugin.Permission{
-		ID: "p", Principals: []string{"phuc@example.com"},
+		ID: "p", Principals: []string{"admin@mail.com"},
 		Actions: []string{"tcp"}, Enabled: true, Ports: []int{3000},
 	}); err != nil {
 		t.Fatal(err)

@@ -243,7 +243,7 @@ func newStackWith(t *testing.T, shell []string, limits pump.Limits,
 	}
 	akPath := filepath.Join(t.TempDir(), "authorized_keys")
 	line := string(xssh.MarshalAuthorizedKey(sshPub))
-	line = strings.TrimRight(line, "\n") + " phuc@example.com\n"
+	line = strings.TrimRight(line, "\n") + " admin@mail.com\n"
 	if err := os.WriteFile(akPath, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}

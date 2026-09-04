@@ -20,14 +20,14 @@ func row(id, device, principal string) *sessions.Session {
 func TestCreateAndGet(t *testing.T) {
 	ctx := context.Background()
 	s := sessions.NewMemory(sessions.Limits{}, nil)
-	if err := s.Create(ctx, row("s1", "dev-1", "phuc@example.com")); err != nil {
+	if err := s.Create(ctx, row("s1", "dev-1", "admin@mail.com")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Get(ctx, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Principal != "phuc@example.com" || got.DeviceID != "dev-1" {
+	if got.Principal != "admin@mail.com" || got.DeviceID != "dev-1" {
 		t.Errorf("row: %+v", got)
 	}
 	// An unrecorded session must be a fact you can query for, not a blank field

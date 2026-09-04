@@ -48,7 +48,7 @@ func (b *backend) set(allow bool, reason string, err error) {
 }
 
 var (
-	phuc  = &plugin.Principal{ID: "phuc@example.com"}
+	phuc  = &plugin.Principal{ID: "admin@mail.com"}
 	tread = &plugin.Device{ID: "treadmill-4821"}
 )
 

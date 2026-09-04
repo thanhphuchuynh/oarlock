@@ -14,7 +14,7 @@ func waitFixture(t *testing.T) (*sessions.Memory, string) {
 	m := sessions.NewMemory(sessions.Limits{PerDevice: 5, PerPrincipal: 5}, nil)
 	row := &sessions.Session{
 		ID: "sess_1", DeviceID: "treadmill-4821", Profile: "shell",
-		Principal: "phuc@example.com", State: sessions.StateWaking,
+		Principal: "admin@mail.com", State: sessions.StateWaking,
 	}
 	if err := m.Create(context.Background(), row); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestAnotherSessionsChangeDoesNotEndTheWait(t *testing.T) {
 	m, id := waitFixture(t)
 	other := &sessions.Session{
 		ID: "sess_2", DeviceID: "rower-9001", Profile: "shell",
-		Principal: "phuc@example.com", State: sessions.StateWaking,
+		Principal: "admin@mail.com", State: sessions.StateWaking,
 	}
 	if err := m.Create(context.Background(), other); err != nil {
 		t.Fatal(err)

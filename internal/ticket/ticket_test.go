@@ -15,7 +15,7 @@ import (
 func claims() ticket.Claims {
 	return ticket.Claims{
 		SessionID: "sess_1", DeviceID: "treadmill-4821",
-		Profile: "shell", Principal: "phuc@example.com", Kind: ticket.KindDevice,
+		Profile: "shell", Principal: "admin@mail.com", Kind: ticket.KindDevice,
 	}
 }
 

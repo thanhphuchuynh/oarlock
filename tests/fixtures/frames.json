@@ -129,7 +129,7 @@
     {
       "name": "ready-watcher",
       "type": 4,
-      "wire": "BHsic2Vzc2lvbl9pZCI6InNlc3NfMDQiLCJzY3JvbGxiYWNrX2xlbiI6MCwicmVjb3JkaW5nIjp0cnVlLCJtb2RlIjoiZ2F0ZXdheSIsIm9ic2VydmVycyI6W3sicHJpbmNpcGFsIjoic2FtQGV4YW1wbGUuY29tIiwic2luY2UiOiIyMDI2LTA4LTIxVDEwOjE0OjAyWiJ9XSwicmVhZF9vbmx5Ijp0cnVlLCJ3YXRjaGluZyI6InBodWNAZXhhbXBsZS5jb20ifQ==",
+      "wire": "BHsic2Vzc2lvbl9pZCI6InNlc3NfMDQiLCJzY3JvbGxiYWNrX2xlbiI6MCwicmVjb3JkaW5nIjp0cnVlLCJtb2RlIjoiZ2F0ZXdheSIsIm9ic2VydmVycyI6W3sicHJpbmNpcGFsIjoic2FtQGV4YW1wbGUuY29tIiwic2luY2UiOiIyMDI2LTA4LTIxVDEwOjE0OjAyWiJ9XSwicmVhZF9vbmx5Ijp0cnVlLCJ3YXRjaGluZyI6ImFkbWluQG1haWwuY29tIn0=",
       "json": {
         "session_id": "sess_04",
         "scrollback_len": 0,
@@ -142,7 +142,7 @@
           }
         ],
         "read_only": true,
-        "watching": "phuc@example.com"
+        "watching": "admin@mail.com"
       }
     },
     {

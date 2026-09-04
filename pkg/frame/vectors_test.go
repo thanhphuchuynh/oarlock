@@ -68,7 +68,7 @@ func vectors(t *testing.T) []vector {
 	watched := frame.Ready{SessionID: "sess_04", Recording: true, Mode: "gateway",
 		Observers: []frame.Observer{{Principal: "sam@example.com", Since: "2026-08-21T10:14:02Z"}}}
 	watcher := frame.Ready{SessionID: "sess_04", Recording: true, Mode: "gateway",
-		ReadOnly: true, Watching: "phuc@example.com",
+		ReadOnly: true, Watching: "admin@mail.com",
 		Observers: []frame.Observer{{Principal: "sam@example.com", Since: "2026-08-21T10:14:02Z"}}}
 	observers := frame.Observers{Observers: []frame.Observer{
 		{Principal: "sam@example.com", Since: "2026-08-21T10:14:02Z"},

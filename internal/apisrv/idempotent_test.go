@@ -86,7 +86,7 @@ func newKeyFixture(t *testing.T, perDevice int) *keyFixture {
 // exercised against a store that does not implement sessions.Waiter.
 func newKeyFixtureWithStore(t *testing.T, ledger sessions.Store) *keyFixture {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{keyToken: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{keyToken: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}

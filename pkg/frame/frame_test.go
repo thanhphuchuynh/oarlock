@@ -310,7 +310,7 @@ func TestInvitationIsTheSharedShape(t *testing.T) {
 	inv := Invitation{
 		SessionID: "sess_1", Ticket: "hK3", URL: "wss://gw-a/ws/session",
 		Profile: "shell", PTY: &PTY{Cols: 132, Rows: 38, Term: "xterm-256color"},
-		Principal: "phuc@example.com", ExpiresAt: "2026-08-21T09:15:02Z",
+		Principal: "admin@mail.com", ExpiresAt: "2026-08-21T09:15:02Z",
 	}
 	// Down the control channel as DIAL...
 	f, err := Marshal(TypeDial, inv)

@@ -171,7 +171,7 @@ const harness: Harness = {
       url: "wss://stub.invalid/ws/attach",
       ticket: "stub-ticket-abcdef",
       device: "treadmill-4821",
-      principal: "phuc@example.com",
+      principal: "admin@mail.com",
       socket: () => make(),
       onTitle: (title, applied) => harness.titleAsks.push({ title, applied }),
       onClipboardRefused: () => (harness.clipboardRefusals += 1),

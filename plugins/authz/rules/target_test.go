@@ -136,7 +136,7 @@ func TestRulesWrittenBeforeTargetsAreUnchanged(t *testing.T) {
 		{plugin.ActionShell, plugin.Target{}},
 		{plugin.ActionExec, plugin.Target{Argv: []string{"/bin/sh", "-c", "anything"}}},
 	} {
-		if !allows(t, basic, "phuc@example.com", tc.act, tc.tgt) {
+		if !allows(t, basic, "admin@mail.com", tc.act, tc.tgt) {
 			t.Errorf("%s %s: an unconstrained rule stopped granting it", tc.act, tc.tgt)
 		}
 	}

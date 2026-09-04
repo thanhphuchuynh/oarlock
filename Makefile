@@ -124,10 +124,10 @@ demo-seed-permissions:
 		curl -fsS -X PUT $(DEMO_API)/permissions/$$id \
 			-H 'Authorization: Bearer $(DEMO_TOKEN)' -H 'Content-Type: application/json' -d "$$body" >/dev/null; \
 	}; \
-	upsert operator-shell '{"id":"operator-shell","name":"Operator shell","principals":["*@oncall.example.com","phuc@example.com"],"devices":["treadmill-*","samsung-s23"],"actions":["shell","exec"],"effect":"allow","enabled":true}'; \
-	upsert sql-explorer '{"id":"sql-explorer","name":"SQL Explorer","principals":["phuc@example.com"],"devices":["gateway"],"actions":["sql:read"],"effect":"allow","enabled":true}'; \
-	upsert gateway-admin '{"id":"gateway-admin","name":"Gateway administrator","principals":["phuc@example.com"],"devices":["gateway"],"actions":["admin:permissions"],"effect":"allow","enabled":true}'; \
-	upsert fleet-admin '{"id":"fleet-admin","name":"Fleet administrator","principals":["phuc@example.com"],"devices":["*"],"actions":["admin:devices","admin:kill"],"effect":"allow","enabled":true}'; \
+	upsert operator-shell '{"id":"operator-shell","name":"Operator shell","principals":["*@oncall.example.com","admin@mail.com"],"devices":["treadmill-*","samsung-s23"],"actions":["shell","exec"],"effect":"allow","enabled":true}'; \
+	upsert sql-explorer '{"id":"sql-explorer","name":"SQL Explorer","principals":["admin@mail.com"],"devices":["gateway"],"actions":["sql:read"],"effect":"allow","enabled":true}'; \
+	upsert gateway-admin '{"id":"gateway-admin","name":"Gateway administrator","principals":["admin@mail.com"],"devices":["gateway"],"actions":["admin:permissions"],"effect":"allow","enabled":true}'; \
+	upsert fleet-admin '{"id":"fleet-admin","name":"Fleet administrator","principals":["admin@mail.com"],"devices":["*"],"actions":["admin:devices","admin:kill"],"effect":"allow","enabled":true}'; \
 	upsert contractor-shell '{"id":"contractor-shell","name":"Contractor shell","principals":["contractor@partner.example.com"],"devices":["treadmill-4821"],"actions":["shell"],"effect":"allow","max_duration":"15m","idle":"2m","ttl":"10s","enabled":true}'; \
 	upsert auditor-read '{"id":"auditor-read","name":"Audit access","principals":["auditor@example.com"],"devices":["*"],"actions":["replay","observe"],"effect":"allow","enabled":true}'; \
 	upsert deny-pci '{"id":"deny-pci","name":"PCI change control","principals":["*"],"devices":["*"],"tags":{"pci_scope":"true"},"actions":["*"],"effect":"deny","reason":"PCI-scoped devices need a change ticket","enabled":true}'; \

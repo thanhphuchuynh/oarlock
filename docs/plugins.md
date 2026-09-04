@@ -549,8 +549,8 @@ The decision endpoint receives:
 ```json
 {
   "principal": {
-    "id": "phuc@example.com",
-    "email": "phuc@example.com",
+    "id": "admin@mail.com",
+    "email": "admin@mail.com",
     "groups": ["on-call"],
     "attrs": {"jurisdiction": "EU"}
   },
@@ -585,7 +585,7 @@ and transport errors are **unavailable**, not denied; the gateway reports
 a JSON `RevocationEvent`:
 
 ```text
-data: {"principal_id":"phuc@example.com","device_id":"treadmill-4821","reason":"left on-call"}
+data: {"principal_id":"admin@mail.com","device_id":"treadmill-4821","reason":"left on-call"}
 ```
 
 An empty `principal_id` or `device_id` means every principal or every device. Closing the

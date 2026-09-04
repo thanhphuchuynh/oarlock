@@ -60,7 +60,7 @@ import (
 )
 
 const (
-	operatorID = "phuc@example.com"
+	operatorID = "admin@mail.com"
 	observerID = "sam@example.com"
 	ticketRef  = "ticket AV-9182: display frozen after firmware update"
 )

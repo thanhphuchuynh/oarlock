@@ -189,7 +189,7 @@ those can be slow or fail, each for a different reason with a different remedy.
 **Designed as two named waits, never one spinner:**
 
 ```
-  ✓  Authorised as phuc@example.com
+  ✓  Authorised as admin@mail.com
   ⟳  Waking treadmill-4821…            up to 30s
   ○  Opening the tunnel
 ```
@@ -275,7 +275,7 @@ wrote it.
         │
         ▼
  ┌──────────────────────────────────────────────┐
- │ ✓ Authorised as phuc@example.com             │
+ │ ✓ Authorised as admin@mail.com             │
  │ ⟳ Waking treadmill-4821…          up to 30s  │   two named waits
  │ ○ Opening the tunnel                         │
  └──────────────────────────────────────────────┘

@@ -48,7 +48,7 @@ func (agents) Disconnect(context.Context, string, string) error {
 
 func newAPI(t *testing.T) *httptest.Server {
 	t.Helper()
-	authn, err := statictoken.Open("test", map[string]string{testToken: "phuc@example.com"})
+	authn, err := statictoken.Open("test", map[string]string{testToken: "admin@mail.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func newAPI(t *testing.T) *httptest.Server {
 	// skipped. A schema test with no data is a test that passes for the wrong reason.
 	if err := ledger.Create(context.Background(), &sessions.Session{
 		ID: "sess_openapi_1", DeviceID: "treadmill-4821", Profile: "shell",
-		Mode: "gateway", Principal: "phuc@example.com",
+		Mode: "gateway", Principal: "admin@mail.com",
 		State: sessions.StateAttached, RecordingState: sessions.Recorded,
 	}); err != nil {
 		t.Fatal(err)

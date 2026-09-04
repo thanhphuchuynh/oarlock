@@ -35,7 +35,7 @@ func TestServiceSignedAssertion(t *testing.T) {
 	}
 	a.Now = func() time.Time { return now }
 	token, err := delegated.Sign(delegated.Assertion{
-		Subject: "phuc@example.com", Email: "phuc@example.com", Groups: []string{"oncall"},
+		Subject: "admin@mail.com", Email: "admin@mail.com", Groups: []string{"oncall"},
 		Audience: "oarlock-api", Expires: now.Add(30 * time.Second).Unix(), ID: "jti-1",
 	}, secret)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestServiceSignedAssertion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != "phuc@example.com" || p.Email != "phuc@example.com" || !p.Expiry.Equal(now.Add(30*time.Second)) {
+	if p.ID != "admin@mail.com" || p.Email != "admin@mail.com" || !p.Expiry.Equal(now.Add(30*time.Second)) {
 		t.Fatalf("principal = %+v", p)
 	}
 }
@@ -53,7 +53,7 @@ func TestServiceSignedAssertion(t *testing.T) {
 func TestRejectsBadAssertions(t *testing.T) {
 	now := time.Unix(1000, 0)
 	a, err := delegated.New(base{}, secret, "oarlock-api",
-		map[string][]string{"svc-crm": {"phuc@example.com"}}, time.Minute)
+		map[string][]string{"svc-crm": {"admin@mail.com"}}, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,21 +66,21 @@ func TestRejectsBadAssertions(t *testing.T) {
 		{
 			name: "expired",
 			in: delegated.Assertion{
-				Subject: "phuc@example.com", Audience: "oarlock-api",
+				Subject: "admin@mail.com", Audience: "oarlock-api",
 				Expires: now.Add(-time.Second).Unix(), ID: "expired",
 			},
 		},
 		{
 			name: "wrong audience",
 			in: delegated.Assertion{
-				Subject: "phuc@example.com", Audience: "somewhere-else",
+				Subject: "admin@mail.com", Audience: "somewhere-else",
 				Expires: now.Add(time.Second).Unix(), ID: "aud",
 			},
 		},
 		{
 			name: "too long",
 			in: delegated.Assertion{
-				Subject: "phuc@example.com", Audience: "oarlock-api",
+				Subject: "admin@mail.com", Audience: "oarlock-api",
 				Expires: now.Add(2 * time.Minute).Unix(), ID: "long",
 			},
 		},
@@ -108,13 +108,13 @@ func TestRejectsBadAssertions(t *testing.T) {
 func TestReplayIsRejected(t *testing.T) {
 	now := time.Unix(1000, 0)
 	a, err := delegated.New(base{}, secret, "oarlock-api",
-		map[string][]string{"svc-crm": {"phuc@example.com"}}, time.Minute)
+		map[string][]string{"svc-crm": {"admin@mail.com"}}, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.Now = func() time.Time { return now }
 	token, err := delegated.Sign(delegated.Assertion{
-		Subject: "phuc@example.com", Audience: "oarlock-api",
+		Subject: "admin@mail.com", Audience: "oarlock-api",
 		Expires: now.Add(time.Second).Unix(), ID: "same-jti",
 	}, secret)
 	if err != nil {

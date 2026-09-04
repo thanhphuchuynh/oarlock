@@ -331,7 +331,7 @@ function PermissionDrawer({ permission, onClose, onSave }: {
             <Label label="Priority"><input className="field mono" type="number" value={form.priority}
               onChange={(event) => setForm({ ...form, priority: Number(event.target.value) })} /></Label>
           </div>
-          <Label label="Principals"><input className="field mono" required placeholder="phuc@example.com, *@oncall.example.com"
+          <Label label="Principals"><input className="field mono" required placeholder="admin@mail.com, *@oncall.example.com"
             value={form.principals} onChange={(event) => setForm({ ...form, principals: event.target.value })} /></Label>
           <Label label="Devices"><input className="field mono" placeholder="samsung-*, treadmill-*"
             value={form.devices} onChange={(event) => setForm({ ...form, devices: event.target.value })} /></Label>

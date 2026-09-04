@@ -95,7 +95,7 @@ func newHarness(t *testing.T, d plugin.Dispatcher) *harness {
 
 func req() invite.Request {
 	return invite.Request{
-		SessionID: "sess_1", Profile: "shell", Principal: "phuc@example.com",
+		SessionID: "sess_1", Profile: "shell", Principal: "admin@mail.com",
 		PTY: &frame.PTY{Cols: 132, Rows: 38, Term: "xterm-256color"},
 	}
 }
@@ -292,7 +292,7 @@ func TestPendingResolvesWhenTheAgentDialsIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if att.Claims.SessionID != "sess_1" || att.Claims.Principal != "phuc@example.com" {
+	if att.Claims.SessionID != "sess_1" || att.Claims.Principal != "admin@mail.com" {
 		t.Errorf("claims: %+v", att.Claims)
 	}
 	select {
