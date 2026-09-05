@@ -33,11 +33,6 @@ export interface Attach {
   expires_at: string;
 }
 
-export interface Agent {
-  device_id: string;
-  connected: boolean;
-}
-
 export interface Device {
   id: string;
   platform: "android" | "linux" | "container" | "other";
@@ -239,7 +234,10 @@ export class Client {
    * limit. An absent facet is an absent parameter rather than `&since=`, so a hand-edited
    * link that omits one narrows on nothing rather than filtering on the empty string.
    */
-  sessions(query?: SessionQuery): Promise<{ sessions: Session[] }> {
+  // The return type's `next_cursor` mirrors `SessionList` in docs/openapi.yaml
+  // (internal/apisrv/apisrv.go's listResponse) — present, and absent on the last page.
+  // Nothing here consumes it yet; no caller today asks for a second page.
+  sessions(query?: SessionQuery): Promise<{ sessions: Session[]; next_cursor?: string }> {
     const params = new URLSearchParams();
     params.set("limit", String(query?.limit ?? 50));
     if (query?.principal) params.set("principal", query.principal);
@@ -253,11 +251,9 @@ export class Client {
     return this.call("GET", `/api/v1/sessions?${params.toString()}`);
   }
 
-  agents(): Promise<{ agents: Agent[] }> {
-    return this.call("GET", "/api/v1/agents");
-  }
-
-  devices(): Promise<{ devices: Device[] }> {
+  // Same note as `sessions()` above: `next_cursor` mirrors `DeviceList`
+  // (apisrv.go's devicesResponse), present here for a caller that starts paging later.
+  devices(): Promise<{ devices: Device[]; next_cursor?: string }> {
     return this.call("GET", "/api/v1/devices?limit=100");
   }
 
