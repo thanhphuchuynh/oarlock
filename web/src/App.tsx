@@ -23,14 +23,13 @@ import {
   type Device,
   type Session,
 } from "./api";
-import { Fleet } from "./Fleet";
 import { Permissions } from "./Permissions";
-import { SSHAccess } from "./SSHAccess";
 import { SQLExplorer } from "./SQLExplorer";
 import { Waits, type Step } from "./components/Waits";
 import { SessionPage } from "./pages/SessionPage";
 import { PersonPage } from "./pages/PersonPage";
 import { DevicePage } from "./pages/DevicePage";
+import { SearchPage } from "./pages/SearchPage";
 import { useRouter } from "./router/useRouter";
 import { SignIn } from "./components/SignIn";
 
@@ -411,10 +410,10 @@ export function App() {
     navigate({ kind: id });
   }
 
-  // Device still renders the fleet page unchanged — increment 4 gives it its own page.
-  // Person has its own page now, but both count as "on the fleet page" for the chrome
-  // below: reaching either means having drilled in from Fleet, and neither is a separate
-  // top-level destination on the nav rail.
+  // Person and Device both have their own page, and both still count as "on the search
+  // page" for the chrome below: reaching either means having drilled in from Search (by
+  // its resolving lookup, or by opening a row in the device list it carries), and neither
+  // is a separate top-level destination on the nav rail.
   const section: NavPage = route.kind === "person" || route.kind === "device" ? "search" : (route.kind as NavPage);
   const current = pages.find((p) => p.id === section)!;
   const rendersFleet = route.kind === "search" || route.kind === "device";
@@ -534,11 +533,12 @@ export function App() {
               )}
 
               {route.kind === "search" && (
-                <Fleet
+                <SearchPage
                   client={client.current}
                   devices={devices}
                   sessions={sessions}
                   me={me}
+                  navigate={navigate}
                   onOpen={(id, why) => void openSession(id, why)}
                   onEdit={(candidate) => setDeviceDialog(candidate)}
                   onToggle={(candidate) => void toggleDevice(candidate)}

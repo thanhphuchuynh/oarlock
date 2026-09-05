@@ -1,44 +1,63 @@
-// The fleet, organised around the thing you actually work with.
+// The search-first home — the mockup's "Who, or what?" Every answer starts with a person
+// or a device, so the top of this page is a single box that resolves whatever you type
+// straight to that page: a `sess_…` id opens the session, an id already in the fleet opens
+// the device's own page, anything else is treated as a principal. That is new — the
+// console had no way to jump straight to a person before this page existed.
 //
-// The page this replaced had the same device in two panels — a "Device registry" table
-// whose STATE column said ONLINE, and a "Live agents" table that existed to say ONLINE
-// again — above a stat row that repeated in large type what both tables already showed,
-// above a shell form that asked you to retype a device id you were looking at. Four
-// places to read one device's state, and none of them answered the question an
-// administrator actually arrives with: who can reach this thing, and what has been done
-// on it.
-//
-// So: one row per device, and everything about that device inside it. Connection state is
-// a property of the row, because that is what it is. Opening a shell starts from the
-// device rather than from a text field. "Who can reach it" is answered by the gateway,
-// with the authorisation backend's own matcher, because a second copy of glob-and-tag
-// matching in this file would drift and would drift towards lying.
+// Below it is the device list `Fleet.tsx` used to own: one row per device, opened inline
+// rather than linked away, because `openRow` in the browser suite drives this exact
+// accordion — Open a shell, who can reach it, recent sessions, all inside the row you
+// clicked. What changes is the access panel: it was Fleet's own copy of the grants
+// vocabulary, and is now the same `Grants` the Person and Device pages already share. That
+// was the second of the two duplicated grants panels the plan calls out; this is where it
+// closes. `DeviceSessions` stays its own thing on purpose — its Attach/Watch/Replay/End
+// buttons act immediately, in place, which is a different job from `Timeline`'s "go look at
+// the session's own page" rows, and nothing here asks it to become that.
 
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
   Client,
   type Device,
-  type DeviceAccess,
-  type Permission,
   type Session,
-} from "./api";
-import { SSHAccess } from "./SSHAccess";
+} from "../api";
+import { SSHAccess } from "../SSHAccess";
+import { Grants, type GrantsState } from "../components/Grants";
+import type { Route } from "../router/routes";
 
+type Navigate = (to: Route, opts?: { replace?: boolean }) => void;
 type StateFilter = "all" | "online" | "offline" | "disabled";
 
-/** What the access panel knows, per device. Loaded when a row is first opened. */
-type Access =
-  | { kind: "loading" }
-  | { kind: "refused"; error: ApiError }
-  | { kind: "failed"; message: string }
-  | { kind: "rules"; access: DeviceAccess };
+/** What a typed lookup resolves to. Always something: a `sess_…` id is a session, an id
+ *  already in the fleet is that device, and anything else is assumed to be a principal —
+ *  there is no API to check whether a person exists, and the Person page already answers
+ *  "nobody by that name has done anything" by simply having nothing in its timeline. */
+type Target = { kind: "person" | "device" | "session"; id: string };
 
-export interface FleetProps {
+function classify(raw: string, devices: readonly Device[]): Target | null {
+  const id = raw.trim();
+  if (!id) return null;
+  if (id.startsWith("sess_")) return { kind: "session", id };
+  if (devices.some((d) => d.id === id)) return { kind: "device", id };
+  return { kind: "person", id };
+}
+
+function resolveTo(navigate: Navigate, target: Target) {
+  if (target.kind === "session") {
+    navigate({ kind: "session", session: target.id });
+  } else if (target.kind === "device") {
+    navigate({ kind: "device", device: target.id, facets: {} });
+  } else {
+    navigate({ kind: "person", principal: target.id, facets: {} });
+  }
+}
+
+export interface SearchPageProps {
   client: Client;
   devices: readonly Device[];
   sessions: readonly Session[];
   me: string;
+  navigate: Navigate;
   onOpen: (device: string, reason: string) => void;
   onEdit: (device: Device) => void;
   onToggle: (device: Device) => void;
@@ -50,11 +69,12 @@ export interface FleetProps {
   onKill: (session: Session) => void;
 }
 
-export function Fleet(props: FleetProps) {
-  const { devices, sessions } = props;
+export function SearchPage(props: SearchPageProps) {
+  const { devices, sessions, navigate } = props;
   const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [open, setOpen] = useState<string | null>(null);
+  const [lookup, setLookup] = useState("");
 
   const online = devices.filter((d) => d.enabled !== false && d.connected).length;
   const live = sessions.filter((s) => s.live).length;
@@ -74,65 +94,101 @@ export function Fleet(props: FleetProps) {
     }
   });
 
-  return (
-    <section className="panel" data-testid="fleet">
-      {/* The plate's own heading. Without it the page jumps h1 to h3 at the first
-          expanded row, which is a real gap for anyone navigating by headings. */}
-      <h2 className="sr-only">Devices</h2>
-      <div className="panel-header flex-wrap">
-        {/* The counts, as a sentence in the header rather than four numbers in large
-            type. They are context for the list, not the point of the page. */}
-        <p className="text-sm text-fg-muted" data-testid="fleet-summary">
-          <span className="font-semibold text-fg">{devices.length}</span>
-          {devices.length === 1 ? " device" : " devices"}
-          {" · "}
-          {online} online
-          {" · "}
-          {live} live {live === 1 ? "session" : "sessions"}
-        </p>
-        <div className="flex w-full gap-2 sm:w-auto">
-          <input
-            className="field min-w-0 sm:w-56"
-            placeholder="Search devices"
-            aria-label="Search devices"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <select
-            className="field w-auto"
-            aria-label="Filter by state"
-            value={stateFilter}
-            onChange={(event) => setStateFilter(event.target.value as StateFilter)}
-          >
-            <option value="all">All states</option>
-            <option value="online">Online</option>
-            <option value="offline">Offline</option>
-            <option value="disabled">Disabled</option>
-          </select>
-        </div>
-      </div>
+  const target = classify(lookup, devices);
 
-      {visible.length === 0 ? (
-        <p className="border-t border-border p-8 text-center text-fg-muted">
-          {devices.length === 0
-            ? "No devices are registered. Add one and its agent can dial in."
-            : "No devices match this search."}
+  return (
+    <div className="grid gap-6">
+      <section className="panel p-6" data-testid="search-hero">
+        <h2 className="text-lg font-semibold">Who, or what?</h2>
+        <p className="mt-1 text-sm text-fg-muted">
+          Every answer here starts with a person or a device.
         </p>
-      ) : (
-        <ul className="border-t border-border">
-          {visible.map((device) => (
-            <li key={device.id} className="border-b border-border last:border-b-0">
-              <DeviceRow
-                {...props}
-                device={device}
-                expanded={open === device.id}
-                onExpand={() => setOpen(open === device.id ? null : device.id)}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+        <form
+          className="mt-4 flex flex-col gap-2 sm:flex-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!target) return;
+            resolveTo(navigate, target);
+            setLookup("");
+          }}
+        >
+          <input
+            className="field sm:flex-1"
+            placeholder="A person, a device id, or a session id"
+            aria-label="Search"
+            value={lookup}
+            onChange={(event) => setLookup(event.target.value)}
+          />
+          <button className="btn btn-primary" type="submit" disabled={!target}>
+            Go
+          </button>
+        </form>
+        {target && (
+          <p className="mt-2 text-sm text-fg-faint">
+            Enter opens the {target.kind} page for <span className="mono">{target.id}</span>.
+          </p>
+        )}
+      </section>
+
+      <section className="panel" data-testid="fleet">
+        {/* The plate's own heading. Without it the page jumps h2 to h3 at the first
+            expanded row, which is a real gap for anyone navigating by headings. */}
+        <h2 className="sr-only">Devices</h2>
+        <div className="panel-header flex-wrap">
+          {/* The counts, as a sentence in the header rather than four numbers in large
+              type. They are context for the list, not the point of the page. */}
+          <p className="text-sm text-fg-muted" data-testid="fleet-summary">
+            <span className="font-semibold text-fg">{devices.length}</span>
+            {devices.length === 1 ? " device" : " devices"}
+            {" · "}
+            {online} online
+            {" · "}
+            {live} live {live === 1 ? "session" : "sessions"}
+          </p>
+          <div className="flex w-full gap-2 sm:w-auto">
+            <input
+              className="field min-w-0 sm:w-56"
+              placeholder="Search devices"
+              aria-label="Search devices"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <select
+              className="field w-auto"
+              aria-label="Filter by state"
+              value={stateFilter}
+              onChange={(event) => setStateFilter(event.target.value as StateFilter)}
+            >
+              <option value="all">All states</option>
+              <option value="online">Online</option>
+              <option value="offline">Offline</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
+        </div>
+
+        {visible.length === 0 ? (
+          <p className="border-t border-border p-8 text-center text-fg-muted">
+            {devices.length === 0
+              ? "No devices are registered. Add one and its agent can dial in."
+              : "No devices match this search."}
+          </p>
+        ) : (
+          <ul className="border-t border-border">
+            {visible.map((device) => (
+              <li key={device.id} className="border-b border-border last:border-b-0">
+                <DeviceRow
+                  {...props}
+                  device={device}
+                  expanded={open === device.id}
+                  onExpand={() => setOpen(open === device.id ? null : device.id)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -163,13 +219,13 @@ function DeviceRow({
   onObserve,
   onReplay,
   onKill,
-}: FleetProps & {
+}: SearchPageProps & {
   device: Device;
   expanded: boolean;
   onExpand: () => void;
 }) {
   const [reason, setReason] = useState("");
-  const [access, setAccess] = useState<Access | undefined>();
+  const [access, setAccess] = useState<GrantsState | undefined>();
   const mine = sessions.filter((s) => s.device_id === device.id);
   const liveHere = mine.filter((s) => s.live);
   const disabled = device.enabled === false;
@@ -177,7 +233,8 @@ function DeviceRow({
   const loadAccess = useCallback(async () => {
     setAccess({ kind: "loading" });
     try {
-      setAccess({ kind: "rules", access: await client.deviceAccess(device.id) });
+      const result = await client.deviceAccess(device.id);
+      setAccess({ kind: "ready", rules: result.rules, adminActions: result.admin_actions });
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "not_authorized") {
         setAccess({ kind: "refused", error: caught });
@@ -267,7 +324,13 @@ function DeviceRow({
             )}
           </div>
 
-          <AccessPanel access={access} onRetry={() => void loadAccess()} />
+          <Grants
+            state={access ?? { kind: "loading" }}
+            onRetry={() => void loadAccess()}
+            testId="device-access"
+            variant="device"
+            subject={device.id}
+          />
 
           <div>
             <h3 className="row-section-title">Recent sessions</h3>
@@ -335,143 +398,6 @@ function StateDot({ device }: { device: Device }) {
       />
     </span>
   );
-}
-
-function AccessPanel({ access, onRetry }: { access: Access | undefined; onRetry: () => void }) {
-  if (access === undefined || access.kind === "loading") {
-    return (
-      <div data-testid="device-access">
-        <h3 className="row-section-title">Who can reach it</h3>
-        <p className="mt-2 text-sm text-fg-muted">Evaluating the policy…</p>
-      </div>
-    );
-  }
-  if (access.kind === "refused") {
-    return (
-      <div data-testid="device-access">
-        <h3 className="row-section-title">Who can reach it</h3>
-        {/* A device administrator who cannot read the policy is a real configuration, not
-            an error. Saying which grant is missing beats an empty list, which would read
-            as "nobody can reach this". */}
-        <p className="mt-2 text-sm text-fg-muted">
-          {access.error.condition.headline}{" "}
-          <span className="text-fg-faint">
-            Seeing who can reach a device needs <span className="mono">admin:permissions</span>{" "}
-            on <span className="mono">gateway</span>.
-          </span>
-        </p>
-      </div>
-    );
-  }
-  if (access.kind === "failed") {
-    return (
-      <div data-testid="device-access">
-        <h3 className="row-section-title">Who can reach it</h3>
-        <p className="mt-2 text-sm text-state-refused" role="alert">
-          {access.message}{" "}
-          <button className="underline" onClick={onRetry}>
-            Try again
-          </button>
-        </p>
-      </div>
-    );
-  }
-
-  // Reaching a device and administering it are different sentences about a person, so
-  // they are different lists. Grouped by the vocabulary the gateway sent rather than a
-  // copy of it kept here: `admin:devices` is not a way to reach a device, and showing it
-  // under "who can reach it" said something untrue about whoever held it.
-  const admin = new Set(access.access.admin_actions);
-  const reach = access.access.rules.filter((rule) =>
-    rule.actions.some((action) => action === "*" || !admin.has(action)),
-  );
-  const administer = access.access.rules.filter((rule) =>
-    rule.actions.some((action) => action === "*" || admin.has(action)),
-  );
-
-  return (
-    <div className="grid gap-4" data-testid="device-access">
-      <div data-testid="device-access-reach">
-        <h3 className="row-section-title">Who can reach it</h3>
-        {reach.length === 0 ? (
-          <p className="mt-2 text-sm text-fg-muted">
-            No rule lets anybody open a session on this device.
-          </p>
-        ) : (
-          <ul className="mt-2 grid gap-1.5">
-            {reach.map((rule) => (
-              <AccessRule key={rule.id} rule={rule} admin={admin} kind="reach" />
-            ))}
-          </ul>
-        )}
-      </div>
-      {administer.length > 0 && (
-        <div data-testid="device-access-admin">
-          <h3 className="row-section-title">Who can administer it</h3>
-          <ul className="mt-2 grid gap-1.5">
-            {administer.map((rule) => (
-              <AccessRule key={rule.id} rule={rule} admin={admin} kind="administer" />
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AccessRule({
-  rule,
-  admin,
-  kind,
-}: {
-  rule: Permission;
-  admin: ReadonlySet<string>;
-  kind: "reach" | "administer";
-}) {
-  const deny = rule.effect === "deny";
-  const off = !rule.enabled;
-  // Only the actions this list is about. A rule granting `shell` and `admin:kill` says
-  // something different in each place, and printing both lists in both places is how a
-  // reader stops trusting either.
-  const shown = rule.actions.filter((action) => {
-    if (action === "*") return true;
-    return kind === "administer" ? admin.has(action) : !admin.has(action);
-  });
-  return (
-    <li
-      className={`flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm ${off ? "opacity-50" : ""}`}
-      data-rule={rule.id}
-    >
-      {/* Deny first in the list and named in the row, because it outranks every allow
-          wherever it appears. A reader scanning for "can they" must not have to reach the
-          end to find the one line that reverses the rest. */}
-      <span
-        className={`shrink-0 text-[11px] font-semibold uppercase tracking-wider ${
-          deny ? "text-state-refused" : "text-state-recorded"
-        }`}
-      >
-        {deny ? "Denied" : "Allowed"}
-      </span>
-      <span className="mono min-w-0 break-all">{rule.principals.join(", ")}</span>
-      <span className="mono text-sm text-fg-muted">
-        {shown.includes("*") ? "every action" : shown.join(" ")}
-      </span>
-      {limitsOf(rule) && <span className="text-sm text-fg-faint">{limitsOf(rule)}</span>}
-      {deny && rule.reason && (
-        <span className="text-sm text-state-refused">— {rule.reason}</span>
-      )}
-      {off && <span className="text-sm text-fg-faint">— rule disabled, not consulted</span>}
-    </li>
-  );
-}
-
-/** Grant limits only tighten, so they are worth showing where the grant is read. */
-function limitsOf(rule: Permission): string {
-  const parts: string[] = [];
-  if (rule.max_duration) parts.push(`max ${rule.max_duration}`);
-  if (rule.idle) parts.push(`idle ${rule.idle}`);
-  if (rule.ttl) parts.push(`re-checked every ${rule.ttl}`);
-  return parts.join(" · ");
 }
 
 function DeviceSessions({
