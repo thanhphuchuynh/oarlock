@@ -18,12 +18,9 @@ import type { Verdict } from "@oarlock/terminal";
 import {
   ApiError,
   Client,
-  collectHandoff,
   endSession,
-  loginMode,
   type Attach,
   type Device,
-  type LoginMode,
   type Session,
 } from "./api";
 import { Fleet } from "./Fleet";
@@ -34,6 +31,7 @@ import { Waits, type Step } from "./Waits";
 import { SessionPage } from "./pages/SessionPage";
 import { PersonPage } from "./pages/PersonPage";
 import { useRouter } from "./router/useRouter";
+import { SignIn } from "./components/SignIn";
 
 const tokenKey = "oarlock.token";
 
@@ -74,8 +72,6 @@ export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [me, setMe] = useState("");
-  // undefined until the gateway has answered. See the sign-in screen below.
-  const [login, setLogin] = useState<LoginMode | undefined>();
   const [listError, setListError] = useState<Condition | null>(null);
   const [deviceDialog, setDeviceDialog] = useState<Device | "new" | null>(null);
   // Opening by typed id is the secondary path: it is how you reach a device whose row is
@@ -140,33 +136,17 @@ export function App() {
     };
   }, [refresh, route.kind]);
 
-  // Two things happen before anything is rendered, and only when there is no token yet.
-  //
-  // The handoff first: this load may be the redirect back from a completed sign-in, and
-  // the cookie waiting for us is redeemable exactly once. Then the mode, so the right
-  // screen appears if there was no handoff.
-  useEffect(() => {
-    if (token) return;
-    let cancelled = false;
-    void (async () => {
-      const handed = await collectHandoff();
-      if (cancelled) return;
-      if (handed) {
-        setMe(handed.principal);
-        saveToken(handed.token);
-        return;
-      }
-      const mode = await loginMode();
-      if (!cancelled) setLogin(mode);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
   function saveToken(t: string) {
     sessionStorage.setItem(tokenKey, t);
     setToken(t);
+  }
+
+  // Handed to <SignIn>: a token exists now, from a completed OIDC handoff (which also
+  // names the principal the provider vouched for) or a pasted static one (principal
+  // unknown until the fleet's own session list supplies it — see `refresh` above).
+  function signedIn(t: string, principal: string) {
+    if (principal) setMe(principal);
+    saveToken(t);
   }
 
   // The browser's own Back/Forward is the one way to change `route` that `goToPage`
@@ -394,63 +374,10 @@ export function App() {
     });
   }
 
+  // Nothing past this point is rendered until there is a token: SignIn owns everything
+  // about getting one (which flavour to show, the OIDC handoff, the pasted-token form).
   if (!token) {
-    // Nothing is rendered until the gateway has said how to sign in. A console that
-    // guessed would show the wrong screen for a moment on every single load, and the
-    // wrong screen here is "paste a secret" — the one habit this flow exists to remove.
-    if (login === undefined) {
-      return (
-        <main className="mx-auto max-w-lg p-8">
-          <h1 className="pb-2 text-xl font-semibold">Oarlock</h1>
-          <p className="text-fg-muted">Checking how this gateway signs you in…</p>
-        </main>
-      );
-    }
-    if (login === "oidc") {
-      return (
-        <main className="mx-auto max-w-lg p-8">
-          <h1 className="pb-2 text-xl font-semibold">Oarlock</h1>
-          <p className="pb-4 text-fg-muted">
-            Sign in with your identity provider. This gateway never sees your password or
-            your second factor.
-          </p>
-          {/* A link, not a fetch: the whole point is a top-level navigation the browser
-              can follow to the provider and back. `return_to` brings you to the page you
-              were heading for — the gateway accepts only a path on its own origin. */}
-          <a
-            className="btn btn-primary inline-flex"
-            href={`/auth/login?return_to=${encodeURIComponent(location.pathname + location.hash)}`}
-            data-testid="sign-in"
-          >
-            Sign in
-          </a>
-        </main>
-      );
-    }
-    return (
-      <main className="mx-auto max-w-lg p-8">
-        <h1 className="pb-2 text-xl font-semibold">Oarlock</h1>
-        <p className="pb-4 text-fg-muted">
-          Paste an API token to continue. This is a development mechanism — static tokens
-          are long-lived shared secrets and the gateway refuses them outside{" "}
-          <code className="mono">dev</code>. Configure{" "}
-          <code className="mono">auth.kind: oidc</code> and a sign-in button replaces this.
-        </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const t = new FormData(e.currentTarget).get("token");
-            if (typeof t === "string" && t) saveToken(t);
-          }}
-          className="flex flex-col gap-3"
-        >
-          <input name="token" className="field mono" placeholder="token" autoFocus />
-          <button className="btn btn-primary" type="submit">
-            Continue
-          </button>
-        </form>
-      </main>
-    );
+    return <SignIn onSignedIn={signedIn} />;
   }
 
   const signOut = () => {
