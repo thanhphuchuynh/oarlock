@@ -1,87 +1,112 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { formatPath, parsePath, type Route } from "./routes";
 
-// One store for the whole app, because the URL is one thing.
+// The route lives in exactly one place: a module-level store, read through
+// useSyncExternalStore rather than through this hook's own useState.
 //
-// The obvious version of this hook keeps the route in useState and calls setRoute inside
-// navigate(). That is a bug the moment two components call useRouter(): pushState does
-// not fire popstate, so only the component that navigated learns about it and every
-// other one renders the previous route forever. useSyncExternalStore is the primitive
-// for exactly this shape — one external source, every subscriber on one snapshot.
+// The version that looks obviously fine — keep `route` in useState here and call
+// setRoute inside navigate() — breaks the instant a second component calls useRouter().
+// window.history.pushState() does not raise a `popstate` event, so the only component
+// that would ever learn about the change is whichever one happened to call navigate();
+// the app's nav rail, a page body, anything else subscribed would keep rendering
+// whatever route was current the last time *it* rendered. A store outside React, with
+// every subscriber reading the same snapshot, is what useSyncExternalStore is for.
 
-// Where the console is mounted. The gateway serves it under a prefix —
-// cmd/oarlockd/app/app.go does `mux.Handle("/ui/", ui.Handler("/ui"))` — while
-// `pnpm dev:ui` serves it at the root, so the prefix cannot be a constant and cannot be
-// read from Vite's `base` (that is "./", and it is about assets, not routes).
+// --- where this app is mounted -------------------------------------------------------
 //
-// Derived once, at module load: whatever the app's own URL is when it starts tells us
-// where it is mounted. A deep link under the gateway still begins with `/ui/`; one on the
-// dev server does not. A device or principal whose id begins with "ui" is unaffected —
-// the test is on the path root, so `/ui/d/ui` strips to `/d/ui`.
-const BASE =
-  window.location.pathname === "/ui" || window.location.pathname.startsWith("/ui/")
-    ? "/ui"
-    : "";
+// cmd/oarlockd/app/app.go serves the built console under a path prefix —
+// `mux.Handle("/ui/", ui.Handler("/ui"))` — but `pnpm dev:ui` serves the identical app at
+// the site root. Vite's own `base` setting does not help here: it governs asset URLs
+// ("./"), not the routes this hook parses. So the prefix is not a constant; it is
+// answered once, when this module first loads, by looking at the address the browser is
+// already sitting on.
+const MOUNT_PREFIX = ((): string => {
+  const { pathname } = window.location;
+  return pathname === "/ui" || pathname.startsWith("/ui/") ? "/ui" : "";
+})();
 
-function stripBase(pathname: string): string {
-  if (pathname === BASE) return "/";
-  if (BASE && pathname.startsWith(BASE + "/")) return pathname.slice(BASE.length);
+// Reverses MOUNT_PREFIX so `routes.ts` only ever sees an unprefixed path. A device or
+// principal id that happens to start with "ui" is unaffected: the comparison is against
+// the whole leading segment, so `/ui/d/ui` becomes `/d/ui`, not `/d/`.
+function unmount(pathname: string): string {
+  if (pathname === MOUNT_PREFIX) return "/";
+  if (MOUNT_PREFIX !== "" && pathname.startsWith(MOUNT_PREFIX + "/")) {
+    return pathname.slice(MOUNT_PREFIX.length);
+  }
   return pathname;
 }
 
-const listeners = new Set<() => void>();
-
-function emit() {
-  for (const listener of listeners) listener();
+function here(): string {
+  return window.location.pathname + window.location.search;
 }
 
-// getSnapshot must return a referentially stable value or React re-renders forever, and
-// parsePath builds a fresh object every call. So the parse is memoised on the URL
-// string, which is the route's actual identity.
-let cachedURL: string | null = null;
-let cachedRoute: Route = { kind: "search" };
+// --- the store itself ------------------------------------------------------------------
 
-function snapshot(): Route {
-  const url = window.location.pathname + window.location.search;
-  if (url !== cachedURL) {
-    cachedURL = url;
-    cachedRoute = parsePath(stripBase(window.location.pathname), window.location.search);
-  }
-  return cachedRoute;
+type Listener = () => void;
+const subscribers = new Set<Listener>();
+
+function announce(): void {
+  for (const notify of subscribers) notify();
 }
 
-// One popstate listener for N components rather than one each: the listener is attached
-// when the first subscriber arrives and removed when the last leaves.
-function subscribe(onChange: () => void): () => void {
-  if (listeners.size === 0) window.addEventListener("popstate", emit);
-  listeners.add(onChange);
+// A single `popstate` listener does for every subscriber what N of them would do
+// separately: it is attached once the first component asks for the route and removed
+// once the last one stops caring.
+function subscribe(onStoreChange: Listener): () => void {
+  if (subscribers.size === 0) window.addEventListener("popstate", announce);
+  subscribers.add(onStoreChange);
   return () => {
-    listeners.delete(onChange);
-    if (listeners.size === 0) window.removeEventListener("popstate", emit);
+    subscribers.delete(onStoreChange);
+    if (subscribers.size === 0) window.removeEventListener("popstate", announce);
   };
 }
 
-// useSyncExternalStore requires a server snapshot. The console is client-rendered, but
-// returning the client one would touch `window` where it may not exist.
-const serverSnapshot = (): Route => ({ kind: "search" });
+// React requires getSnapshot to return the identical value it returned last time unless
+// something really changed, or it will treat every render as a change and loop forever.
+// parsePath has no memory of its own — it builds a fresh object on every call — so the
+// memoisation happens here, keyed on the URL string, which is the only thing that
+// actually identifies "the same route" between one call and the next.
+let memoisedURL: string | undefined;
+let memoisedRoute: Route = { kind: "search" };
 
-export function useRouter() {
-  const route = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
+function getSnapshot(): Route {
+  const url = here();
+  if (url !== memoisedURL) {
+    memoisedURL = url;
+    memoisedRoute = parsePath(unmount(window.location.pathname), window.location.search);
+  }
+  return memoisedRoute;
+}
 
-  const navigate = useCallback((to: Route | string, opts?: { replace?: boolean }) => {
-    // Both branches are a clean, unmounted path — a string is just a hand-formatted
-    // Route, not a raw href — so BASE goes on once, here, after the branch. That keeps
-    // /ui knowledge inside this file: a caller building a string never has to know where
-    // the console is mounted, the same as one passing a Route never does.
-    const clean = typeof to === "string" ? to : formatPath(to);
-    const path = BASE + clean;
-    if (path === window.location.pathname + window.location.search) return;
-    if (opts?.replace) window.history.replaceState(null, "", path);
-    else window.history.pushState(null, "", path);
-    // pushState does not fire popstate. This line is what tells every subscriber.
-    emit();
-    // A new page starts at the top. Without this, following a link from halfway down a
-    // session list lands you halfway down the next page.
+// This app never runs outside a browser, so there is no real server render to answer
+// for — but useSyncExternalStore's contract still asks for one, and reaching into
+// `window` here would defeat the point of a *server* snapshot.
+function getServerSnapshot(): Route {
+  return { kind: "search" };
+}
+
+export function useRouter(): { route: Route; navigate: (to: Route | string, options?: { replace?: boolean }) => void } {
+  const route = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  const navigate = useCallback((to: Route | string, options?: { replace?: boolean }) => {
+    // A string argument is a path some caller already formatted (or built to look like
+    // one) — never a raw, already-mounted href. Either way the mount prefix is applied
+    // exactly once, after this branch, so neither a caller building a Route nor one
+    // building a string has to know whether the console is living under /ui today.
+    const unmountedPath = typeof to === "string" ? to : formatPath(to);
+    const target = MOUNT_PREFIX + unmountedPath;
+    if (target === here()) return;
+
+    if (options?.replace) {
+      window.history.replaceState(null, "", target);
+    } else {
+      window.history.pushState(null, "", target);
+    }
+    // The line pushState itself will never trigger: every subscriber's only way to hear
+    // about this navigation is this explicit call.
+    announce();
+    // A freshly opened page reads from the top. Without this, following a link from
+    // partway down a long session list would open the next page partway down too.
     window.scrollTo(0, 0);
   }, []);
 

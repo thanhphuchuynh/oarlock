@@ -1,10 +1,17 @@
-// Route parsing, with no DOM and no React.
+// Route parsing: a pure function of a path and a query string, nothing else.
 //
-// Split out so it can be tested in Node: the same reason the terminal package puts its
-// disclosure policy behind its own subpath. Everything that touches `window` lives in
-// useRouter.ts, and this file is the part with the decisions in it.
+// No `window`, no React — so it can run under Node the way `tests/unit/router.spec.ts`
+// does, the same reason `@oarlock/terminal/disclosure` sits behind its own subpath rather
+// than inside the component that uses it. Everything that actually reads the browser's
+// address bar belongs in `useRouter.ts`; this file only says what a given address means.
 
-export type Facets = Partial<Record<"since" | "until" | "device" | "state" | "cursor", string>>;
+// The closed set of query keys a route may carry. Closed on purpose: a URL is something
+// an operator pastes to a colleague or bookmarks, and a parameter this list does not name
+// is dropped rather than smuggled through to a page that never validated it.
+const FACET_NAMES = ["since", "until", "device", "state", "cursor"] as const;
+type FacetName = (typeof FACET_NAMES)[number];
+
+export type Facets = Partial<Record<FacetName, string>>;
 
 export type Route =
   | { kind: "search" }
@@ -14,45 +21,40 @@ export type Route =
   | { kind: "permissions" }
   | { kind: "sql" };
 
-// The closed set. An unrecognised parameter is dropped rather than carried, so a link
-// cannot smuggle state the UI never validated.
-const FACET_KEYS = ["since", "until", "device", "state", "cursor"] as const;
+const SEARCH_ROUTE: Route = { kind: "search" };
 
-function readFacets(search: string): Facets {
-  const out: Facets = {};
-  const params = new URLSearchParams(search);
-  for (const key of FACET_KEYS) {
-    const value = params.get(key);
-    if (value) out[key] = value;
-  }
-  return out;
-}
-
+/**
+ * parsePath turns a pathname and a query string into a `Route`.
+ *
+ * Never throws: the gateway serves the same index page for every path, so a mistyped or
+ * corrupted link arrives here rather than at a 404, and the one acceptable answer to
+ * "I don't recognise this" is the search screen, not a crash.
+ */
 export function parsePath(pathname: string, search = ""): Route {
-  const parts = pathname.split("/").filter(Boolean);
+  const segments = pathname.split("/").filter((segment) => segment !== "");
 
-  if (parts.length === 0) return { kind: "search" };
-  if (parts.length === 1 && parts[0] === "permissions") return { kind: "permissions" };
-  if (parts.length === 1 && parts[0] === "sql") return { kind: "sql" };
+  if (segments.length === 0) return SEARCH_ROUTE;
 
-  if (parts.length === 2) {
-    // decodeURIComponent throws on a malformed sequence — a hand-edited URL should land
-    // on search, not crash the app.
-    let id: string;
-    try {
-      id = decodeURIComponent(parts[1]!);
-    } catch {
-      return { kind: "search" };
-    }
-    if (!id) return { kind: "search" };
-    if (parts[0] === "p") return { kind: "person", principal: id, facets: readFacets(search) };
-    if (parts[0] === "d") return { kind: "device", device: id, facets: readFacets(search) };
-    if (parts[0] === "s") return { kind: "session", session: id };
+  if (segments.length === 1) {
+    if (segments[0] === "permissions") return { kind: "permissions" };
+    if (segments[0] === "sql") return { kind: "sql" };
+    return SEARCH_ROUTE;
   }
 
-  return { kind: "search" };
+  if (segments.length === 2) {
+    const prefix = segments[0]!;
+    const id = decodeSegment(segments[1]!);
+    if (id === null) return SEARCH_ROUTE;
+
+    if (prefix === "p") return { kind: "person", principal: id, facets: facetsFromSearch(search) };
+    if (prefix === "d") return { kind: "device", device: id, facets: facetsFromSearch(search) };
+    if (prefix === "s") return { kind: "session", session: id };
+  }
+
+  return SEARCH_ROUTE;
 }
 
+/** formatPath is parsePath's inverse: what to push onto the address bar for a `Route`. */
 export function formatPath(route: Route): string {
   switch (route.kind) {
     case "search":
@@ -62,22 +64,46 @@ export function formatPath(route: Route): string {
     case "sql":
       return "/sql";
     case "session":
-      return "/s/" + encodeURIComponent(route.session);
+      return `/s/${encodeURIComponent(route.session)}`;
     case "person":
-      return "/p/" + encodeURIComponent(route.principal) + query(route.facets);
+      return `/p/${encodeURIComponent(route.principal)}${facetsToSearch(route.facets)}`;
     case "device":
-      return "/d/" + encodeURIComponent(route.device) + query(route.facets);
+      return `/d/${encodeURIComponent(route.device)}${facetsToSearch(route.facets)}`;
   }
 }
 
-// Stable order, because the URL is something people paste to each other and compare.
-// Two views of the same thing must produce byte-identical links.
-function query(facets: Facets): string {
-  const params = new URLSearchParams();
-  for (const key of FACET_KEYS) {
-    const value = facets[key];
-    if (value) params.set(key, value);
+// A percent-escape a person typed by hand, or one a proxy mangled, can be malformed —
+// decodeURIComponent throws rather than returning a best guess. Returning null instead of
+// letting that exception reach the caller is what keeps a bad link a redirect to search
+// instead of a blank page.
+function decodeSegment(segment: string): string | null {
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded === "" ? null : decoded;
+  } catch {
+    return null;
   }
-  const s = params.toString();
-  return s ? "?" + s : "";
+}
+
+function facetsFromSearch(search: string): Facets {
+  const params = new URLSearchParams(search);
+  const facets: Facets = {};
+  for (const name of FACET_NAMES) {
+    const value = params.get(name);
+    if (value) facets[name] = value;
+  }
+  return facets;
+}
+
+// The order is fixed by FACET_NAMES rather than by insertion order into `facets`: the URL
+// is compared and pasted between people, so the same set of facets must always render as
+// the same string no matter which order the caller built the object in.
+function facetsToSearch(facets: Facets): string {
+  const params = new URLSearchParams();
+  for (const name of FACET_NAMES) {
+    const value = facets[name];
+    if (value) params.set(name, value);
+  }
+  const rendered = params.toString();
+  return rendered ? `?${rendered}` : "";
 }
