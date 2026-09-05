@@ -164,27 +164,41 @@ plus the nav and the route switch. `App.tsx` target: under 200 lines.
 `tests/console/login.spec.ts` is the arbiter and **must not be edited**. Keep the `sign-in`
 hook.
 
-### Task 3: Shared components
+### Task 3: The shared panels and their two callers
 
-**Files:** `web/src/components/{Timeline,Grants,Facets,Waits}.tsx`
+**Files:** `web/src/components/{Timeline,Grants,Facets,Waits}.tsx`,
+`web/src/pages/{PersonPage,DevicePage}.tsx`
 
-`Timeline` and `Grants` each exist once and take two callers. This is the structural reason
-for the rewrite: `Fleet.tsx` and `PersonPage.tsx` carry separate grants panels today and
-they have already drifted.
+An earlier draft made the shared components their own task. That was wrong: components
+nothing imports are dead code, the suite stays green trivially, and nothing verifies them.
+A task is the smallest unit that carries its own test cycle, so the shared panels ship with
+both their callers.
 
-`Grants` has four states — loading, refused, failed, ready. Refused **names the action
-required** and never renders an empty list: on a person page an empty list reads as "this
+**This is the first task a user can see, and the structural reason for the whole rewrite.**
+`Fleet.tsx` and `pages/PersonPage.tsx` each carry their own grants panel today and the two
+have already drifted — the person one written from the mockup, the device one from the API.
+After this task there is one `Grants` with two callers, and one `Timeline` with two callers.
+
+`Grants` has four states — loading, refused, failed, ready. **Refused names the action
+required and never renders an empty list.** On a person page an empty list reads as "this
 person is permitted nothing", which is a false statement rather than a blank space.
+`Fleet.tsx:343-376` is the implementation that gets this right; read it.
 
-### Task 4: Person and Device pages
+`DevicePage` takes over what `Fleet.tsx`'s expanded row does: open a shell, who can reach
+it, who administers it, recent sessions. The fleet *list* stays in `Fleet.tsx` for now and
+moves to `SearchPage` in Task 4.
 
-**Files:** `web/src/pages/{SearchPage,PersonPage,DevicePage}.tsx`
+Hooks that must survive by name: `person-page`, `person-sessions`, `person-access`,
+`person-facets`, `device-access`, `device-access-reach`, `device-access-admin`, `open`,
+`reason`, `waits`.
 
-Both consume Task 3. Hooks: `person-page`, `person-sessions`, `person-access`,
-`person-facets`, `fleet`, `fleet-summary`, `device-access`, `device-access-reach`,
-`device-access-admin`, `open`, `reason`.
+### Task 4: Search, and the nav
 
-Facets live in the URL; the 30-day default is written into it with `replace: true`.
+**Files:** `web/src/pages/SearchPage.tsx`, `web/src/App.tsx`
+
+The search-first home from the mockup, resolving to a person or a device. The nav shrinks
+from four tabs to three — Search, Permissions, SQL — with `Fleet.tsx` deleted once
+`SearchPage` carries the device list. Hooks: `fleet`, `fleet-summary`.
 
 ### Task 5: Session page
 
