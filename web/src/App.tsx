@@ -27,9 +27,10 @@ import { Fleet } from "./Fleet";
 import { Permissions } from "./Permissions";
 import { SSHAccess } from "./SSHAccess";
 import { SQLExplorer } from "./SQLExplorer";
-import { Waits, type Step } from "./Waits";
+import { Waits, type Step } from "./components/Waits";
 import { SessionPage } from "./pages/SessionPage";
 import { PersonPage } from "./pages/PersonPage";
+import { DevicePage } from "./pages/DevicePage";
 import { useRouter } from "./router/useRouter";
 import { SignIn } from "./components/SignIn";
 
@@ -532,7 +533,7 @@ export function App() {
                 </p>
               )}
 
-              {rendersFleet && (
+              {route.kind === "search" && (
                 <Fleet
                   client={client.current}
                   devices={devices}
@@ -547,6 +548,17 @@ export function App() {
                   onObserve={(session) => void observe(session)}
                   onReplay={(session) => void replay(session)}
                   onKill={(session) => void kill(session)}
+                />
+              )}
+
+              {route.kind === "device" && (
+                <DevicePage
+                  client={client.current}
+                  device={route.device}
+                  devices={devices}
+                  facets={route.facets}
+                  navigate={navigate}
+                  onOpen={(id, why) => void openSession(id, why)}
                 />
               )}
 
