@@ -122,23 +122,94 @@ component, two callers.
 
 ## Task order
 
-Each task ends with the full suite green.
+Each task ends with the full suite green. **Tasks 1-6 do not edit tests.** If a test fails,
+the rewrite lost something — that is the signal, and deleting the signal is the one thing
+that makes a rewrite unreviewable.
 
-1. **The contract layer** — `api.ts`, `router/`, `main.tsx`. No UI. Router unit tests port
-   across unchanged; `api.ts` is checked method-by-method against `docs/openapi.yaml`.
-2. **Shell and sign-in** — `App.tsx` and `SignIn.tsx`. `sign-in` and the reload behaviour
-   must keep working; `tests/console/login.spec.ts` is the arbiter and is not to be edited.
-3. **Shared components** — `Timeline`, `Grants`, `Facets`, `Waits`.
-4. **Person and Device pages** — both consume task 3. `device-access*`, `person-*` hooks.
-5. **Session page** — terminal, replay, failure. The disclosure and the integrity verdict.
-6. **Permissions and SQL pages**, and the four dialogs.
-7. **Reconcile the test suite** — only after 1-6. Any test that must change is a feature
-   that moved; list each one and why.
-
-**Tasks 1-6 do not edit tests.** If a test fails, the rewrite lost something — that is the
-signal, and deleting the signal is the one thing that makes a rewrite unreviewable.
+New files land beside the old ones; each old file is deleted as its replacement lands.
 
 ---
+
+### Task 1: The contract layer
+
+**Files:** `web/src/api.ts`, `web/src/router/routes.ts`, `web/src/router/useRouter.ts`, `web/src/main.tsx`
+
+No UI. Rewrite the client and the router.
+
+- `api.ts` carries all 23 methods from the inventory. **Check each against
+  `docs/openapi.yaml`** — it is generated from the route table, so it is the authority on
+  field names. A wrong name here fails at runtime, not at build, which is why this is the
+  riskiest file in the plan.
+- `router/` keeps its existing contract: `parsePath`, `formatPath`, `Route`, and a
+  `useRouter()` returning `{ route, navigate }` over `useSyncExternalStore`. The 11 unit
+  tests in `tests/unit/router.spec.ts` must pass unchanged — they are the specification.
+- **`pushState` does not fire `popstate`.** The route lives in one module-level store read
+  through `useSyncExternalStore`, never per-component `useState`, or every subscriber but
+  the navigating one goes stale. `getSnapshot` must return a memoised value or React loops.
+- The mount prefix is derived at load, not hardcoded.
+
+**Ends with the FULL suite green — 185 passing.** An earlier draft excused this task from
+the console tests. That was wrong: this task preserves both modules' exported contracts, so
+the old `App.tsx` keeps working against the new files and every test should still pass. If
+the suite goes red here, a contract changed, and that is precisely the thing worth
+discovering in the smallest task rather than the largest.
+
+### Task 2: Shell and sign-in
+
+**Files:** `web/src/App.tsx`, `web/src/components/SignIn.tsx`
+
+The auth shell — token in `sessionStorage`, OIDC, sign-out, reload-keeps-you-signed-in —
+plus the nav and the route switch. `App.tsx` target: under 200 lines.
+
+`tests/console/login.spec.ts` is the arbiter and **must not be edited**. Keep the `sign-in`
+hook.
+
+### Task 3: Shared components
+
+**Files:** `web/src/components/{Timeline,Grants,Facets,Waits}.tsx`
+
+`Timeline` and `Grants` each exist once and take two callers. This is the structural reason
+for the rewrite: `Fleet.tsx` and `PersonPage.tsx` carry separate grants panels today and
+they have already drifted.
+
+`Grants` has four states — loading, refused, failed, ready. Refused **names the action
+required** and never renders an empty list: on a person page an empty list reads as "this
+person is permitted nothing", which is a false statement rather than a blank space.
+
+### Task 4: Person and Device pages
+
+**Files:** `web/src/pages/{SearchPage,PersonPage,DevicePage}.tsx`
+
+Both consume Task 3. Hooks: `person-page`, `person-sessions`, `person-access`,
+`person-facets`, `fleet`, `fleet-summary`, `device-access`, `device-access-reach`,
+`device-access-admin`, `open`, `reason`.
+
+Facets live in the URL; the 30-day default is written into it with `replace: true`.
+
+### Task 5: Session page
+
+**Files:** `web/src/pages/SessionPage.tsx`
+
+Terminal, player, failure — chosen by session state, one URL for all three so a link
+pasted while a session is live still resolves after it closes. Carries the
+recorded/unrecorded disclosure and the replay integrity verdict. Hooks: `terminal`,
+`replay`, `failure`, `waits`.
+
+### Task 6: Permissions, SQL, and the four dialogs
+
+**Files:** `web/src/pages/{PermissionsPage,SqlPage}.tsx`, `web/src/components/dialogs/*.tsx`
+
+The four dialogs from the inventory: device form, open-by-id, SSH client, permission
+editor. Hooks: `permissions`, `permissions-refused`, `sql-explorer`, `run-sql`,
+`open-by-id*`.
+
+**Delete every remaining old file** in this task. `web/src` should contain only what the
+File Structure table lists.
+
+### Task 7: Reconcile the tests
+
+Only after 1-6. Any test that must change is a feature that moved: list each one and why.
+A test deleted without an explanation is a capability deleted without one.
 
 ## Done when
 
