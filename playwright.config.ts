@@ -23,6 +23,13 @@ export default defineConfig({
       // Ad-hoc, and deliberately not part of the suite: it drives whatever gateway is
       // already running on :8443, which is a machine's current state rather than a
       // fixture. Run it with `pnpm exec playwright test --project=live`.
+      //
+      // "Not part of the suite" was only ever a comment. `playwright test` with no filter
+      // runs every project, so this one was in `pnpm test` all along, and the suite's
+      // result depended on whether a demo gateway happened to be running and whether its
+      // binary matched HEAD. It cost a false failure the day a task rewrote this file: the
+      // gateway on :8443 had been built two commits earlier. `pnpm test` now names the
+      // three projects it wants, so the comment and the behaviour finally agree.
       name: "live",
       testDir: "tests/live",
       use: { ...devices["Desktop Chrome"] },
