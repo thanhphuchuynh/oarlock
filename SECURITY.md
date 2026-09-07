@@ -53,7 +53,7 @@ mitigation rather than let the deadline pass quietly.
   states plainly that the gateway is fully trusted; an attack that starts with code execution
   inside `oarlockd` is not a new finding.
 - Missing hardening that the documentation already names as a known gap
-  ([threat model § 12](docs/threat-model.md#12-known-gaps)) — though a *working exploit* of
+  ([threat model § 12](docs/threat-model.md#12-what-is-actually-built)) — though a *working exploit* of
   one of those gaps is very much in scope and welcome.
 - Denial of service through resource exhaustion that the documented limits are designed to
   bound, unless you can show the limits do not hold.

@@ -14,8 +14,9 @@
     "build:ui": "vite build --mode console --outDir ../cmd/oarlockd/app/ui/dist --emptyOutDir && node tokens/keep-dist.mjs",
     "dev:ui": "vite dev --mode console",
     "landing": "vite --mode landing",
-    "build:landing": "vite build --mode landing",
-    "preview:landing": "vite build --mode landing && vite preview --mode landing"
+    "build:landing": "vite build --mode landing && node landing/documents.mjs",
+    "documents": "node landing/documents.mjs",
+    "preview:landing": "vite build --mode landing && node landing/documents.mjs && vite preview --mode landing"
   },
   "devDependencies": {
     "@oarlock/react": "workspace:*",
@@ -26,6 +27,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4",
+    "marked": "^18.0.11",
     "react": "^19",
     "react-dom": "^19",
     "tailwindcss": "^4",

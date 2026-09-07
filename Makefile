@@ -26,7 +26,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean landing landing-build landing-preview local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean landing landing-build landing-preview documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
@@ -48,6 +48,7 @@ help:
 		'  make dev-ui       Start Vite console dev server' \
 		'  make landing      Serve the landing sheet source on :5180, live reload' \
 		'  make landing-preview  Build it and serve the output on :5181' \
+		'  make documents    Re-render the document sheets from the Markdown' \
 		'  make android-apk  Build the standalone ARM64 Android/VR agent APK' \
 		'  make android-binary  Build the ARM64 agent binary for a system image'
 
@@ -158,6 +159,11 @@ landing-build:
 
 landing-preview:
 	$(NPM) run preview:landing
+
+# Sheets 2 and 3, rendered from the Markdown that is already the source of truth.
+# Separate from landing-build so a documentation edit does not wait on a vite build.
+documents:
+	$(NPM) run documents
 
 android-tools:
 	mkdir -p $(MOBILE_BIN)
