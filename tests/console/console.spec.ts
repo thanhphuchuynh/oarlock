@@ -304,6 +304,50 @@ async function signIn(page: Page, as = token) {
  *  before this runs, the full page after. That is also what makes a second call for a
  *  device whose page is already open a no-op, the same as re-"opening" an already-expanded
  *  accordion row used to be. */
+// A dialog's children must not be wider than the dialog.
+//
+// This is here because a screenshot caught what no assertion did. The dialog body is a
+// CSS grid whose implicit column is sized `auto` — that is, `max-content` — and one child
+// is a <pre> holding a one-line `ssh` command. Its intrinsic width set the column, the
+// column blew past the panel's max-width, and every sibling stretched with it: the
+// identity input and the button row ran a couple of hundred pixels outside the dialog.
+// `overflow-x-auto` did nothing, because it only clips a box that is stopped from growing.
+//
+// Measuring geometry rather than asserting a class name is deliberate: the defect was
+// invisible to every selector-based check, and the property that actually matters is
+// "does it fit".
+test("a dialog's contents stay inside the dialog", async ({ page }) => {
+  await signIn(page);
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByRole("button", { name: "SSH client" }).click();
+
+  const panel = page.getByRole("dialog", { name: "Local SSH client" });
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+
+  const outer = await panel.boundingBox();
+  expect(outer).not.toBeNull();
+  const limit = outer!.x + outer!.width;
+
+  // The three children that overflowed: the input, the command block, the button row.
+  for (const child of [
+    panel.locator("input.field").first(),
+    panel.locator("pre").first(),
+    panel.locator("div.flex.flex-wrap.justify-end").first(),
+  ]) {
+    const b = await child.boundingBox();
+    expect(b).not.toBeNull();
+    // A pixel of slack for sub-pixel layout; the real defect was ~200px.
+    expect(b!.x + b!.width).toBeLessThanOrEqual(limit + 1);
+  }
+
+  // And the page itself must not have gained a horizontal scrollbar from it.
+  const doc = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+  }));
+  expect(doc.scrollWidth).toBeLessThanOrEqual(doc.innerWidth);
+});
+
 async function openRow(page: Page, device: string) {
   const row = page.locator(`[data-device="${device}"]`);
   await expect(row).toBeVisible({ timeout: 30_000 });

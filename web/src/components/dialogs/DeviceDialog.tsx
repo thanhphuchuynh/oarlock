@@ -105,7 +105,7 @@ function DeviceFormEditor({
   const [error, setError] = useState("");
   return (
     <form
-      className="grid gap-4"
+      className="grid grid-cols-[minmax(0,1fr)] gap-4"
       onSubmit={async (e) => {
         e.preventDefault();
         setSaving(true);

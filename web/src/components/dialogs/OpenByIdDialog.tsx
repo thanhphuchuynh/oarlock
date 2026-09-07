@@ -52,7 +52,7 @@ export function OpenByIdDialog({
           For a device that is not in front of you. The session is recorded and attributed
           the same way either way.
         </p>
-        <div className="mt-4 grid gap-3">
+        <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3">
           <FieldLabel label="Device id">
             <input
               className="field mono"

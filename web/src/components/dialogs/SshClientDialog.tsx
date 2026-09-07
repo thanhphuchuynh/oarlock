@@ -68,14 +68,18 @@ export function SshClientDialog({ client, device }: { client: Client; device: st
             {error && <p className="mt-5 text-sm text-state-refused" role="alert">{error}</p>}
             {!info && !error && <p className="mt-5 text-sm text-fg-muted">Loading SSH connection details...</p>}
             {info && (
-              <div className="mt-5 grid gap-4">
+              <div className="mt-5 grid grid-cols-[minmax(0,1fr)] gap-4">
                 <label className="grid gap-1">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">Operator identity file</span>
                   <input className="field mono" value={identity} onChange={(event) => setIdentity(event.target.value)} />
                 </label>
                 <div>
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">Command</div>
-                  <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 text-sm"><code>{command}</code></pre>
+                  {/* min-w-0 is load-bearing: `overflow-x-auto` only clips a box that is stopped
+                      from growing, and a grid track sized `auto` lets this pre expand to the
+                      full length of a one-line ssh command — which is what dragged the input
+                      and the button row past the panel edge. */}
+                  <pre className="min-w-0 overflow-x-auto rounded-md border border-border bg-bg p-3 text-sm"><code>{command}</code></pre>
                 </div>
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
                   <dt className="text-fg-faint">Principal</dt><dd className="mono truncate">{info.principal}</dd>

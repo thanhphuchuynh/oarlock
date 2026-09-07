@@ -117,7 +117,7 @@ export function PermissionDialog({ permission, onClose, onSave }: {
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="Close permission dialog" title="Close">x</button>
         </div>
-        <form className="grid gap-4" onSubmit={async (event) => {
+        <form className="grid grid-cols-[minmax(0,1fr)] gap-4" onSubmit={async (event) => {
           event.preventDefault();
           setSaving(true);
           setError("");
