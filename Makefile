@@ -26,7 +26,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean landing landing-build landing-preview documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
@@ -49,6 +49,7 @@ help:
 		'  make landing      Serve the landing sheet source on :5180, live reload' \
 		'  make landing-preview  Build it and serve the output on :5181' \
 		'  make documents    Re-render the document sheets from the Markdown' \
+		'  make landing-lan  Serve the sheets to this network, on this LAN address' \
 		'  make android-apk  Build the standalone ARM64 Android/VR agent APK' \
 		'  make android-binary  Build the ARM64 agent binary for a system image'
 
@@ -164,6 +165,24 @@ landing-preview:
 # Separate from landing-build so a documentation edit does not wait on a vite build.
 documents:
 	$(NPM) run documents
+
+# The sheets, readable by other machines on this network.
+#
+# Bound to *this* LAN address rather than 0.0.0.0. The address is already known — the
+# target has to print it to be useful — and binding it explicitly means one interface
+# is listening instead of every interface this machine happens to have, which on a
+# laptop includes a VPN tunnel and whatever network it joined last. `pnpm
+# preview:landing:lan` on its own still takes 0.0.0.0, for a container that needs it.
+#
+# Nothing here is authenticated. Anyone who can reach the address can read the sheets,
+# which is the point, and is also the whole of the security model: stop the server.
+landing-lan:
+	@addr=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null); \
+	if [ -z "$$addr" ]; then echo 'no LAN address on en0/en1'; exit 1; fi; \
+	printf 'sheet 1   http://%s:5181/\n' "$$addr"; \
+	printf 'register  http://%s:5181/documents/\n' "$$addr"; \
+	printf 'readable by every host on this network until you stop it (ctrl-c)\n\n'; \
+	OARLOCK_DOCS_HOST=$$addr $(NPM) run preview:landing:lan
 
 android-tools:
 	mkdir -p $(MOBILE_BIN)

@@ -16,7 +16,8 @@
     "landing": "vite --mode landing",
     "build:landing": "vite build --mode landing && node landing/documents.mjs",
     "documents": "node landing/documents.mjs",
-    "preview:landing": "vite build --mode landing && node landing/documents.mjs && vite preview --mode landing"
+    "preview:landing": "vite build --mode landing && node landing/documents.mjs && vite preview --mode landing",
+    "preview:landing:lan": "vite build --mode landing && node landing/documents.mjs && vite preview --mode landing --host ${OARLOCK_DOCS_HOST:-0.0.0.0}"
   },
   "devDependencies": {
     "@oarlock/react": "workspace:*",
