@@ -15,13 +15,15 @@ test("the running demo's console opens a shell in the browser", async ({ page })
   await expect(page.getByTestId("fleet")).toBeVisible();
   console.log("SIGNED IN");
 
-  // From the device's own row: the fleet page is organised around the device, so there is
-  // no id to retype.
+  // From the device's own page: the fleet list is a list of links now, so there is no id
+  // to retype — click the row and it lands there.
   const row = page.locator('[data-device="treadmill-4821"]');
   await expect(row).toBeVisible({ timeout: 30_000 });
-  await row.locator("button.row-toggle").click();
-  await row.getByTestId("reason").fill("checking the console by hand");
-  await row.getByTestId("open").click();
+  await row.click();
+  const devicePage = page.getByTestId("device-page");
+  await expect(devicePage).toBeVisible({ timeout: 30_000 });
+  await devicePage.getByTestId("reason").fill("checking the console by hand");
+  await devicePage.getByTestId("open").click();
 
   await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
   console.log("TERMINAL MOUNTED");

@@ -21,6 +21,7 @@ export function Timeline({
   navigate,
   testId,
   variant,
+  onKill,
 }: {
   state: TimelineState;
   onRetry: () => void;
@@ -28,6 +29,10 @@ export function Timeline({
   testId: string;
   /** Which column shows the thing that varies. */
   variant: "person" | "device";
+  /** Ends a still-live row in place. The old fleet row's "End" button had no other home
+   *  once the accordion holding it was removed — optional because ending a session is a
+   *  device-scoped admin action; the Person page has no reason to offer it. */
+  onKill?: (session: Session) => void;
 }) {
   if (state.kind === "loading") {
     return (
@@ -77,7 +82,13 @@ export function Timeline({
         </thead>
         <tbody>
           {rows.map((session) => (
-            <SessionRow key={session.id} session={session} navigate={navigate} variant={variant} />
+            <SessionRow
+              key={session.id}
+              session={session}
+              navigate={navigate}
+              variant={variant}
+              {...(onKill ? { onKill } : {})}
+            />
           ))}
         </tbody>
       </table>
@@ -89,10 +100,12 @@ function SessionRow({
   session,
   navigate,
   variant,
+  onKill,
 }: {
   session: Session;
   navigate: Navigate;
   variant: "person" | "device";
+  onKill?: (session: Session) => void;
 }) {
   const open = () => navigate({ kind: "session", session: session.id });
   const recorded = session.recording_state === "recorded";
@@ -114,6 +127,12 @@ function SessionRow({
       </td>
       <td className="px-3 py-2">
         <span className="mono">{session.profile}</span>
+        {/* The reason the operator gave, wrapped rather than truncated to three
+            characters — it is the field that says why somebody was on this machine, and
+            the fleet list's row used to be the only place that said so. */}
+        <span className="mt-0.5 block max-w-[16rem] whitespace-normal text-sm text-fg-faint">
+          {session.reason || "opened over ssh"}
+        </span>
       </td>
       <td className="px-3 py-2">
         <Outcome session={session} />
@@ -124,17 +143,32 @@ function SessionRow({
         </Badge>
       </td>
       <td className="px-3 py-2">
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label={`Open session ${session.id}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            open();
-          }}
-        >
-          <span aria-hidden="true">›</span>
-        </button>
+        <span className="flex items-center justify-end gap-1.5">
+          {onKill && session.live && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              aria-label={`End session ${session.id}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onKill(session);
+              }}
+            >
+              End
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={`Open session ${session.id}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              open();
+            }}
+          >
+            <span aria-hidden="true">›</span>
+          </button>
+        </span>
       </td>
     </tr>
   );

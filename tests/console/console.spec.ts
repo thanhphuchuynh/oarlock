@@ -277,12 +277,21 @@ async function signIn(page: Page, as = token) {
   await expect(page.getByTestId("fleet")).toBeVisible();
 }
 
-/** Opens one device's row and returns it. Everything about a device lives inside it. */
+/** Opens one device's own page (`/d/{id}`) and returns its container. Everything about a
+ *  device lives inside it — this used to expand an accordion row in place; now it navigates
+ *  there instead, which is the whole point of the task that rewrote it. `data-device` is
+ *  carried by both the fleet list's link row and the device page's own root, so the same
+ *  selector resolves to whichever of the two is currently on screen: the compact link
+ *  before this runs, the full page after. That is also what makes a second call for a
+ *  device whose page is already open a no-op, the same as re-"opening" an already-expanded
+ *  accordion row used to be. */
 async function openRow(page: Page, device: string) {
   const row = page.locator(`[data-device="${device}"]`);
   await expect(row).toBeVisible({ timeout: 30_000 });
-  if ((await row.locator("button.row-toggle").getAttribute("aria-expanded")) !== "true") {
-    await row.locator("button.row-toggle").click();
+  if ((await row.getAttribute("data-testid")) !== "device-page") {
+    await row.click();
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toHaveAttribute("data-testid", "device-page");
   }
   return row;
 }
@@ -320,9 +329,9 @@ test("the session list explains itself", async ({ page }) => {
   await page.getByRole("button", { name: "Leave" }).click();
 
   // There is no standalone session list to click a tab to: a session's history lives on
-  // its device's own row now, which `Leave` returns to. `Leave` unmounts the fleet page
-  // (the route was "session" while attached) and remounts it collapsed, same as it always
-  // did going back to "list" — so the row is reopened rather than assumed still expanded.
+  // its device's own page now, at `/d/{id}`. `Leave` navigates back to search (the route
+  // was "session" while attached), so getting back to it means going through `openRow`
+  // again rather than assuming a still-expanded row, same as it always did.
   const reopened = await openRow(page, "treadmill-4821");
   // The reason the operator gave is on the row, which is what turns a list into an
   // explanation.
@@ -338,14 +347,20 @@ test("a connected agent is a state of its device, not a separate list", async ({
   await expect(page.getByTestId("fleet-summary")).toContainText("1 online", { timeout: 30_000 });
   await expect(page.getByTestId("fleet-summary")).toContainText("3 devices");
 
+  // `row` is the fleet list's own link at this point — the same `data-device` selector
+  // that will resolve to the device's own page below, once `openRow` navigates there.
   const row = page.locator('[data-device="treadmill-4821"]');
-  await expect(row.locator("button.row-toggle")).toContainText("Online");
-  // The control for the channel is in the device's own row, and only while it is up.
+  await expect(row).toContainText("Online");
+  // The control for the channel is on the device's own page now, and only while it is up.
   await openRow(page, "treadmill-4821");
   await expect(row.getByRole("button", { name: "Stop agent" })).toBeVisible();
 
+  // Back to the list for the offline device: the accordion never left the fleet page to
+  // check a second row, but a device page is its own route now, so getting to the next
+  // device's row means returning to the list first.
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const absent = page.locator('[data-device="rower-9001"]');
-  await expect(absent.locator("button.row-toggle")).toContainText("Offline");
+  await expect(absent).toContainText("Offline");
   await openRow(page, "rower-9001");
   await expect(absent.getByRole("button", { name: "Stop agent" })).toHaveCount(0);
 });
@@ -388,7 +403,10 @@ test("a denial is listed first and reads as a denial", async ({ page }) => {
   await expect(rows.first()).toContainText("Denied");
   await expect(reach).toContainText("Allowed");
 
-  // And it is scoped by tag, so the untagged treadmill next to it is unaffected.
+  // And it is scoped by tag, so the untagged treadmill next to it is unaffected. A device
+  // page is its own route now, so reaching a second device means returning to the list —
+  // the accordion never had to leave the fleet page to check a neighbouring row.
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const plain = await openRow(page, "treadmill-4821");
   await expect(plain.getByTestId("device-access-reach")).not.toContainText("Denied");
 });
@@ -522,11 +540,12 @@ test("replay shows the integrity verdict above the recording", async ({ page }) 
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Leave" }).click();
 
-  // The device's row lists its 5 most recent sessions with no id of its own to target by
-  // (that is what the old aggregate table's `data-session` was for), only "newest first" —
-  // so this waits for *this* session's own close and recording to finalise before the row
-  // is asked for its Replay button, the same way the old table's poll was waited out. Ours
-  // being newest is what then makes `.first()` unambiguous rather than a second race.
+  // The device page's own "recent sessions" list (`Timeline`, shared with the Person page)
+  // shows every session in the default 30-day window, each row keyed by id via
+  // `data-session` — so this waits for *this* session's own close and recording to
+  // finalise before asking for its row, the same way the old aggregate table's poll was
+  // waited out. Targeting the row by this session's own id is what the old table's
+  // `.first()` had to fake by relying on "newest first" instead.
   await waitFor(async () => {
     const res = await fetch(`http://127.0.0.1:${dep!.http}/api/v1/sessions/${sessionID}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -539,18 +558,19 @@ test("replay shows the integrity verdict above the recording", async ({ page }) 
   // is not the same as the page already showing it — the reload after "Leave" may well
   // have landed before this session closed. A reload here (safe: this is `/ui/`, the one
   // path depth that is not affected by the asset defect noted below) asks fresh rather
-  // than waiting out the poll, which is what let an older, already-recorded session on
-  // this device answer `.first()` before this one did.
+  // than waiting out the poll.
   await page.reload();
 
-  // Replay now lives at the session's own route, `/s/{id}`, reached the same way Attach
-  // and Watch are: a button on the device's own row, which `Leave` already returned to
-  // (reopened for the same reason "the session list explains itself" reopens it — the
-  // fleet page remounted collapsed).
+  // Replay now lives at the session's own route, `/s/{id}`. There is no "Replay" button on
+  // the device page any more — the accordion's row is gone, and with it the button that
+  // used to sit beside "Attach"/"Watch". Reaching a closed, recorded session's replay is a
+  // click on its own row instead, the same way reaching a live one to attach or watch it
+  // is: `SessionRoute`'s own cold load already picks the right body — terminal, player, or
+  // failure — from what the session actually is, once the click lands there.
   const reopened = await openRow(page, "treadmill-4821");
-  const replayButton = reopened.getByRole("button", { name: "Replay" }).first();
-  await expect(replayButton).toBeVisible({ timeout: 30_000 });
-  await replayButton.click();
+  const sessionRow = reopened.locator(`[data-session="${sessionID}"]`);
+  await expect(sessionRow).toBeVisible({ timeout: 30_000 });
+  await sessionRow.click();
   await expect(page.getByTestId("replay")).toBeVisible();
   // The click navigated, so the URL is now this session's own — the point of the route.
   await expect(page).toHaveURL(new RegExp(`/ui/s/${sessionID}$`));
@@ -654,7 +674,7 @@ test("navigating away from a dead wait actually renders the destination, not jus
 // presses Back only *after* a nav-rail click has already cleared the wedge (as an earlier
 // version of this test did) cannot see that gap: Back then has nothing left to resurrect,
 // and passes whether or not popstate itself is handled. This one builds history with a
-// nav click, returns to Fleet the same way, and only *then* wedges the screen — so Back is
+// nav click, returns to Search the same way, and only *then* wedges the screen — so Back is
 // the first and only thing that touches the wedge, with no preceding click doing the
 // clearing for it.
 test("the browser's own Back unwedges a dead wait too, not only the nav rail", async ({ page }) => {
@@ -666,7 +686,7 @@ test("the browser's own Back unwedges a dead wait too, not only the nav rail", a
   // with no earlier click already having cleared it.
   await page.getByRole("button", { name: "Permissions", exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/permissions$/);
-  await page.getByRole("button", { name: "Fleet", exact: true }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/$/);
 
   // Wedge the screen — same repro as above — without navigating anywhere: `openSession`'s
@@ -708,17 +728,17 @@ test("an unknown path renders the search screen, not an error", async ({ page })
 test("every subscriber sees the same route after navigating", async ({ page }) => {
   await signIn(page);
 
-  const fleetNav = page.getByRole("button", { name: "Fleet", exact: true });
+  const searchNav = page.getByRole("button", { name: "Search", exact: true });
   const permissionsNav = page.getByRole("button", { name: "Permissions", exact: true });
   const sqlNav = page.getByRole("button", { name: "SQL Explorer", exact: true });
 
-  await expect(fleetNav).toHaveClass(/nav-item-active/);
+  await expect(searchNav).toHaveClass(/nav-item-active/);
   await expect(page.getByTestId("fleet")).toBeVisible();
 
   await permissionsNav.click();
   await expect(page).toHaveURL(/\/ui\/permissions$/);
   await expect(permissionsNav).toHaveClass(/nav-item-active/);
-  await expect(fleetNav).not.toHaveClass(/nav-item-active/);
+  await expect(searchNav).not.toHaveClass(/nav-item-active/);
   await expect(page.getByTestId("permissions")).toBeVisible();
   await expect(page.getByTestId("fleet")).toHaveCount(0);
 
@@ -729,9 +749,9 @@ test("every subscriber sees the same route after navigating", async ({ page }) =
   await expect(page.getByTestId("sql-explorer")).toBeVisible();
   await expect(page.getByTestId("permissions")).toHaveCount(0);
 
-  await fleetNav.click();
+  await searchNav.click();
   await expect(page).toHaveURL(/\/ui\/$/);
-  await expect(fleetNav).toHaveClass(/nav-item-active/);
+  await expect(searchNav).toHaveClass(/nav-item-active/);
   await expect(sqlNav).not.toHaveClass(/nav-item-active/);
   await expect(page.getByTestId("fleet")).toBeVisible();
   await expect(page.getByTestId("sql-explorer")).toHaveCount(0);
@@ -755,11 +775,11 @@ test("a cold link to a session that does not exist renders the failure screen", 
 // unconditionally on a live session, and apisrv.go refuses that to anyone but the
 // session's own operator — so a principal who was not the one who opened it saw the same
 // "not_found" screen as a link to a session that never existed, even though the same
-// session is one click away through Fleet's own Watch button (which mints through
-// `observe` instead). visitor@example.com is seeded above with a shell grant on
-// treadmill-* but no observe grant, so the honest answer once the fix stops pre-empting
-// the gateway's own check is *that* refusal — not the sentence reserved for "there is
-// nothing here".
+// session is one click away through the device page's own timeline row, whose click falls
+// back to `observe` for exactly this reason. visitor@example.com is seeded above with a
+// shell grant on treadmill-* but no observe grant, so the honest answer once the fix stops
+// pre-empting the gateway's own check is *that* refusal — not the sentence reserved for
+// "there is nothing here".
 test("a deep link to a live session you do not own reports why, not that it does not exist", async ({
   page,
   browser,
@@ -797,8 +817,11 @@ test("a deep link to a live session you do not own reports why, not that it does
 test("an administrator can edit, disable, and re-enable a device", async ({ page }) => {
   await signIn(page);
 
+  // Edit, Disable/Enable, Stop agent and Delete moved off the fleet row's accordion and
+  // onto the device page itself — the only place any of them renders now — alongside
+  // `device-summary`, the paragraph that used to be the accordion's own header line.
   const row = await openRow(page, "treadmill-4821");
-  const summary = row.locator("button.row-toggle");
+  const summary = row.getByTestId("device-summary");
   await row.getByRole("button", { name: "Edit" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Edit device" });
@@ -811,7 +834,10 @@ test("an administrator can edit, disable, and re-enable a device", async ({ page
   page.once("dialog", (confirmation) => confirmation.accept());
   const exited = new Promise<void>((resolve) => dep!.agent.once("exit", () => resolve()));
   await row.getByRole("button", { name: "Disable" }).click();
-  await expect(summary).toContainText("Disabled");
+  // `DevicePage`'s own wording, unchanged from Task 3: lower-case, and distinct from the
+  // fleet list's capitalised "Disabled"/"Online"/"Offline" summary — the two pages use
+  // their own vocabularies for the same fact, same as the mockup does.
+  await expect(summary).toContainText("disabled");
   await Promise.race([
     exited,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("agent did not exit")), 10_000)),
@@ -829,7 +855,7 @@ test("an administrator can edit, disable, and re-enable a device", async ({ page
 
   await openRow(page, "treadmill-4821");
   await row.getByRole("button", { name: "Enable" }).click();
-  await expect(summary).toContainText("Offline");
+  await expect(summary).toContainText("offline");
   dep!.agent = startAgent(dep!.agentBin, dep!.dir, dep!.http);
   await waitFor(async () => {
     const response = await fetch(`http://127.0.0.1:${dep!.http}/api/v1/agents`, {
@@ -838,7 +864,7 @@ test("an administrator can edit, disable, and re-enable a device", async ({ page
     const body = await response.json() as { agents: Array<{ device_id: string }> };
     return body.agents.some((agent) => agent.device_id === "treadmill-4821");
   }, "the re-enabled agent to reconnect");
-  await expect(summary).toContainText("Online", { timeout: 15_000 });
+  await expect(summary).toContainText("connected", { timeout: 15_000 });
 });
 
 // The Person page's first question: what did this person do. A cold `page.goto`, not a

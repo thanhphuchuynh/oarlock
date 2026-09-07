@@ -41,7 +41,7 @@ const tokenKey = "oarlock.token";
 type NavPage = "search" | "permissions" | "sql";
 
 const pages: { id: NavPage; label: string; blurb: string }[] = [
-  { id: "search", label: "Fleet", blurb: "Devices, who can reach them, and what has been run on them." },
+  { id: "search", label: "Search", blurb: "Look up a person, a device, or a session — or browse the fleet." },
   { id: "permissions", label: "Permissions", blurb: "Who may perform which actions on which devices." },
   { id: "sql", label: "SQL Explorer", blurb: "Read-only access to operational SQLite data." },
 ];
@@ -534,20 +534,9 @@ export function App() {
 
               {route.kind === "search" && (
                 <SearchPage
-                  client={client.current}
                   devices={devices}
                   sessions={sessions}
-                  me={me}
                   navigate={navigate}
-                  onOpen={(id, why) => void openSession(id, why)}
-                  onEdit={(candidate) => setDeviceDialog(candidate)}
-                  onToggle={(candidate) => void toggleDevice(candidate)}
-                  onDelete={(id) => void deleteDevice(id)}
-                  onStopAgent={(id) => void disconnectAgent(id)}
-                  onAttach={(session) => void attach(session)}
-                  onObserve={(session) => void observe(session)}
-                  onReplay={(session) => void replay(session)}
-                  onKill={(session) => void kill(session)}
                 />
               )}
 
@@ -559,6 +548,11 @@ export function App() {
                   facets={route.facets}
                   navigate={navigate}
                   onOpen={(id, why) => void openSession(id, why)}
+                  onEdit={(candidate) => setDeviceDialog(candidate)}
+                  onToggle={(candidate) => void toggleDevice(candidate)}
+                  onDelete={(id) => void deleteDevice(id)}
+                  onStopAgent={(id) => void disconnectAgent(id)}
+                  onKill={(session) => void kill(session)}
                 />
               )}
 

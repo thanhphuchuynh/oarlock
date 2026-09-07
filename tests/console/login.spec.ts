@@ -350,10 +350,14 @@ test("the console signs in to a shell that works", async ({ page }) => {
     await page.getByTestId("sign-in").click();
     await expect(page.getByTestId("fleet")).toBeVisible({ timeout: 30_000 });
 
-    const row = page.locator('[data-device="treadmill-4821"]');
-    await row.locator("button.row-toggle").click();
-    await row.getByTestId("reason").fill("signed in through the provider");
-    await row.getByTestId("open").click();
+    // The device row is a link to its own page now, not an accordion: click it, then open
+    // the shell from there. (The list-to-page split is Task 5's; this file's own concern
+    // is the OIDC handoff above it, which is untouched.)
+    await page.locator('[data-device="treadmill-4821"]').click();
+    const devicePage = page.getByTestId("device-page");
+    await expect(devicePage).toBeVisible({ timeout: 30_000 });
+    await devicePage.getByTestId("reason").fill("signed in through the provider");
+    await devicePage.getByTestId("open").click();
 
     await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
     await page.locator(".xterm-helper-textarea").focus();
