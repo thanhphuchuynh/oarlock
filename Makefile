@@ -26,7 +26,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean landing landing-build landing-preview local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
@@ -46,6 +46,8 @@ help:
 		'  make demo-seed-permissions  Add the demo grants to SQLite' \
 		'  make demo-agent   Start demo oarlock-agent for treadmill-4821' \
 		'  make dev-ui       Start Vite console dev server' \
+		'  make landing      Serve the landing sheet source on :5180, live reload' \
+		'  make landing-preview  Build it and serve the output on :5181' \
 		'  make android-apk  Build the standalone ARM64 Android/VR agent APK' \
 		'  make android-binary  Build the ARM64 agent binary for a system image'
 
@@ -74,7 +76,7 @@ check: typecheck ui
 
 clean:
 	rm -f $(OARLOCKD) $(OARLOCK_AGENT)
-	rm -rf dist web/dist .cache/go-build
+	rm -rf dist web/dist landing/dist .cache/go-build
 
 # The address a device dials back on has to be reachable *by the device*, so for a phone
 # on the LAN it is this machine's LAN address — which DHCP changes without asking. A stale
@@ -143,6 +145,19 @@ demo-agent:
 
 dev-ui:
 	$(NPM) run dev:ui
+
+# The landing sheet. Two servers because they answer different questions: `landing`
+# is the one to edit against, `landing-preview` is the one to trust, because it
+# serves the built bytes a host would serve rather than the source vite rewrites on
+# the way out.
+landing:
+	$(NPM) run landing
+
+landing-build:
+	$(NPM) run build:landing
+
+landing-preview:
+	$(NPM) run preview:landing
 
 android-tools:
 	mkdir -p $(MOBILE_BIN)

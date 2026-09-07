@@ -18,7 +18,12 @@ export default defineConfig(({ mode }) => {
       root: "landing",
       base: "./",
       build: { outDir: "dist", emptyOutDir: true },
+      // 5180 serves the source with live reload; 5181 serves the built output, which is
+      // what a host would serve. Both strict on purpose: a silent fall back to the next
+      // free port means the tab already open is showing the previous build, and nothing
+      // on screen says so.
       server: { port: 5180, strictPort: true },
+      preview: { port: 5181, strictPort: true },
     };
   }
   if (mode === "harness") {
