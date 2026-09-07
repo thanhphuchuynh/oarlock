@@ -450,7 +450,10 @@ func (s *Store) Immutability(ctx context.Context) (record.Immutability, error) {
 		case minio.NotImplemented, minio.APINotSupported:
 			return s.mutable("this S3 implementation does not support object lock"), nil
 		}
-		return record.Immutability{}, fmt.Errorf(
+		// Kind even on the error path: record.immutabilityOf keeps it, so the
+		// operator's warning and any manifest written afterwards still name which
+		// store failed to answer rather than reporting an anonymous "unknown".
+		return record.Immutability{Kind: kind}, fmt.Errorf(
 			"s3store: reading the object lock configuration of %s: %w", s.cfg.Bucket, err)
 	}
 	if !strings.EqualFold(enabled, "Enabled") {

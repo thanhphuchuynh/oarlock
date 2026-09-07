@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -718,4 +719,42 @@ func TestUnreportingStoreIsTreatedAsMutable(t *testing.T) {
 		t.Error("a store that reports nothing was treated as protected")
 	}
 	_ = ctx
+}
+
+// unreadableStore reports an error from Immutability, standing in for a bucket the
+// gateway cannot reach at boot — which is the case that actually happens, and the one
+// that used to lose the store's identity on the way out.
+type unreadableStore struct{ flakyStore }
+
+func (s *unreadableStore) Immutability(context.Context) (record.Immutability, error) {
+	return record.Immutability{Kind: "s3"}, errors.New("dial tcp 127.0.0.1:1: connection refused")
+}
+
+// TestAStoreThatCannotAnswerKeepsItsName: unknown, unprotected, and still named.
+//
+// Mode and RetainFor are genuinely unknown when the store cannot answer, but *which*
+// store could not answer is known. It is also the field a manifest carries, so a
+// verifier reading `{"mode":"unknown"}` years later could otherwise not tell whether
+// the recording had sat in a directory or a bucket.
+func TestAStoreThatCannotAnswerKeepsItsName(t *testing.T) {
+	s, _ := signer(t)
+	rec, err := record.New(record.Options{
+		Store: &unreadableStore{}, Signer: s, Log: quietLog()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	im := rec.Immutability()
+	if im.Mode != record.ModeUnknown {
+		t.Errorf("mode %q, want unknown", im.Mode)
+	}
+	if im.Mode.Protected() {
+		t.Error("a store that could not answer was treated as protected")
+	}
+	if im.Kind != "s3" {
+		t.Errorf("kind %q, want %q — the store's identity was dropped with its error",
+			im.Kind, "s3")
+	}
+	if !strings.Contains(im.Detail, "connection refused") {
+		t.Errorf("detail %q does not carry the store's own reason", im.Detail)
+	}
 }

@@ -138,16 +138,14 @@ func run(cfgPath string, checkOnly bool, log *slog.Logger) (int, error) {
 	// The boot gate, at last with a caller. It reports every problem at once, because a
 	// deployment with three unsafe settings should take one edit to fix rather than
 	// three boots.
-	problems, gateErr := safety.Check(g.Settings, log)
-	for _, p := range problems {
-		if p.Fatal {
-			log.Error("boot refused", "setting", p.Setting, "problem", p.Message)
-		} else {
-			log.Warn("unsafe configuration", "setting", p.Setting, "problem", p.Message)
-		}
-	}
-	if gateErr != nil {
-		return 3, gateErr
+	//
+	// Check logs each problem itself, so nothing is logged here. There used to be a
+	// loop doing it again with different keys, which printed every finding twice on
+	// top of the aggregate in the returned error — three copies. That was invisible
+	// while every fatal was a short phrase, and stopped being invisible the moment one
+	// of them grew into the paragraph that explains how to fix an unlocked bucket.
+	if _, err := safety.Check(g.Settings, log); err != nil {
+		return 3, err
 	}
 
 	if checkOnly {

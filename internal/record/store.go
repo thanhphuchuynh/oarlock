@@ -117,7 +117,14 @@ func immutabilityOf(ctx context.Context, s Store) Immutability {
 	}
 	im, err := r.Immutability(ctx)
 	if err != nil {
-		return Immutability{Mode: ModeUnknown, Detail: "could not read: " + err.Error()}
+		// Kind survives the error. Everything else about the answer is unknown, but
+		// *which store could not answer* is known, and it is the field a manifest
+		// carries: a verifier reading `{"mode":"unknown"}` years later with no kind
+		// cannot tell whether the recording sat in a directory or a bucket. A store
+		// that returns no Kind on its error path still reports none — this preserves
+		// what it gave rather than inventing it.
+		return Immutability{Mode: ModeUnknown, Kind: im.Kind,
+			Detail: "could not read: " + err.Error()}
 	}
 	if im.Mode == "" {
 		im.Mode = ModeUnknown
