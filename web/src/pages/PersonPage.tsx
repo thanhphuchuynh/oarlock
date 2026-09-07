@@ -48,7 +48,13 @@ export function PersonPage({
   // other facet already round-trips through `route.facets` instead of local state.
   useEffect(() => {
     if (facets.since) return;
-    const since = new Date(Date.now() - THIRTY_DAYS_MS).toISOString();
+    // Midnight UTC, not "now minus thirty days". The old value carried milliseconds, so
+    // it changed on every load and no two visits to this page produced the same URL —
+    // which quietly broke the property the whole design rests on: that the view a person
+    // is looking at is a link they can send. A window that starts on a day boundary is
+    // also the one an auditor means when they say "the last month".
+    const start = new Date(Date.now() - THIRTY_DAYS_MS);
+    const since = `${start.toISOString().slice(0, 10)}T00:00:00Z`;
     navigate({ kind: "person", principal, facets: { ...facets, since } }, { replace: true });
   }, [facets, navigate, principal]);
 

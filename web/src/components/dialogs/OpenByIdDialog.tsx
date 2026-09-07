@@ -30,7 +30,7 @@ export function OpenByIdDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 sm:items-center"
       role="presentation"
       onMouseDown={onClose}
     >

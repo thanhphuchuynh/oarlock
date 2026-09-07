@@ -102,7 +102,24 @@ export function App() {
   // undefined exactly then, which is also exactly when `showChrome` (and so `PageHeader`'s
   // own `show`) is false, so the fallbacks below are never actually rendered.
   const current = pages.find((p) => p.id === section);
+  // Whether a page body renders at all: a wait and a full-page failure each take the whole
+  // screen, and `/s/{id}` carries its own.
   const showChrome = !opening && !failure && route.kind !== "session";
+
+  // Whether the *section* header renders, which is a narrower question and was conflated
+  // with the one above.
+  //
+  // `section` maps person and device onto "search" so the nav rail highlights the right
+  // entry. That is right for the rail and wrong for the title: it put "Search — Look up a
+  // person, a device, or a session" directly above a device page's own
+  // "DEVICE / treadmill-4821" heading. An entity page names itself, and a header naming
+  // the section it was reached through tells the reader where they came from rather than
+  // where they are.
+  //
+  // These two must stay separate. Folding the entity routes into `showChrome` also gated
+  // the page *bodies* on it, so the device and person pages rendered nothing at all —
+  // caught by `tsc` narrowing `route` to `never` inside the block, not by a test.
+  const showSectionHeader = showChrome && route.kind !== "person" && route.kind !== "device";
 
   return (
     <div className="min-h-screen bg-bg lg:grid lg:grid-cols-[13.5rem_minmax(0,1fr)]">
@@ -111,7 +128,7 @@ export function App() {
       <main className="min-w-0">
         <div className="mx-auto flex max-w-[90rem] flex-col gap-6 p-4 sm:p-6 lg:p-8">
           <PageHeader
-            show={showChrome}
+            show={showSectionHeader}
             title={current?.label ?? "Oarlock"}
             blurb={current?.blurb ?? ""}
             sheet={pages.findIndex((p) => p.id === section) + 1}

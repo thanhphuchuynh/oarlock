@@ -106,7 +106,7 @@ export function PermissionDialog({ permission, onClose, onSave }: {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/35" role="presentation" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/60" role="presentation" onMouseDown={onClose}>
       <section className="h-full w-full max-w-lg overflow-y-auto border-l border-border bg-bg-raised p-6 shadow-2xl"
         role="dialog" aria-modal="true" aria-labelledby="permission-dialog-title"
         onMouseDown={(event) => event.stopPropagation()}>

@@ -53,7 +53,7 @@ export function SshClientDialog({ client, device }: { client: Client; device: st
     <>
       <button className="btn" disabled={!target} onClick={() => setOpen(true)}>SSH client</button>
       {open && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" role="presentation"
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" role="presentation"
           onMouseDown={() => setOpen(false)}>
           <section className="w-full max-w-2xl rounded-lg border border-border bg-bg-raised p-6 shadow-2xl"
             role="dialog" aria-modal="true" aria-labelledby="ssh-client-title"
