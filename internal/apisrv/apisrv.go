@@ -1217,6 +1217,11 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request, _ *plugin.
 	if r.URL.Query().Get("live") == "true" {
 		q.Live = true
 	}
+	// Oldest-first is the right default for a forward cursor (see sessions.Query.Newest);
+	// a caller auditing "what happened" asks for the reverse explicitly.
+	if r.URL.Query().Get("newest") == "true" {
+		q.Newest = true
+	}
 	if v := r.URL.Query().Get("unattended"); v != "" {
 		switch v {
 		case "true":

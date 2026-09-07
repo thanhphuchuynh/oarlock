@@ -68,7 +68,10 @@ export function Timeline({
     );
   }
 
-  const rows = [...state.sessions].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  // Newest-first because the caller asked the gateway for that order (`newest: true`),
+  // not because this component re-sorts a bounded page after the fact — sorting here
+  // was B2: it made an old page look current on any window with more than one page.
+  const rows = state.sessions;
   if (rows.length === 0) {
     return (
       <p className="p-8 text-center text-sm text-fg-muted" data-testid={testId}>

@@ -187,6 +187,21 @@ api:
   });
   if (!scoped.ok) throw new Error(`could not seed the scoped device: ${await scoped.text()}`);
 
+  // A second device that never dials in, distinct from rower-9001: opening a session
+  // against it reaches `openSession`'s invite (authorisation passes, so unlike
+  // rower-9001 for admin@mail.com the row actually gets created) and then sits in
+  // `waking`, answered by nobody — the fixture the B1 test below needs a closed,
+  // never-recorded session from.
+  const silent = await fetch(`http://127.0.0.1:${httpPort}/api/v1/devices`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "silent-6203", platform: "linux", mode: "persistent",
+      keys: [devPub], profiles: ["shell"],
+    }),
+  });
+  if (!silent.ok) throw new Error(`could not seed the silent device: ${await silent.text()}`);
+
   for (const permission of [
     {
       id: "console-operator", name: "Console operator", principals: ["admin@mail.com"],
@@ -215,6 +230,10 @@ api:
     {
       id: "rowers-only", name: "Rowers only", principals: ["rower@example.com"],
       devices: ["rower-*"], actions: ["shell"], effect: "allow", enabled: true,
+    },
+    {
+      id: "console-silent", name: "Console silent device", principals: ["admin@mail.com"],
+      devices: ["silent-6203"], actions: ["shell"], effect: "allow", enabled: true,
     },
     {
       id: "deny-pci", name: "PCI change control", principals: ["*"], devices: ["*"],
@@ -296,6 +315,28 @@ async function openRow(page: Page, device: string) {
   return row;
 }
 
+/** Opens a real session on treadmill-4821, then ends it by admin kill rather than by
+ *  typing "exit" at the shell — faster, and the recording's own state does not matter to
+ *  the tests that use this (ordering, and a superseded request), only that the session
+ *  closed. Returns to the fleet list before returning, the same place `openRow` expects
+ *  to start from, so callers can chain this to seed more than one session on the same
+ *  device without tripping the per-device concurrency cap. */
+async function openThenAdminKill(page: Page, reason: string): Promise<string> {
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByTestId("reason").fill(reason);
+  await row.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+  const sessionID = (await page.getByTestId("terminal").locator(".mono").first().textContent())!;
+  expect(sessionID).toMatch(/^sess_/);
+  const killed = await fetch(
+    `http://127.0.0.1:${dep!.http}/api/v1/sessions/${sessionID}?reason=admin_kill`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+  );
+  expect(killed.ok).toBe(true);
+  await page.getByRole("button", { name: "Leave" }).click();
+  return sessionID;
+}
+
 test("the console gives an operator a shell on a device", async ({ page }) => {
   await signIn(page);
 
@@ -345,7 +386,9 @@ test("the session list explains itself", async ({ page }) => {
 test("a connected agent is a state of its device, not a separate list", async ({ page }) => {
   await signIn(page);
   await expect(page.getByTestId("fleet-summary")).toContainText("1 online", { timeout: 30_000 });
-  await expect(page.getByTestId("fleet-summary")).toContainText("3 devices");
+  // 4, not 3: silent-6203 (seeded above for the B1 test) is a fourth registered device
+  // that never dials in, same as rower-9001.
+  await expect(page.getByTestId("fleet-summary")).toContainText("4 devices");
 
   // `row` is the fleet list's own link at this point — the same `data-device` selector
   // that will resolve to the device's own page below, once `openRow` navigates there.
@@ -1042,4 +1085,194 @@ test("a visitor sees the timeline, and a grants section that says why it is empt
   await expect(access).toContainText("admin:permissions");
   await expect(access).not.toContainText("Allowed");
   await expect(access.locator("ul")).toHaveCount(0);
+});
+
+// The final review's B1: a closed session that was never recorded is a legitimate,
+// queryable state (`internal/sessions/sessions.go`'s comment on `RecordingState`) — not a
+// failure, and the old code rendered the exact "That isn't there, or you don't have
+// access to it." sentence reserved for a session that never existed. silent-6203 (seeded
+// above) never dials in, so opening a session against it sits in `waking` for up to the
+// invite's own 30s deadline — long enough to close it out from under itself first, and
+// killing it *before* it attaches means it never got as far as Prepare() flipping
+// RecordingState to `recorded` (internal/sessionrun/sessionrun.go) — the same NotRecorded
+// Create() always starts a row with (internal/sessions/sessions.go).
+test("a closed, unrecorded session renders as itself, not as a failure", async ({ page }) => {
+  await signIn(page);
+
+  // Fired and deliberately not awaited: it will not resolve until silent-6203 answers or
+  // the invite's deadline passes, and this test needs neither — only the row `Create`
+  // makes before any of that. Any eventual rejection is swallowed so it cannot fail the
+  // test long after the test itself has finished.
+  fetch(`http://127.0.0.1:${dep!.http}/api/v1/sessions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ device_id: "silent-6203", profile: "shell", reason: "seed for B1" }),
+  }).catch(() => {});
+
+  let sessionID = "";
+  await waitFor(async () => {
+    const res = await fetch(
+      `http://127.0.0.1:${dep!.http}/api/v1/sessions?device_id=silent-6203&limit=5`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return false;
+    const { sessions } = (await res.json()) as { sessions: { id: string }[] };
+    if (sessions.length === 0) return false;
+    sessionID = sessions[0]!.id;
+    return true;
+  }, "the waking session's row to appear");
+
+  // Killed while it is still waking: the gateway's own live registry has no handle for a
+  // session that never attached, so `killSession` (apisrv.go) takes its "closed a stale
+  // row nothing was running" path rather than a live kill — Finish() with CloseReason
+  // admin_kill, State Closed, RecordingState untouched since it was created.
+  const killed = await fetch(
+    `http://127.0.0.1:${dep!.http}/api/v1/sessions/${sessionID}?reason=admin_kill`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+  );
+  expect(killed.ok).toBe(true);
+
+  await waitFor(async () => {
+    const res = await fetch(`http://127.0.0.1:${dep!.http}/api/v1/sessions/${sessionID}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { live: boolean; recording_state: string };
+    return !body.live && body.recording_state === "not_recorded";
+  }, "the session to read closed and not_recorded");
+
+  // The cold link — a pasted URL, or a reload — is the case B1 was actually about.
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/s/${sessionID}`);
+  const unrecorded = page.getByTestId("unrecorded");
+  await expect(unrecorded).toBeVisible({ timeout: 15_000 });
+  await expect(unrecorded).toContainText("was not recorded");
+  await expect(unrecorded).toContainText("silent-6203");
+  await expect(unrecorded).toContainText("admin@mail.com");
+  await expect(page.getByTestId("failure")).toHaveCount(0);
+  await expect(page.getByTestId("terminal")).toHaveCount(0);
+  await expect(page.getByTestId("replay")).toHaveCount(0);
+
+  // The click path too, from the Person page's own timeline (admin@mail.com owns this
+  // session) — `openSessionRow`'s own "nothing to check first" branch must reach the
+  // identical state, not merely the cold load above.
+  await page.goto(`http://127.0.0.1:${dep!.http}/ui/p/admin%40mail.com`);
+  const row = page.locator(`[data-session="${sessionID}"]`);
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.click();
+  const clicked = page.getByTestId("unrecorded");
+  await expect(clicked).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("failure")).toHaveCount(0);
+});
+
+// The final review's B2: both stores order ascending — correct for a forward cursor —
+// but the console's audit pages ask for a bounded page and then sorted it client-side,
+// which makes a page of old rows look current once a window holds more than the page
+// asks for. The fix has the console ask the gateway to order the page itself
+// (`newest=true`) instead. The store-level mechanics (both orders, both stores, cursor
+// paging under each) are covered in `internal/sessions/range_test.go`; this is the
+// console's own half — that it actually asks, and that dropping the client-side sort did
+// not silently reintroduce the old order.
+test("the device timeline asks the gateway for newest-first, and shows it", async ({ page }) => {
+  await signIn(page);
+
+  const older = await openThenAdminKill(page, "ticket AV-B2-1");
+  const newer = await openThenAdminKill(page, "ticket AV-B2-2");
+
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.url().includes("device_id=treadmill-4821") && new URL(req.url()).pathname === "/api/v1/sessions",
+    ),
+    page.goto(`http://127.0.0.1:${dep!.http}/ui/d/treadmill-4821`),
+  ]);
+  expect(new URL(request.url()).searchParams.get("newest")).toBe("true");
+
+  const sessions = page.getByTestId("device-sessions");
+  await expect(sessions.locator(`[data-session="${newer}"]`)).toBeVisible({ timeout: 30_000 });
+  await expect(sessions.locator(`[data-session="${older}"]`)).toBeVisible();
+
+  const order = await sessions
+    .locator("tbody tr[data-session]")
+    .evaluateAll((rows) => rows.map((r) => r.getAttribute("data-session")));
+  expect(order.indexOf(newer)).toBeGreaterThanOrEqual(0);
+  expect(order.indexOf(older)).toBeGreaterThanOrEqual(0);
+  expect(order.indexOf(newer)).toBeLessThan(order.indexOf(older));
+});
+
+test("the person timeline asks the gateway for newest-first too", async ({ page }) => {
+  await signIn(page);
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.url().includes("principal=admin%40mail.com") && new URL(req.url()).pathname === "/api/v1/sessions",
+    ),
+    page.goto(`http://127.0.0.1:${dep!.http}/ui/p/admin%40mail.com`),
+  ]);
+  expect(new URL(request.url()).searchParams.get("newest")).toBe("true");
+});
+
+// The final review's B3: neither page's loaders carried a cancellation guard, so a
+// superseded request could resolve after a newer one and overwrite state with its
+// answer regardless of which one was actually current. Reproduced here exactly the way
+// the review did: hold the first (narrower) request, let a second (broader) one —
+// fired by clearing the `state` facet — answer first, then release the first and prove
+// its late, superseded answer cannot win.
+test("clearing a facet does not lose to a slow, superseded response", async ({ page }) => {
+  await signIn(page);
+
+  const first = await openThenAdminKill(page, "ticket AV-B3-1");
+  const second = await openThenAdminKill(page, "ticket AV-B3-2");
+
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // Holds only the request carrying `state=rejected` — a state neither fresh session is
+  // in, since treadmill-4821 always has a live agent and nothing opened against it is
+  // ever actually rejected — so the response it eventually gets is real, merely late.
+  await page.route(
+    (url) => url.pathname === "/api/v1/sessions",
+    async (route) => {
+      const url = route.request().url();
+      if (url.includes("device_id=treadmill-4821") && url.includes("state=rejected")) {
+        await held;
+      }
+      await route.continue();
+    },
+  );
+
+  const since = new Date(Date.now() - 5 * 60_000).toISOString();
+  await page.goto(
+    `http://127.0.0.1:${dep!.http}/ui/d/treadmill-4821?since=${encodeURIComponent(since)}&state=rejected`,
+  );
+  const sessions = page.getByTestId("device-sessions");
+
+  // The first request — the one this navigation's own URL asked for — is the one held
+  // above, so the timeline is still on its loading state and must not be waited past:
+  // the facet chip (and its clear button) render independently of it, which is what
+  // lets the second, broader request go out before the first ever answers.
+  await expect(page.getByRole("button", { name: "Clear the state filter" })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  // Clears `state`: the second, broader request this fires is not held, and answers
+  // first — both fresh sessions are closed, not rejected, so this is the query that
+  // actually contains them.
+  await page.getByRole("button", { name: "Clear the state filter" }).click();
+  await expect(sessions.locator(`[data-session="${second}"]`)).toBeVisible({ timeout: 15_000 });
+  await expect(sessions.locator(`[data-session="${first}"]`)).toBeVisible();
+
+  // Release the held, now-superseded request, and wait for its real (empty) response to
+  // actually land before asserting anything — a `cancelled` flag, mirroring
+  // `SessionRoute`'s own cold load, is what stops a late answer to an abandoned question
+  // from overwriting a current one.
+  const heldResponse = page.waitForResponse(
+    (res) => res.url().includes("device_id=treadmill-4821") && res.url().includes("state=rejected"),
+  );
+  release();
+  await heldResponse;
+  await page.waitForTimeout(200);
+
+  await expect(sessions.locator(`[data-session="${second}"]`)).toBeVisible();
+  await expect(sessions.locator(`[data-session="${first}"]`)).toBeVisible();
+  await expect(sessions).not.toContainText("No sessions in this window.");
 });

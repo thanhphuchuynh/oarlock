@@ -90,6 +90,11 @@ export interface SessionQuery {
   device?: string;
   state?: string;
   limit?: number;
+  /** Orders the page newest-first instead of the gateway's default (oldest-first, the
+   *  right shape for a forward cursor). The audit pages want this: a page of a busy
+   *  device or principal's last 30 days is "what happened", and oldest-first silently
+   *  handed them the *oldest* page of the window once it held more than one page (B2). */
+  newest?: boolean;
 }
 
 export interface SSHInfo {
@@ -248,6 +253,7 @@ export class Client {
     // that is the vocabulary `route.facets` already uses.
     if (query?.device) params.set("device_id", query.device);
     if (query?.state) params.set("state", query.state);
+    if (query?.newest) params.set("newest", "true");
     return this.call("GET", `/api/v1/sessions?${params.toString()}`);
   }
 

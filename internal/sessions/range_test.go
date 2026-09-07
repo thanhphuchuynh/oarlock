@@ -132,6 +132,110 @@ func TestEitherBoundAloneWorks(t *testing.T) {
 	}
 }
 
+// ids is defined in sessions_test.go, in this same package.
+
+func sameOrder(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// B2: both stores default to the forward-cursor order (oldest first), and both must
+// reverse it the same way when a caller asks for the newest page of a window instead —
+// the shape console pages need (DevicePage.tsx, PersonPage.tsx) so a page of more than
+// `limit` sessions renders its newest rows rather than its oldest.
+func TestNewestOrdersMostRecentFirst(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	seed := []*sessions.Session{
+		at("sess_1", base),
+		at("sess_2", base.Add(time.Hour)),
+		at("sess_3", base.Add(2*time.Hour)),
+	}
+	for name, store := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for _, r := range seed {
+				cp := *r
+				if err := store.Create(ctx, &cp); err != nil {
+					t.Fatalf("seeding %s: %v", r.ID, err)
+				}
+			}
+
+			oldest, _, err := store.List(ctx, sessions.Query{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"sess_1", "sess_2", "sess_3"}; !sameOrder(ids(oldest), want) {
+				t.Errorf("default order = %v, want %v (oldest-first)", ids(oldest), want)
+			}
+
+			newest, _, err := store.List(ctx, sessions.Query{Newest: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"sess_3", "sess_2", "sess_1"}; !sameOrder(ids(newest), want) {
+				t.Errorf("Newest order = %v, want %v (newest-first)", ids(newest), want)
+			}
+		})
+	}
+}
+
+// The cursor's meaning depends on the order that minted it (Query.Newest's own doc
+// comment): paging a newest-first list walks backward in time, one page older each
+// call, rather than forward. Run against both stores because the ascending path's
+// cursor and this one share nothing but shape — a store that gets the descending
+// comparison backwards would silently repeat or skip a page instead of failing loudly.
+func TestNewestCursorPagesOlderEachTime(t *testing.T) {
+	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	seed := []*sessions.Session{
+		at("sess_1", base),
+		at("sess_2", base.Add(time.Hour)),
+		at("sess_3", base.Add(2*time.Hour)),
+		at("sess_4", base.Add(3*time.Hour)),
+	}
+	for name, store := range stores(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for _, r := range seed {
+				cp := *r
+				if err := store.Create(ctx, &cp); err != nil {
+					t.Fatalf("seeding %s: %v", r.ID, err)
+				}
+			}
+
+			first, cursor, err := store.List(ctx, sessions.Query{Newest: true, Limit: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"sess_4", "sess_3"}; !sameOrder(ids(first), want) {
+				t.Fatalf("first page = %v, want %v", ids(first), want)
+			}
+			if cursor == "" {
+				t.Fatal("expected a next_cursor: two older rows remain")
+			}
+
+			second, cursor2, err := store.List(ctx, sessions.Query{
+				Newest: true, Limit: 2, After: cursor,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"sess_2", "sess_1"}; !sameOrder(ids(second), want) {
+				t.Fatalf("second page = %v, want %v", ids(second), want)
+			}
+			if cursor2 != "" {
+				t.Errorf("expected no next_cursor on the last page, got %q", cursor2)
+			}
+		})
+	}
+}
+
 // A zero bound is absent, not "the beginning of time" — the same distinction every
 // other optional field in Query makes.
 func TestZeroBoundsFilterNothing(t *testing.T) {

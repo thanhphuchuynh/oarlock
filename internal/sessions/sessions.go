@@ -146,6 +146,25 @@ type Query struct {
 	// other optional field here — not "the beginning of time".
 	Since time.Time
 	Until time.Time
+
+	// Newest reverses the sort to newest-first (created_at then id, both descending).
+	// False — oldest-first — is the zero value and the right default for a forward
+	// cursor: a caller paging through the whole ledger from the start wants page two to
+	// pick up exactly where page one left off, which is what an ascending cursor gives
+	// for free.
+	//
+	// The console's audit pages are not that caller: they ask for one bounded page and
+	// show it as "what happened", so oldest-first silently handed them the *oldest*
+	// page of the window on any device or principal busy enough to exceed it (B2). They
+	// set Newest instead of sorting the page client-side after the fact, because a
+	// client-side sort of a server-side page cannot recover the rows the page never
+	// contained.
+	//
+	// Newest changes what a cursor means: `After` compares against the last row of a
+	// newest-first page, so paging with Newest true walks backward in time (each page
+	// older than the last) rather than forward. A caller must not mix cursors minted
+	// under one order with a request made under the other.
+	Newest bool
 }
 
 // Store is the ledger.
@@ -317,7 +336,9 @@ func (m *Memory) Get(_ context.Context, id string) (*Session, error) {
 	return &cp, nil
 }
 
-// List returns copies, ordered by creation time then id so pagination is stable.
+// List returns copies, ordered by creation time then id so pagination is stable — oldest
+// first unless q.Newest asks for the reverse. See Query.Newest for why a cursor's meaning
+// depends on which order minted it.
 func (m *Memory) List(_ context.Context, q Query) ([]*Session, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -353,7 +374,13 @@ func (m *Memory) List(_ context.Context, q Query) ([]*Session, string, error) {
 	}
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			if q.Newest {
+				return all[i].ID > all[j].ID
+			}
 			return all[i].ID < all[j].ID
+		}
+		if q.Newest {
+			return all[i].CreatedAt.After(all[j].CreatedAt)
 		}
 		return all[i].CreatedAt.Before(all[j].CreatedAt)
 	})
@@ -364,8 +391,17 @@ func (m *Memory) List(_ context.Context, q Query) ([]*Session, string, error) {
 	}
 	out := make([]*Session, 0, limit)
 	for _, s := range all {
-		if q.After != "" && s.ID <= q.After {
-			continue
+		// The cursor's direction follows the sort's: newest-first pages backward in
+		// time, so a row already returned is one whose id sorts *after* (not before)
+		// the last one sent — see Query.Newest.
+		if q.After != "" {
+			if q.Newest {
+				if s.ID >= q.After {
+					continue
+				}
+			} else if s.ID <= q.After {
+				continue
+			}
 		}
 		if len(out) == limit {
 			return out, out[len(out)-1].ID, nil

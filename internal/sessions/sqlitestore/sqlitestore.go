@@ -362,7 +362,9 @@ func (s *Store) Get(ctx context.Context, id string) (*sessions.Session, error) {
 	return scanOne(s.db.QueryRowContext(ctx, selectCols+` WHERE id = ?`, id))
 }
 
-// List returns a page ordered by creation time then id, so pagination is stable.
+// List returns a page ordered by creation time then id, so pagination is stable — oldest
+// first unless q.Newest asks for the reverse. See Query.Newest for why a cursor's meaning
+// depends on which order minted it.
 func (s *Store) List(ctx context.Context, q sessions.Query) ([]*sessions.Session, string, error) {
 	var where []string
 	var args []any
@@ -396,7 +398,14 @@ func (s *Store) List(ctx context.Context, q sessions.Query) ([]*sessions.Session
 		args = append(args, ts(q.Until))
 	}
 	if q.After != "" {
-		where = append(where, "id > ?")
+		// The cursor's direction follows the sort's — see Query.Newest. A newest-first
+		// page walks backward in time, so the next page is everything with a *smaller*
+		// id than the last row sent, not a larger one.
+		if q.Newest {
+			where = append(where, "id < ?")
+		} else {
+			where = append(where, "id > ?")
+		}
 		args = append(args, q.After)
 	}
 	limit := q.Limit
@@ -408,7 +417,11 @@ func (s *Store) List(ctx context.Context, q sessions.Query) ([]*sessions.Session
 	if len(where) > 0 {
 		sqlText += " WHERE " + strings.Join(where, " AND ")
 	}
-	sqlText += " ORDER BY created_at, id LIMIT ?"
+	if q.Newest {
+		sqlText += " ORDER BY created_at DESC, id DESC LIMIT ?"
+	} else {
+		sqlText += " ORDER BY created_at, id LIMIT ?"
+	}
 	args = append(args, limit+1) // one extra, to know whether there is a next page
 
 	rows, err := s.db.QueryContext(ctx, sqlText, args...)

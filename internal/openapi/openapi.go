@@ -230,6 +230,12 @@ func parametersFor(r apisrv.RouteInfo) []parameter {
 					"Half-open together with `since`: `until` is exclusive, so two " +
 					"adjacent ranges never overlap and a boundary instant belongs to " +
 					"only one of them."},
+			parameter{Name: "newest", In: "query", Schema: &schema{Type: "boolean"},
+				Description: "`true` orders the page newest-first instead of the " +
+					"default oldest-first. The two orders are not interchangeable " +
+					"mid-page: `cursor` is a position in whichever order the request " +
+					"that returned it used, so a page fetched with `newest=true` must " +
+					"be continued the same way."},
 		)
 	}
 	return out

@@ -890,6 +890,11 @@ paths:
           description: 'Only sessions created before this instant, RFC 3339. Half-open together with `since`: `until` is exclusive, so two adjacent ranges never overlap and a boundary instant belongs to only one of them.'
           schema:
             type: string
+        - name: newest
+          in: query
+          description: '`true` orders the page newest-first instead of the default oldest-first. The two orders are not interchangeable mid-page: `cursor` is a position in whichever order the request that returned it used, so a page fetched with `newest=true` must be continued the same way.'
+          schema:
+            type: boolean
       responses:
         "200":
           description: OK.

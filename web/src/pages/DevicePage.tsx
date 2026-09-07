@@ -9,7 +9,7 @@
 // place any of this renders any more, which is why the admin row below (absent from Task
 // 3's version of this file) had to move in with it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, type Client, type Device, type Session } from "../api";
 import type { Facets, Route } from "../router/routes";
 import { Grants, type GrantsState } from "../components/Grants";
@@ -73,51 +73,78 @@ export function DevicePage({
   }, [facets, navigate, device]);
 
   const [sessions, setSessions] = useState<TimelineState>({ kind: "loading" });
+  // Bumped by the Timeline's own "Try again": a plain re-run of the effect below, on
+  // demand, rather than a second copy of the fetch a retry button can call directly.
+  const [sessionsRetry, setSessionsRetry] = useState(0);
 
-  const loadSessions = useCallback(async () => {
+  useEffect(() => {
     // Waits for the effect above to land `since` in the URL, same as the Person page.
     if (!facets.since) return;
+    // Captured once, outside the closure below: TypeScript's narrowing of `!facets.since`
+    // does not reach inside the async IIFE, since the property access — not this local —
+    // is what the check refined.
+    const since = facets.since;
+    // B3: a superseded request used to win the race — clearing a facet or a fast retry
+    // fired a second request while the first was still in flight, and whichever settled
+    // last overwrote state with its answer regardless of which one was current. Guarded
+    // the same way `SessionRoute`'s own cold load is: a `cancelled` flag closed over by
+    // this effect's own async call, set by its cleanup the moment a newer run starts.
+    let cancelled = false;
     setSessions({ kind: "loading" });
-    try {
-      const { sessions: rows } = await client.sessions({
-        device,
-        since: facets.since,
-        ...(facets.until ? { until: facets.until } : {}),
-        ...(facets.state ? { state: facets.state } : {}),
-        limit: 100,
-      });
-      setSessions({ kind: "ready", sessions: rows });
-    } catch (error) {
-      setSessions({ kind: "failed", error });
-    }
-  }, [client, device, facets.since, facets.until, facets.state]);
-
-  useEffect(() => {
-    void loadSessions();
-  }, [loadSessions]);
+    void (async () => {
+      try {
+        const { sessions: rows } = await client.sessions({
+          device,
+          since,
+          ...(facets.until ? { until: facets.until } : {}),
+          ...(facets.state ? { state: facets.state } : {}),
+          limit: 100,
+          // Newest-first from the gateway, not sorted here after the fact: a window
+          // with more than 100 sessions has more than one page, and a client-side sort
+          // of a bounded page cannot recover the rows the page never contained (B2).
+          newest: true,
+        });
+        if (!cancelled) setSessions({ kind: "ready", sessions: rows });
+      } catch (error) {
+        if (!cancelled) setSessions({ kind: "failed", error });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, device, facets.since, facets.until, facets.state, sessionsRetry]);
 
   const [access, setAccess] = useState<GrantsState>({ kind: "loading" });
-
-  const loadAccess = useCallback(async () => {
-    setAccess({ kind: "loading" });
-    try {
-      const result = await client.deviceAccess(device);
-      setAccess({ kind: "ready", rules: result.rules, adminActions: result.admin_actions });
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "not_authorized") {
-        setAccess({ kind: "refused", error: caught });
-        return;
-      }
-      setAccess({
-        kind: "failed",
-        message: caught instanceof Error ? caught.message : String(caught),
-      });
-    }
-  }, [client, device]);
+  const [accessRetry, setAccessRetry] = useState(0);
 
   useEffect(() => {
-    void loadAccess();
-  }, [loadAccess]);
+    // Same guard as the sessions load above, and for the same reason (B3): this panel
+    // has its own retry button and its own subject, so it can race independently of the
+    // timeline beside it.
+    let cancelled = false;
+    setAccess({ kind: "loading" });
+    void (async () => {
+      try {
+        const result = await client.deviceAccess(device);
+        if (!cancelled) {
+          setAccess({ kind: "ready", rules: result.rules, adminActions: result.admin_actions });
+        }
+      } catch (caught) {
+        if (cancelled) return;
+        if (caught instanceof ApiError && caught.code === "not_authorized") {
+          setAccess({ kind: "refused", error: caught });
+          return;
+        }
+        setAccess({
+          kind: "failed",
+          message: caught instanceof Error ? caught.message : String(caught),
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, device, accessRetry]);
 
   const [reason, setReason] = useState("");
   const disabled = info?.enabled === false;
@@ -265,7 +292,7 @@ export function DevicePage({
         <div className="panel">
           <Timeline
             state={sessions}
-            onRetry={() => void loadSessions()}
+            onRetry={() => setSessionsRetry((n) => n + 1)}
             onOpenSession={onOpenSession}
             testId="device-sessions"
             variant="device"
@@ -276,7 +303,7 @@ export function DevicePage({
 
       <Grants
         state={access}
-        onRetry={() => void loadAccess()}
+        onRetry={() => setAccessRetry((n) => n + 1)}
         testId="device-access"
         variant="device"
         subject={device}

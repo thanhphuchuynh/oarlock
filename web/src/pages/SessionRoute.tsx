@@ -163,8 +163,9 @@ export async function openSessionRow(params: {
     return;
   }
   // Nothing to check first: a closed, unrecorded session has no permission question to
-  // ask, only the fact that there is nothing to show — which `SessionPage`'s own cold
-  // load already renders honestly as its "no recording" failure.
+  // ask, only the fact that there is nothing to replay — which `SessionPage`'s own cold
+  // load renders as itself, not as a failure (see B1). No bypass to mint either: the
+  // route's cold fetch below reaches the identical state a pasted link would.
   navigate({ kind: "session", session: session.id });
 }
 
@@ -172,6 +173,10 @@ type SessionRouteState =
   | { kind: "loading" }
   | { kind: "live"; session: Session; attach: Attach; readOnly: boolean; watching?: string }
   | { kind: "replay"; session: Session; cast: string; verdict?: Verdict }
+  // A closed session with nothing to replay — a fact about the session, never a failure.
+  // See B1: this used to collapse into `failed`, which discarded the session it was
+  // reporting on and told the reader it did not exist.
+  | { kind: "unrecorded"; session: Session }
   | { kind: "failed"; condition: Condition; detail: string; reference: string };
 
 export function SessionRoute({
@@ -250,13 +255,12 @@ export function SessionRoute({
           if (!cancelled) setState({ kind: "replay", session, cast, ...(verdict ? { verdict } : {}) });
           return;
         }
+        // Closed and never recorded is a fact about this session, not a failure to
+        // report — see B1. The session exists (the fetch above just proved it) and its
+        // row is what brought the reader here, so it renders as itself: header,
+        // metadata, and a panel saying plainly there is nothing to replay.
         if (!cancelled) {
-          setState({
-            kind: "failed",
-            condition: getCondition("not_found"),
-            detail: "No recording for this session.",
-            reference: "",
-          });
+          setState({ kind: "unrecorded", session });
         }
       } catch (err) {
         if (cancelled) return;
@@ -311,6 +315,19 @@ export function SessionRoute({
         onLeave={onBack}
         onSessionEnded={() => {}}
         renewTicket={() => client.renewAttach(state.session.id).then((a) => a.ticket)}
+      />
+    );
+  }
+
+  if (state.kind === "unrecorded") {
+    return (
+      <SessionPage
+        session={state.session}
+        readOnly={false}
+        onClose={onBack}
+        onLeave={onBack}
+        onSessionEnded={() => {}}
+        renewTicket={() => Promise.reject(new Error("renewTicket has no session to renew a ticket for"))}
       />
     );
   }

@@ -58,8 +58,15 @@ export type SessionPageProps = {
   renewTicket(): Promise<string>;
 };
 
-// One page, three bodies. Which one renders is a fact about the session, not a route —
+// One page, four bodies. Which one renders is a fact about the session, not a route —
 // so a link pasted into a ticket while a session is live still resolves after it ends.
+//
+// A closed, unrecorded session is the fourth: `recording_state` made "unrecorded" a fact
+// the ledger can be queried for rather than an absence somebody has to notice (see
+// `internal/sessions/sessions.go`'s comment on `RecordingState`), so this page must say
+// that plainly rather than reporting the session missing. `session` present with neither
+// `attach` nor `cast` — and no `failure` — is exactly that fact, not an error: a session
+// this page cannot render *at all* is `props.failure`, which stays reserved for that.
 export function SessionPage(props: SessionPageProps) {
   if (props.failure) return <FailedBody {...props.failure} onClose={props.onClose} />;
   if (props.session && props.attach) {
@@ -68,6 +75,11 @@ export function SessionPage(props: SessionPageProps) {
   if (props.session && props.cast) {
     return <ReplayBody {...props} session={props.session} cast={props.cast} />;
   }
+  if (props.session) {
+    return <UnrecordedBody {...props} session={props.session} />;
+  }
+  // Defensive only: every caller that reaches this page without a session of its own
+  // passes `failure`, so this is not a path either route takes today.
   return (
     <FailedBody
       condition={getCondition("not_found")}
@@ -126,6 +138,46 @@ function ReplayBody(props: ReplayBodyProps) {
         />
       </Suspense>
       <EvidencePanel verdict={props.verdict} />
+    </section>
+  );
+}
+
+type UnrecordedBodyProps = SessionPageProps & { session: Session };
+
+// A closed session with nothing to replay — not a failure. Task 6's own ruling on this
+// page ("refusals, not predictions") kept the full-page failure screen for a session that
+// cannot be shown at all; this is a session that *can* be shown, in full, because it
+// happened and its own row is what the operator clicked. So it gets the same header and
+// metadata every other body gets, plus a panel that says the one true thing there is to
+// say about it: nothing was captured, so there is nothing to replay. That is a plain
+// statement of fact, not a euphemism for "the recording is missing" — see the
+// `@oarlock/terminal` disclosure policy this line borrows its stance from.
+function UnrecordedBody(props: UnrecordedBodyProps) {
+  return (
+    <section className="flex flex-col gap-4" data-testid="unrecorded">
+      <div className="flex items-center justify-between gap-3">
+        <span className="mono text-sm text-fg-muted">{props.session.id}</span>
+        <button className="btn" onClick={props.onClose}>
+          Back
+        </button>
+      </div>
+      <SessionMeta session={props.session} />
+      <section
+        className="flex items-start gap-3 rounded-md border border-border bg-bg-raised p-4"
+        data-testid="evidence"
+      >
+        <span aria-hidden="true" className="mt-0.5 text-lg text-fg-faint">
+          ◷
+        </span>
+        <div>
+          <h3 className="font-semibold">This session was not recorded</h3>
+          <p className="mt-0.5 text-sm text-fg-muted">
+            Nothing was captured while it ran, so there is nothing to replay. The session
+            itself happened — its row is what brought you here — this is the whole record
+            of it there is.
+          </p>
+        </div>
+      </section>
     </section>
   );
 }
@@ -308,6 +360,12 @@ function FailedBody(props: FailedBodyProps) {
       <dl className="mono grid grid-cols-[auto_1fr] gap-x-3 text-sm text-fg-faint">
         <dt className="not-mono">Reason</dt>
         <dd className="select-all">{props.condition.id}</dd>
+        {props.detail && (
+          <>
+            <dt className="not-mono">Detail</dt>
+            <dd>{props.detail}</dd>
+          </>
+        )}
         {props.reference && (
           <>
             <dt className="not-mono">Reference (for support)</dt>
