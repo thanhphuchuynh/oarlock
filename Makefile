@@ -16,6 +16,43 @@ DEMO_API := http://127.0.0.1:8443/api/v1
 DEMO_TOKEN := dev-token-long-enough-for-the-check
 
 MOBILE_VERSION := v0.0.0-20260821190718-4776eadac327
+
+# ── release matrix ──────────────────────────────────────────────────────────────
+#
+# Not a wish list — every pair below was probed with a real cross-compile, and the three
+# exclusions are recorded as what they are rather than left to fail at release time:
+#
+#   windows      agent only fails: creack/pty reaches for syscall.SysProcAttr.Setsid,
+#                which Windows does not have. The gateway builds fine, so Windows gets a
+#                server binary and no agent.
+#   netbsd/amd64 gateway only fails: modernc.org/sqlite's generated netbsd/amd64 support
+#                does not compile. The agent needs no database, so it ships and the
+#                gateway does not.
+#   android/amd64 neither: the toolchain demands external (cgo) linking, and these builds
+#                are CGO_ENABLED=0 throughout. android/arm64 is unaffected and is the one
+#                that matters for headsets.
+#
+# One asymmetry worth knowing before you copy a binary onto a device: every linux, freebsd,
+# openbsd and netbsd output is `statically linked`, but android/arm64 comes out a
+# dynamically linked PIE against bionic, because that is what GOOS=android does even with
+# cgo off. It runs on Android and nowhere else — do not reach for it as a generic aarch64
+# static binary. linux/arm64 is that.
+#
+# CGO_ENABLED=0 throughout is only possible because the SQLite driver is modernc.org/sqlite,
+# which is pure Go. Swapping it for a cgo driver would take this matrix down to one row.
+RELEASE_DIR ?= dist/release
+RELEASE_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+RELEASE_BOTH ?= linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 \
+                linux/ppc64le linux/s390x darwin/amd64 darwin/arm64 \
+                freebsd/amd64 freebsd/arm64 openbsd/amd64 android/arm64
+RELEASE_SERVER_ONLY ?= windows/amd64 windows/arm64
+RELEASE_AGENT_ONLY ?= netbsd/amd64
+
+# A release binary that answers `dev` to -version is a binary nobody can tie to a commit
+# when it misbehaves at 03:00. Both variables already existed and nothing had ever set them.
+RELEASE_LD_SERVER := -s -w -X github.com/oarlock/oarlock/cmd/oarlockd/app.Version=$(RELEASE_VERSION)
+RELEASE_LD_AGENT := -s -w -X main.version=$(RELEASE_VERSION)
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.1.12297006
 MOBILE_BIN := $(CURDIR)/.cache/mobile/bin
@@ -26,7 +63,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean release release-list landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
@@ -35,6 +72,8 @@ help:
 		'  make binaries     Build ./oarlockd and ./oarlock-agent' \
 		'  make ui           Build embedded admin UI assets' \
 		'  make check        Run typecheck, UI build, Go tests, and go vet' \
+		'  make release      Build oarlockd and oarlock-agent for every supported machine' \
+		'  make release-list Show that matrix without building it' \
 		'  make test         Run Go tests and frontend tests' \
 		'  make vet          Run go vet ./...' \
 		'  make demo-url     Point demo/oarlock.yaml at the current LAN address' \
@@ -61,6 +100,52 @@ binaries: ui
 
 ui:
 	$(NPM) run build:ui
+
+# Every machine type, both binaries, stamped and stripped.
+#
+# Depends on `ui` so the console embedded in each gateway is the current one. That makes a
+# release need the frontend toolchain, which is deliberate: `go build` alone still works on
+# a clean checkout thanks to the .gitkeep in the embed directory, but shipping that to
+# somebody means shipping a gateway whose console is an empty page.
+release: ui
+	@rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
+	@printf 'oarlock %s\n\n' '$(RELEASE_VERSION)'
+	@set -e; \
+	for spec in $(addsuffix :both,$(RELEASE_BOTH)) \
+	            $(addsuffix :server,$(RELEASE_SERVER_ONLY)) \
+	            $(addsuffix :agent,$(RELEASE_AGENT_ONLY)); do \
+	  pair=$${spec%:*}; which=$${spec##*:}; os=$${pair%/*}; arch=$${pair#*/}; \
+	  goarm=; label=$$arch; \
+	  if [ "$$arch" = arm ]; then goarm=7; label=armv7; fi; \
+	  ext=; if [ "$$os" = windows ]; then ext=.exe; fi; \
+	  case $$which in \
+	    both) cmds='oarlockd oarlock-agent';; \
+	    server) cmds='oarlockd';; \
+	    agent) cmds='oarlock-agent';; \
+	  esac; \
+	  for cmd in $$cmds; do \
+	    if [ "$$cmd" = oarlockd ]; then ld='$(RELEASE_LD_SERVER)'; else ld='$(RELEASE_LD_AGENT)'; fi; \
+	    out=$(RELEASE_DIR)/$$cmd-$$os-$$label$$ext; \
+	    GOOS=$$os GOARCH=$$arch GOARM=$$goarm CGO_ENABLED=0 GOCACHE=$(GOCACHE) \
+	      $(GO) build -trimpath -ldflags="$$ld" -o $$out ./cmd/$$cmd; \
+	    printf '  %-38s %6s\n' "$${out#$(RELEASE_DIR)/}" "$$(du -h $$out | cut -f1)"; \
+	  done; \
+	done
+	@cd $(RELEASE_DIR) && \
+	  { command -v sha256sum >/dev/null 2>&1 && sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS; }
+	@printf '\n%s binaries in %s, and SHA256SUMS beside them.\n' \
+	  "$$(ls -1 $(RELEASE_DIR) | grep -cv SHA256SUMS)" '$(RELEASE_DIR)'
+	@printf 'Checksums, not signatures: they prove a download is intact, not that it came\n'
+	@printf 'from you. Signing and an SBOM are named as not-built in the threat model.\n'
+
+# The matrix, without spending four minutes to see it. GOARM=7 is explicit because an
+# armv7 binary dies with SIGILL on armv6 and the filename is the only warning a reader gets.
+release-list:
+	@printf 'version  %s\n' '$(RELEASE_VERSION)'
+	@printf 'both     %s\n' '$(RELEASE_BOTH)'
+	@printf 'server   %s  (agent: no Setsid on windows)\n' '$(RELEASE_SERVER_ONLY)'
+	@printf 'agent    %s  (gateway: sqlite driver does not build)\n' '$(RELEASE_AGENT_ONLY)'
+	@printf 'excluded android/amd64  (needs cgo linking; these builds are CGO_ENABLED=0)\n'
 
 typecheck:
 	$(NPM) run typecheck
