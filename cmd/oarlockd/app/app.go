@@ -67,6 +67,7 @@ import (
 	"github.com/oarlock/oarlock/internal/metrics"
 	"github.com/oarlock/oarlock/internal/ratelimit"
 	"github.com/oarlock/oarlock/internal/record"
+	"github.com/oarlock/oarlock/internal/record/s3store"
 	"github.com/oarlock/oarlock/internal/registry/file"
 	regsqlite "github.com/oarlock/oarlock/internal/registry/sqlite"
 	"github.com/oarlock/oarlock/internal/safety"
@@ -243,25 +244,34 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	var replays apisrv.Replays
 	var recStoreMode, recStoreDetail string
 	recProtected := false
-	if cfg.Recorder.Dir != "" {
-		if err := os.MkdirAll(cfg.Recorder.Dir, 0o700); err != nil {
-			return nil, fmt.Errorf("oarlockd: creating %s: %w", cfg.Recorder.Dir, err)
-		}
+	recStore, recKind, err := recordingStore(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if recStore != nil {
 		signer, pub, err := loadOrGenerateRecordingKey(cfg, log)
 		if err != nil {
 			return nil, err
 		}
-		fr, err := record.NewFileRecorder(cfg.Recorder.Dir, signer)
+		// record.New rather than a per-backend constructor: record.Store is the whole
+		// seam, and a bucket-backed recorder differs from a directory-backed one only
+		// in where the bytes land.
+		fr, err := record.New(record.Options{Store: recStore, Signer: signer, Log: log})
 		if err != nil {
 			return nil, err
 		}
 		// Wrapped for metrics; `replays` keeps the concrete recorder, because the CLI's
 		// verification path needs RawManifest and that is not on plugin.Recorder.
-		recorder = g.metricsG.Plugins.Recorder("file", fr)
-		replays = &fileReplays{rec: fr, pub: pub}
+		recorder = g.metricsG.Plugins.Recorder(recKind, fr)
+		replays = &recorderReplays{rec: fr, pub: pub}
 		imm := fr.Immutability()
 		recStoreMode, recStoreDetail = string(imm.Mode), imm.Detail
-		recProtected = imm.Mode != "mutable"
+		// Mode.Protected() and not `!= "mutable"`. The string comparison counted
+		// ModeUnknown as protected, and ModeUnknown is exactly what record reports
+		// when a store's Immutability call *fails* — an unreachable bucket, a missing
+		// s3:GetObjectLockConfiguration grant. An unverified store would have read as
+		// a guarantee and the boot gate would have gone quiet about it.
+		recProtected = imm.Mode.Protected()
 	}
 
 	// ── authorisation ──
@@ -570,6 +580,8 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		RecorderConfigured:         recorder != nil,
 		RecordingStoreProtected:    recProtected,
 		RecordingStoreMode:         recStoreMode,
+		RecordingStoreDetail:       recStoreDetail,
+		RecordingStoreRequested:    cfg.Recorder.S3.RequestedLockMode(),
 		DevicesAllowingPassthrough: passthrough,
 		SSHHostKeyConfigured:       !generated,
 		AuthzGrace:                 grace,
@@ -577,7 +589,6 @@ func Build(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		ChannelBindingRequired:     cfg.Listen.RequireChannelBinding,
 		MetricsPublic:              cfg.Listen.Metrics == "public",
 	}
-	_ = recStoreDetail
 	return g, nil
 }
 
@@ -1052,17 +1063,57 @@ func loadOrGenerateHostKey(cfg *config.Config, log *slog.Logger) (xssh.Signer, b
 	return signer, true, nil
 }
 
-// fileReplays adapts the file recorder to what the API serves.
+// recordingStore builds the store the configuration asks for, and returns a nil store
+// when it asks for none. The kind it returns is the metrics label.
+//
+// No constructor is added to internal/record for the bucket case: record.New already
+// takes any record.Store, and NewFileRecorder is a two-line wrapper around it.
+func recordingStore(cfg *config.Config) (record.Store, string, error) {
+	switch {
+	case cfg.Recorder.S3 != nil:
+		s := cfg.Recorder.S3
+		// LockMode goes across as the *requested* mode and is validated there rather
+		// than here: s3store refuses anything an object lock cannot express, and one
+		// list of acceptable modes is better than two that can drift. What the store
+		// then *reports* comes from the bucket, which is the point of the feature.
+		st, err := s3store.Open(s3store.Config{
+			Bucket:    s.Bucket,
+			Region:    s.Region,
+			Endpoint:  s.Endpoint,
+			Prefix:    s.Prefix,
+			AccessKey: s.AccessKey,
+			SecretKey: s.SecretKey,
+			UseSSL:    s.UseSSL,
+			LockMode:  record.Mode(s.RequestedLockMode()),
+			RetainFor: s.RetainFor,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return st, "s3", nil
+
+	case cfg.Recorder.Dir != "":
+		st, err := record.NewFileStore(cfg.Recorder.Dir)
+		if err != nil {
+			return nil, "", err
+		}
+		return st, "file", nil
+	}
+	return nil, "", nil
+}
+
+// recorderReplays adapts the recorder to what the API serves. It goes through the
+// recorder rather than the store, so it works for whichever backend was configured.
 //
 // Verification happens here rather than in the browser because it needs the manifest and a
 // public key the deployment trusts — neither of which a page can be given without also
 // giving it the ability to be lied to about them.
-type fileReplays struct {
+type recorderReplays struct {
 	rec *record.Recorder
 	pub ed25519.PublicKey
 }
 
-func (f *fileReplays) Cast(ctx context.Context, sessionID string) ([]byte, error) {
+func (f *recorderReplays) Cast(ctx context.Context, sessionID string) ([]byte, error) {
 	rc, err := f.rec.Get(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -1078,11 +1129,11 @@ func (f *fileReplays) Cast(ctx context.Context, sessionID string) ([]byte, error
 // a build whose decoder does not know a field a newer writer added would silently drop it
 // and turn a good recording into one that will not verify. Passing the stored bytes
 // through keeps this gateway out of that.
-func (f *fileReplays) Manifest(ctx context.Context, sessionID string) ([]byte, error) {
+func (f *recorderReplays) Manifest(ctx context.Context, sessionID string) ([]byte, error) {
 	return f.rec.RawManifest(ctx, sessionID)
 }
 
-func (f *fileReplays) Verdict(ctx context.Context, sessionID string) (apisrv.ReplayVerdict, error) {
+func (f *recorderReplays) Verdict(ctx context.Context, sessionID string) (apisrv.ReplayVerdict, error) {
 	v, err := f.rec.Verify(ctx, sessionID, f.pub)
 	if err != nil {
 		return apisrv.ReplayVerdict{}, err

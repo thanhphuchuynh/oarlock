@@ -524,11 +524,16 @@ func elsewhere(bucket string, bucketMode record.Mode, bucketFor time.Duration) s
 // out loud when that contradicts what was configured — because that contradiction is
 // what the boot gate exists to refuse.
 func (s *Store) mutable(why string) record.Immutability {
-	detail := why + ": anything with write access can alter or delete a recording, " +
+	const consequence = ": anything with write access can alter or delete a recording, " +
 		"and the signature is the only thing that makes it detectable"
+	detail := why + consequence
 	if s.requested != "" {
+		// `why` once, not twice. It used to be prefixed here and then again inside
+		// the string this wrapped, and the doubled clause landed in the middle of
+		// the boot gate's refusal — which is the one line an operator has to be
+		// able to read to learn the fix.
 		detail = fmt.Sprintf("%s, but this gateway is configured to ask for %s "+
-			"retention: %s", why, s.requested, detail)
+			"retention%s", why, s.requested, consequence)
 	}
 	return record.Immutability{Mode: record.ModeMutable, Kind: kind, Detail: detail}
 }

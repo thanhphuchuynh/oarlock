@@ -242,6 +242,119 @@ func TestNoRecorderDoesNotAlsoWarnAboutStorage(t *testing.T) {
 	}
 }
 
+// TestARequestedLockTheStoreDoesNotGiveIsFatal is the two rows of one table, and the
+// difference between them is the whole reason Settings carries the requested mode
+// alongside the reported one.
+//
+// A store that promises nothing and was asked for nothing is a warning: a lab has no
+// WORM storage and must still be able to record. A store that promises nothing and was
+// asked for compliance is a refusal, because every manifest written afterwards records
+// the storage claim in its own signed JSON — booting anyway signs a claim nobody
+// checked into every piece of evidence.
+func TestARequestedLockTheStoreDoesNotGiveIsFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		env       safety.Env
+		requested string
+		reported  string
+		protected bool
+		setting   string
+		fatal     bool
+		// none means the gate should say nothing at all.
+		none bool
+	}{
+		{
+			name: "nothing requested, mutable store", env: safety.Prod,
+			reported: "mutable", setting: "recording_store",
+		},
+		{
+			name: "nothing requested, store says nothing", env: safety.Prod,
+			reported: "", setting: "recording_store",
+		},
+		{
+			name: "compliance requested, mutable store", env: safety.Prod,
+			requested: "compliance", reported: "mutable",
+			setting: "recorder.s3.lock_mode", fatal: true,
+		},
+		{
+			// The case the old `mode != "mutable"` comparison hid: record reports
+			// unknown when a store's Immutability call *fails*, and the store is
+			// asked once at construction, so this is the only thing that ever
+			// catches an unreachable bucket.
+			name: "compliance requested, store could not answer", env: safety.Prod,
+			requested: "compliance", reported: "unknown",
+			setting: "recorder.s3.lock_mode", fatal: true,
+		},
+		{
+			name: "governance requested, mutable store", env: safety.Prod,
+			requested: "governance", reported: "mutable",
+			setting: "recorder.s3.lock_mode", fatal: true,
+		},
+		{
+			// Not relaxed in development. A check loosened there is a check about a
+			// dangerous *default*; this is an explicit request the deployment cannot
+			// honour, and honouring it in words only is the same lie in a lab.
+			name: "compliance requested in development", env: safety.Dev,
+			requested: "compliance", reported: "mutable",
+			setting: "recorder.s3.lock_mode", fatal: true,
+		},
+		{
+			name: "compliance requested and delivered", env: safety.Prod,
+			requested: "compliance", reported: "compliance", protected: true,
+			none: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := safeProd()
+			s.Env = tc.env
+			s.RecordingStoreRequested = tc.requested
+			s.RecordingStoreMode = tc.reported
+			s.RecordingStoreProtected = tc.protected
+			s.RecordingStoreDetail = "the bucket has no object lock configuration"
+
+			problems, err := safety.Check(s, quiet())
+			var found []safety.Problem
+			for _, p := range problems {
+				if p.Setting == "recording_store" || p.Setting == "recorder.s3.lock_mode" {
+					found = append(found, p)
+				}
+			}
+			if tc.none {
+				if len(found) > 0 {
+					t.Fatalf("unexpected finding: %v", found)
+				}
+				return
+			}
+			// One finding, not two: two findings for one decision is how a finding
+			// stops being read.
+			if len(found) != 1 {
+				t.Fatalf("want exactly one storage finding, got %v", found)
+			}
+			if found[0].Setting != tc.setting {
+				t.Errorf("setting = %q, want %q", found[0].Setting, tc.setting)
+			}
+			if found[0].Fatal != tc.fatal {
+				t.Errorf("fatal = %v, want %v: %s", found[0].Fatal, tc.fatal, found[0].Message)
+			}
+			if tc.fatal && err == nil {
+				t.Error("a fatal finding did not refuse the boot")
+			}
+			if !tc.fatal && err != nil {
+				t.Errorf("a warning refused the boot: %v", err)
+			}
+			if tc.fatal {
+				// The one line that has to teach the fix.
+				for _, want := range []string{tc.requested, tc.reported,
+					"lock_mode: none", "docs/plugins.md § 4.2"} {
+					if !strings.Contains(found[0].Message, want) {
+						t.Errorf("the refusal does not mention %q:\n%s", want, found[0].Message)
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestCompositeAuthenticatorKindsAreMatched.
 //
 // The kind a deployment reports is usually a composite — "authorized_keys+static_token",

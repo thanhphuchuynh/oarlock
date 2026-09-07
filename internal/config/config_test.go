@@ -3,6 +3,7 @@ package config_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oarlock/oarlock/internal/config"
 )
@@ -433,6 +434,143 @@ authorizer:
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+// ── recording to a bucket ───────────────────────────────────────────────────────
+
+// TestS3RecorderConfig covers the block and the two validations that used to key off
+// recorder.dir alone.
+//
+// Both were wrong the moment a second store existed: an S3-only deployment was told
+// "nothing is recorded", and an S3 bucket with no signing key sailed through — an
+// unsigned manifest being a chain anyone with write access can recompute, which is the
+// thing record.New refuses to construct.
+func TestS3RecorderConfig(t *testing.T) {
+	base := `
+env: dev
+url: ws://127.0.0.1:8443
+devices: devices.yaml
+ssh:
+  host_key: hostkey
+authorizer:
+  kind: none
+`
+	t.Run("a bucket is a recorder", func(t *testing.T) {
+		c, err := config.Parse([]byte(base+`recorder:
+  signing_key: recording.key
+  key_id: prod-recording-key
+  s3:
+    bucket: oarlock-recordings
+    region: eu-west-1
+    endpoint: ""
+    prefix: recordings
+    lock_mode: compliance
+    retain_for: 2160h
+`), "test.yaml")
+		if err != nil {
+			t.Fatalf("an s3-only recorder was refused: %v", err)
+		}
+		if c.Recorder.S3 == nil {
+			t.Fatal("recorder.s3 did not decode")
+		}
+		if got := c.Recorder.S3.Bucket; got != "oarlock-recordings" {
+			t.Errorf("bucket = %q", got)
+		}
+		if got := c.Recorder.S3.RetainFor; got != 2160*time.Hour {
+			t.Errorf("retain_for = %v, want 2160h", got)
+		}
+		if got := c.Recorder.S3.RequestedLockMode(); got != "compliance" {
+			t.Errorf("requested lock mode = %q", got)
+		}
+		if !c.Recorder.Recording() {
+			t.Error("a configured bucket does not count as recording, so the " +
+				"signing-key checks and the operator's banner would both be wrong")
+		}
+	})
+
+	t.Run("none and absent both mean no lock was asked for", func(t *testing.T) {
+		for _, line := range []string{"    lock_mode: none\n", ""} {
+			c, err := config.Parse([]byte(base+`recorder:
+  signing_key: recording.key
+  s3:
+    bucket: oarlock-recordings
+`+line), "test.yaml")
+			if err != nil {
+				t.Fatalf("%q was refused: %v", line, err)
+			}
+			if got := c.Recorder.S3.RequestedLockMode(); got != "" {
+				t.Errorf("%q gave a requested mode of %q, want empty — the boot gate "+
+					"refuses a requested lock the bucket does not give, so \"none\" "+
+					"reading as a request would refuse every unlocked bucket", line, got)
+			}
+		}
+	})
+
+	// A nil S3 must answer too: app.go asks the config for the requested mode whether
+	// or not a bucket was configured.
+	t.Run("no bucket at all requests nothing", func(t *testing.T) {
+		var s *config.S3
+		if got := s.RequestedLockMode(); got != "" {
+			t.Errorf("a nil s3 block requested %q", got)
+		}
+	})
+
+	for _, tc := range []struct{ name, recorder, want string }{
+		{
+			name: "a directory and a bucket",
+			recorder: `recorder:
+  dir: recordings
+  signing_key: recording.key
+  s3:
+    bucket: oarlock-recordings
+`,
+			want: "mutually exclusive",
+		},
+		{
+			name: "a bucket with no name",
+			recorder: `recorder:
+  signing_key: recording.key
+  s3:
+    region: eu-west-1
+`,
+			want: "recorder.s3.bucket is required",
+		},
+		{
+			name: "a bucket with no signing key",
+			recorder: `recorder:
+  s3:
+    bucket: oarlock-recordings
+`,
+			want: "recorder.signing_key is required",
+		},
+		{
+			name: "a signing key and nowhere to record",
+			recorder: `recorder:
+  signing_key: recording.key
+`,
+			want: "neither recorder.dir nor recorder.s3",
+		},
+		{
+			name: "an unknown key in the block",
+			recorder: `recorder:
+  signing_key: recording.key
+  s3:
+    bucket: oarlock-recordings
+    lock_moed: compliance
+`,
+			want: "lock_moed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Parse([]byte(base+tc.recorder), "test.yaml")
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error does not mention %q: %v", tc.want, err)
 			}
 		})
 	}

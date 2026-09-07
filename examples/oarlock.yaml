@@ -138,6 +138,31 @@ recorder:
   generate_signing_key: true
   key_id: dev-recording-key
 
+  # A bucket instead of a directory, so a recording is locked against the gateway's own
+  # operator. Mutually exclusive with `dir` above — uncomment this and remove `dir`,
+  # rather than setting both and letting a branch decide where the evidence went.
+  #
+  # lock_mode is a *request*. The store asks the bucket what it actually enforces and
+  # reports that, so a bucket with no object lock reports `mutable` however this is
+  # written — and the boot gate then refuses to start rather than signing an unchecked
+  # immutability claim into every manifest. Object Lock has to be enabled when the
+  # bucket is created; it cannot be turned on afterwards. See docs/plugins.md § 4.2.
+  #
+  # s3:
+  #   bucket: oarlock-recordings
+  #   region: eu-west-1
+  #   endpoint: ""            # empty for AWS; host[:port] for MinIO, Ceph or Backblaze
+  #   prefix: recordings      # <prefix>/<session-id>.cast and .manifest.json
+  #   lock_mode: compliance   # compliance | governance | none
+  #   retain_for: 2160h       # 90 days; required whenever a lock is asked for
+  #   # Better left unset: credentials then come from the environment,
+  #   # ~/.aws/credentials, or the instance's IAM role rather than from a file that
+  #   # gets copied around. And keep signing_key somewhere this bucket's writers
+  #   # cannot reach — whoever can rewrite a manifest can re-sign it.
+  #   # access_key: ""
+  #   # secret_key: ""
+  #   # use_ssl: true         # only consulted when endpoint is a bare host
+
 audit:
   # JSON lines on stderr by default. The queue is bounded: if it fills, events are
   # dropped and counted rather than blocking a session.

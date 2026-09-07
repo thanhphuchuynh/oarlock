@@ -362,6 +362,11 @@ type Recorder struct {
 	// banner and in the session row, because an unrecorded session must be a fact you
 	// can query for rather than an absence somebody has to notice.
 	Dir string `yaml:"dir"`
+	// S3 writes recordings to a bucket instead, under an object lock. Mutually
+	// exclusive with Dir: two stores configured is an operator expecting something
+	// this cannot do, and picking one silently means the recordings are somewhere
+	// other than where they went looking for them.
+	S3 *S3 `yaml:"s3"`
 	// SigningKey is the ed25519 key the manifest is signed with.
 	SigningKey string `yaml:"signing_key"`
 	// GenerateSigningKey writes one when the file is absent. Dev only: a recording
@@ -370,6 +375,67 @@ type Recorder struct {
 	// KeyID names the key in the manifest, so a verifier knows which one to ask for.
 	KeyID string `yaml:"key_id"`
 }
+
+// S3 configures the object-store recording backend.
+//
+// The lock this asks for is a request, not a fact. The store asks the bucket what it
+// actually enforces and reports that, so a bucket with no object lock reports
+// `mutable` however this block is written — and the boot gate refuses that
+// combination rather than starting and signing an unchecked claim into every
+// manifest. See docs/plugins.md § 4.2.
+type S3 struct {
+	// Bucket is required.
+	Bucket string `yaml:"bucket"`
+	// Region is the signing region. Empty makes the client look the bucket's region
+	// up, which works on AWS and costs a request at startup.
+	Region string `yaml:"region"`
+	// Endpoint is empty for AWS, or host[:port] for MinIO, Ceph or Backblaze. A
+	// scheme is tolerated and decides whether TLS is used.
+	Endpoint string `yaml:"endpoint"`
+	// Prefix is the key prefix, e.g. "recordings". Empty puts objects at the root.
+	Prefix string `yaml:"prefix"`
+
+	// AccessKey and SecretKey are better left empty: the store then takes
+	// credentials from the environment, ~/.aws/credentials, or the instance's IAM
+	// role, none of which is a secret written to a file that gets copied around.
+	// They are here for a deployment that has nowhere else to put them.
+	AccessKey string `yaml:"access_key"`
+	SecretKey string `yaml:"secret_key"`
+
+	// UseSSL applies only when Endpoint is a bare host: there is no plaintext AWS
+	// S3, and an endpoint with a scheme on it already said which one it wants.
+	UseSSL bool `yaml:"use_ssl"`
+
+	// LockMode is "compliance", "governance", or "none"/absent. What each buys is in
+	// docs/plugins.md § 4.2; in short, governance is a lock privileged users can
+	// lift and compliance is one nobody can, including the account owner.
+	//
+	// Not validated here: the store refuses anything an object lock cannot express,
+	// and one list of the acceptable modes is better than two that can drift.
+	LockMode string `yaml:"lock_mode"`
+	// RetainFor is how long each object is locked, e.g. 2160h for 90 days. Required
+	// when LockMode asks for a lock: S3 locks an object until a date, so a mode
+	// without a period is not a lock.
+	RetainFor time.Duration `yaml:"retain_for"`
+}
+
+// RequestedLockMode is LockMode with "none" and the empty string collapsed to "",
+// which is what both the store and the boot gate mean by "no lock was asked for".
+//
+// A method rather than the caller's business, because "none" and "" arriving at two
+// call sites that spell the comparison differently is how a gate stops firing.
+func (s *S3) RequestedLockMode() string {
+	if s == nil || s.LockMode == "none" {
+		return ""
+	}
+	return s.LockMode
+}
+
+// Recording reports whether any store is configured, which is what the two
+// signing-key checks below actually turn on. A bucket with no signing key must be
+// refused for the same reason a directory with no signing key is: an unsigned
+// manifest is a chain anyone with write access can recompute.
+func (r Recorder) Recording() bool { return r.Dir != "" || r.S3 != nil }
 
 // Audit configures the audit sink.
 type Audit struct {
@@ -756,12 +822,21 @@ func (c *Config) Validate() error {
 	if (c.Listen.TLSCert == "") != (c.Listen.TLSKey == "") {
 		add("listen.tls_cert and listen.tls_key must be set together")
 	}
-	if c.Recorder.Dir == "" && c.Recorder.SigningKey != "" {
-		add("recorder.signing_key is set but recorder.dir is not, so nothing is recorded")
+	if c.Recorder.Dir != "" && c.Recorder.S3 != nil {
+		add("recorder.dir and recorder.s3 are mutually exclusive: pick where the " +
+			"recordings go rather than leaving it to whichever branch is read first")
 	}
-	if c.Recorder.Dir != "" && c.Recorder.SigningKey == "" {
-		add("recorder.signing_key is required when recording: an unsigned manifest " +
-			"cannot be verified, which is most of the point")
+	if c.Recorder.S3 != nil && c.Recorder.S3.Bucket == "" {
+		add("recorder.s3.bucket is required")
+	}
+	if !c.Recorder.Recording() && c.Recorder.SigningKey != "" {
+		add("recorder.signing_key is set but neither recorder.dir nor recorder.s3 is, " +
+			"so nothing is recorded")
+	}
+	if c.Recorder.Recording() && c.Recorder.SigningKey == "" {
+		add("recorder.signing_key is required when recording to recorder.dir or " +
+			"recorder.s3: an unsigned manifest cannot be verified, which is most of " +
+			"the point")
 	}
 	if c.Limits.LowWater >= c.Limits.HighWater {
 		add("limits.low_water (%d) must be below limits.high_water (%d): releasing "+

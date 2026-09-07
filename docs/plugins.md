@@ -656,7 +656,8 @@ store that indexed it.
 | built-in | notes |
 |---|---|
 | `file` (default) | `./recordings/YYYY-MM-DD/{session_id}.cast` + `.json`. `fsync` on close, and the manifest is written to a temp file then renamed, so a reader never sees half of one. |
-| `s3`, `gcs` | multipart streaming upload, part per ~5 MiB, finalised on close. `URL` issues a signed link. See § 4.2 before pointing one at a bucket. |
+| `s3` | any S3-compatible bucket — AWS, MinIO, Ceph, Backblaze. Multipart streaming upload, part per 5 MiB, finalised on close, aborted on failure. `URL` issues a presigned link, so replay does not stream through the gateway. Both the recording and its manifest are written under an object lock. **Read § 4.2 before pointing one at a bucket** — the lock has to be enabled when the bucket is *created*. |
+| `gcs` | not implemented. The retention-policy notes in § 4.2 describe what a bucket needs; the backend does not exist yet. |
 | `none` | records nothing, and **logs a warning at every session open**. Chosen unrecorded is a legitimate configuration; quietly unrecorded is not. |
 
 ### 4.2 Storage immutability, and why the chain is not enough
@@ -688,6 +689,77 @@ and a change. An auditor reading a recording two years from now should not have 
 guess whether the bucket had object lock enabled in 2026 — and because the field is
 inside the signed bytes, the claim cannot be upgraded after the fact.
 
+#### What each mode buys, and what compliance costs
+
+| you want to survive | the mode that does it |
+|---|---|
+| a `rm -rf` on the recordings directory by someone cleaning up disk space | `governance` or `compliance` |
+| an operator who has just been recorded doing something they should not have | `governance` or `compliance` |
+| a compromised writer — leaked credentials with `s3:PutObject` and `s3:DeleteObject` | `governance` or `compliance` |
+| an administrator, or the account owner, deciding a recording should not exist | **`compliance` only** |
+
+`governance` is a lock, and it is a lock with a documented way out:
+`s3:BypassGovernanceRetention`. That is the right choice when you have a real need to
+delete recordings early — and if you do, the people holding that permission are now
+part of your audit story, because "who could have deleted it" is a question about them.
+
+`compliance` has no way out, and that is not a slogan. **Until the retain-until date
+passes, nobody can delete that object version. Not you. Not the root account. Not AWS
+support.** Which means, concretely:
+
+- A recording made by mistake — the wrong device, a test session, a misconfigured
+  `record_input` that captured a password prompt — is storage you pay for until
+  retention expires, and it is readable by anyone with `s3:GetObject` for the whole of
+  that time. Getting `record_input` and retention wrong together produces a credential
+  store you cannot delete. Fix the retention period *before* the first recording, and
+  read § 4.3 before turning `record_input` on.
+- A subject-access or erasure request that reaches a compliance-locked recording
+  cannot be satisfied by deleting it. If that is a real obligation for you, either
+  choose `governance` and document who may bypass it, or pick a retention period that
+  is defensible as the shorter of "long enough to investigate" and "no longer than we
+  are allowed to keep it".
+- Retention is per object and set when the object is written, so changing the
+  configured period changes nothing about what is already stored.
+
+Pick the number as an obligation, not an aspiration. 90 days of retention you can
+justify is worth more than seven years you will be asked to defend.
+
+#### What a lock actually buys, and the one thing it does not
+
+Object Lock requires bucket versioning, and that changes the shape of the guarantee in
+a way worth stating plainly: **a lock makes each object *version* undeletable. It does
+not make the key unwritable.**
+
+Somebody with `s3:PutObject` on the bucket can still PUT a doctored recording over the
+key, and `Get` — including replay — serves the latest version. So:
+
+| claim | true? |
+|---|---|
+| an administrator cannot **delete** the evidence | **yes.** That is what the lock buys. |
+| an administrator cannot **forge** evidence undetectably | **yes.** That is what the signature buys — the signing key is deliberately somewhere the recording store cannot reach. |
+| replay always serves the **locked** bytes | **no.** `Get` reads the latest version. |
+
+The third row is a gap in what the gateway *shows you* rather than in the guarantee
+itself. The locked original survives, and the substitute fails verification because
+whoever wrote it could not sign a manifest for it — but an operator who hits replay
+sees the substitute until they look at the verdict, and the locked original is
+recoverable only by asking S3 for the object's version history.
+
+**So check the verdict, not the picture.** A compliance-locked recording is a strong
+guarantee and it is not the guarantee the words "immutable recording" put in a reader's
+head, which is why it is written down here rather than left for somebody to discover
+during an incident.
+
+Closing it is a follow-up: capture the `versionId` on write, record it in the manifest,
+and read that version back. That needs a seam change — `Store.Get(ctx, sessionID)` has
+no version parameter, and the manifest is authored by the recorder rather than by the
+backend — which is why it is not bolted onto this increment.
+
+One more thing that is not checked yet: **bucket versioning can be *suspended* after
+Object Lock is enabled.** `GetObjectLockConfig` still reports the lock, so the gateway
+would report a lock that new versions no longer get. Do not suspend versioning on a
+bucket holding recordings.
+
 #### Configuring it
 
 **S3.** Object Lock must be enabled **at bucket creation** — it cannot be turned on
@@ -703,6 +775,49 @@ aws s3api put-object-lock-configuration --bucket oarlock-recordings   --object-l
 `GOVERNANCE` can be lifted with `s3:BypassGovernanceRetention`, which is the right
 choice only if you have a real need to delete recordings early — and if you do, the
 people holding that permission are now part of your audit story.
+
+Then point the gateway at it. `recorder.dir` and `recorder.s3` are mutually exclusive —
+two stores configured is refused rather than resolved:
+
+```yaml
+recorder:
+  signing_key: ./recording.key     # required: an unsigned manifest is a chain
+  key_id: prod-recording-key       # anyone with write access can recompute
+  s3:
+    bucket: oarlock-recordings
+    region: eu-west-1
+    endpoint: ""                   # empty for AWS; host[:port] for MinIO or Ceph
+    prefix: recordings             # <prefix>/<session-id>.cast and .manifest.json
+    lock_mode: compliance          # compliance | governance | none
+    retain_for: 2160h              # 90 days; required whenever a lock is asked for
+```
+
+Leave `access_key` and `secret_key` unset unless you have nowhere else to put them:
+credentials then come from the environment, `~/.aws/credentials`, or the instance's IAM
+role rather than from a file that gets copied around.
+
+**`lock_mode` is a request, not a fact, and the gateway will not pretend otherwise.**
+The store asks the bucket what it enforces (`GetObjectLockConfig`) and reports *that* —
+so a bucket with no object lock reports `mutable` however this block is written. Asking
+for `compliance` and getting `mutable`, or getting `unknown` because the bucket could
+not be read at all, **refuses the boot**:
+
+```
+refused: recorder.s3.lock_mode: compliance retention was requested and the store
+reports "mutable", so every manifest written would carry a signed immutability claim
+nobody checked. …
+```
+
+That refusal applies in development too. Every other check in the boot gate is about a
+default that happens to be dangerous, and several are relaxed outside production; this
+one is about an explicit request the deployment cannot honour, which is the same lie in
+a lab as it is in production. A lab with no WORM storage sets `lock_mode: none` (or
+omits it) and gets a warning rather than a refusal — nobody promised anything.
+
+The store is asked once, when the recorder is constructed, rather than per session — a
+log line per shell saying the same thing is how a real warning becomes something
+operators filter out. That is also why the boot gate is the only thing that will ever
+catch an unreachable bucket: it answers `unknown` for the lifetime of the process.
 
 **GCS.** A bucket-level retention policy, then **lock it** — an unlocked policy can be
 shortened or removed, which makes it a preference rather than a control:

@@ -64,6 +64,22 @@ type Settings struct {
 	RecordingStoreProtected bool
 	// RecordingStoreMode is what it reported, for the message.
 	RecordingStoreMode string
+	// RecordingStoreDetail is the store's own explanation of that mode, which is the
+	// half that says what to do about it — "the bucket has no object lock
+	// configuration" and "could not read: … AccessDenied" are the same mode and
+	// different repairs.
+	RecordingStoreDetail string
+	// RecordingStoreRequested is the immutability the *configuration* asked for:
+	// "compliance", "governance", or empty for nothing.
+	//
+	// It sits beside the reported mode because the gate cannot otherwise tell two
+	// situations apart that deserve different answers. An operator who asked for
+	// nothing and got a mutable store made a choice, and a lab with no WORM storage
+	// is entitled to make it. An operator who wrote lock_mode: compliance asked for
+	// a guarantee — and every manifest written afterwards records the storage claim
+	// in its own signed JSON, so booting anyway signs a claim nobody checked into
+	// every piece of evidence.
+	RecordingStoreRequested string
 	// TCPAllowlist and FileRoots are the device-side profile allow-lists.
 	TCPAllowlist []string
 	FileRoots    []string
@@ -143,7 +159,30 @@ func Check(s Settings, log *slog.Logger) ([]Problem, error) {
 			"A chosen absence is legitimate; an accidental one is discovered during an "+
 			"incident")
 	}
-	if s.RecorderConfigured && !s.RecordingStoreProtected && prod {
+	// The two rows of one table, and they are deliberately mutually exclusive: two
+	// findings for one decision is how a finding stops being read.
+	//
+	// The refusal is not gated on production. A check relaxed in development is a
+	// check about a *default* that happens to be dangerous; this one is about an
+	// explicit request the deployment cannot honour, and honouring it in words only
+	// is the same lie in a lab as it is in production. It is also the only thing that
+	// will ever catch it: the store is asked for its immutability once, at recorder
+	// construction (internal/record/recorder.go), so a bucket unreachable at boot
+	// answers "unknown" for the lifetime of the process.
+	switch {
+	case s.RecorderConfigured && s.RecordingStoreRequested != "" && !s.RecordingStoreProtected:
+		add(true, "recorder.s3.lock_mode", fmt.Sprintf(
+			"%s retention was requested and the store reports %q, so every manifest "+
+				"written would carry a signed immutability claim nobody checked. The "+
+				"store's account: %s. Object Lock has to be enabled when the bucket "+
+				"is *created* — it cannot be turned on afterwards — so either create "+
+				"a locked bucket with a default retention, or set "+
+				"recorder.s3.lock_mode: none and accept a recording whose tampering "+
+				"is detectable rather than impossible; see docs/plugins.md § 4.2",
+			s.RecordingStoreRequested, orUnknown(s.RecordingStoreMode),
+			orNoDetail(s.RecordingStoreDetail)))
+
+	case s.RecorderConfigured && !s.RecordingStoreProtected && prod:
 		add(false, "recording_store", fmt.Sprintf(
 			"the recording store reports %q: tampering is detectable but not "+
 				"impossible, because anything with write access can alter a recording "+
@@ -243,6 +282,13 @@ func Check(s Settings, log *slog.Logger) ([]Problem, error) {
 func orUnknown(s string) string {
 	if s == "" {
 		return "unknown"
+	}
+	return s
+}
+
+func orNoDetail(s string) string {
+	if s == "" {
+		return "none given"
 	}
 	return s
 }
