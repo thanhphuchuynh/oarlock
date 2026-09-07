@@ -15,7 +15,8 @@ import type { Facets, Route } from "../router/routes";
 import { Grants, type GrantsState } from "../components/Grants";
 import { Timeline, type TimelineState } from "../components/Timeline";
 import { FacetBar, type FacetSpec } from "../components/Facets";
-import { SSHAccess } from "../SSHAccess";
+import { SshClientDialog } from "../components/dialogs/SshClientDialog";
+import { DeviceDialog, devicePayload, formFromDevice, type DeviceForm } from "../components/dialogs/DeviceDialog";
 
 type Navigate = (to: Route, opts?: { replace?: boolean }) => void;
 
@@ -37,11 +38,8 @@ export function DevicePage({
   navigate,
   onOpen,
   onOpenSession,
-  onEdit,
-  onToggle,
-  onDelete,
-  onStopAgent,
-  onKill,
+  refresh,
+  onFail,
 }: {
   client: Client;
   device: string;
@@ -55,14 +53,16 @@ export function DevicePage({
    *  prop of the same name for why this is a promise the row awaits rather than a plain
    *  navigation. */
   onOpenSession: (session: Session) => Promise<void>;
-  /** The device form dialog, opened for this device rather than for a new one. */
-  onEdit: (device: Device) => void;
-  onToggle: (device: Device) => void;
-  onDelete: (id: string) => void;
-  onStopAgent: (deviceID: string) => void;
-  onKill: (session: Session) => void;
+  /** Reloads the fleet lists — after an edit, a toggle, a stopped agent or a kill, so the
+   *  rest of the console sees the same fact this page just acted on. */
+  refresh: () => void;
+  /** The full-page failure screen — reserved for an admin action refused or erroring out,
+   *  same as it always was; this page still cannot render that screen itself; only App's
+   *  nav rail has to stay reachable underneath it. */
+  onFail: (err: unknown) => void;
 }) {
   const info = devices.find((d) => d.id === device);
+  const [editing, setEditing] = useState(false);
 
   // Default to the last 30 days when no `since` facet is present, landed in the URL rather
   // than kept only in state — see the identical effect on the Person page.
@@ -122,6 +122,68 @@ export function DevicePage({
   const [reason, setReason] = useState("");
   const disabled = info?.enabled === false;
 
+  // The device's own admin actions — edit, disable/enable, stop its agent, delete, and
+  // ending a live session from the timeline below — moved in from `App.tsx`: this page
+  // already held `client`, so the only thing missing was somewhere to put a refusal
+  // (`onFail`, still the App-level full-page failure screen) and somewhere to reload the
+  // fleet lists afterwards (`refresh`).
+  async function saveEdit(input: DeviceForm): Promise<string | null> {
+    try {
+      await client.updateDevice(input.id.trim(), devicePayload(input));
+      refresh();
+      return null;
+    } catch (err) {
+      return err instanceof ApiError ? err.detail || err.message : String(err);
+    }
+  }
+
+  async function toggle() {
+    if (!info) return;
+    const enabled = info.enabled !== false;
+    if (enabled && !confirm(`Disable ${info.id}?\n\nNew shells will be refused and a connected agent will be stopped. Session history remains available.`)) {
+      return;
+    }
+    const error = await saveEdit({ ...formFromDevice(info), enabled: !enabled });
+    if (error) onFail(new Error(error));
+  }
+
+  async function stopAgent() {
+    if (!confirm(`Stop ${device}?\n\nThe agent exits on that device. Start oarlock-agent there again to reconnect it.`)) {
+      return;
+    }
+    try {
+      await client.disconnectAgent(device);
+      refresh();
+    } catch (err) {
+      onFail(err);
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Delete ${device}?\n\nExisting sessions stay in the ledger, but new sessions cannot target this device until it is added again.`)) {
+      return;
+    }
+    try {
+      await client.deleteDevice(device);
+      refresh();
+    } catch (err) {
+      onFail(err);
+    }
+  }
+
+  async function kill(session: Session) {
+    if (!confirm(`End the session on ${session.device_id}?\n\nThe operator's shell closes ` +
+      `immediately and the recording is finalised. This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await client.kill(session.id, "admin_kill");
+      refresh();
+    } catch (err) {
+      onFail(err);
+    }
+  }
+
   return (
     <div className="grid gap-8" data-testid="device-page" data-device={device}>
       <div>
@@ -157,7 +219,7 @@ export function DevicePage({
               >
                 Open
               </button>
-              <SSHAccess client={client} device={device} />
+              <SshClientDialog client={client} device={device} />
             </div>
           </div>
         )}
@@ -169,20 +231,20 @@ export function DevicePage({
           as the shell box above has nothing to open for one. */}
       {info && (
         <div className="flex flex-wrap items-center gap-1 border-t border-border pt-3">
-          <button className="btn btn-quiet" onClick={() => onEdit(info)}>
+          <button className="btn btn-quiet" onClick={() => setEditing(true)}>
             Edit
           </button>
-          <button className="btn btn-quiet" onClick={() => onToggle(info)}>
+          <button className="btn btn-quiet" onClick={() => void toggle()}>
             {disabled ? "Enable" : "Disable"}
           </button>
           {/* Only while there is a channel to stop, and taken from the device's own
               connection state rather than a second list of the same fact. */}
           {info.connected && (
-            <button className="btn btn-quiet" onClick={() => onStopAgent(device)}>
+            <button className="btn btn-quiet" onClick={() => void stopAgent()}>
               Stop agent
             </button>
           )}
-          <button className="btn btn-danger ml-auto" onClick={() => onDelete(device)}>
+          <button className="btn btn-danger ml-auto" onClick={() => void remove()}>
             Delete
           </button>
         </div>
@@ -207,7 +269,7 @@ export function DevicePage({
             onOpenSession={onOpenSession}
             testId="device-sessions"
             variant="device"
-            onKill={onKill}
+            onKill={(session) => void kill(session)}
           />
         </div>
       </section>
@@ -219,6 +281,10 @@ export function DevicePage({
         variant="device"
         subject={device}
       />
+
+      {editing && info && (
+        <DeviceDialog device={info} onClose={() => setEditing(false)} onSave={saveEdit} />
+      )}
     </div>
   );
 }

@@ -12,8 +12,10 @@
 // linked to, and this list linking to it is what closes that gap.
 
 import { useState } from "react";
-import type { Device, Session } from "../api";
+import type { Client, Device, Session } from "../api";
 import type { Route } from "../router/routes";
+import { DeviceDialog, deviceOperationError, devicePayload, type DeviceForm } from "../components/dialogs/DeviceDialog";
+import { OpenByIdDialog } from "../components/dialogs/OpenByIdDialog";
 
 type Navigate = (to: Route, opts?: { replace?: boolean }) => void;
 type StateFilter = "all" | "online" | "offline" | "disabled";
@@ -43,15 +45,37 @@ function resolveTo(navigate: Navigate, target: Target) {
 }
 
 export interface SearchPageProps {
+  client: Client;
   devices: readonly Device[];
   sessions: readonly Session[];
   navigate: Navigate;
+  /** Opens a shell on a device and routes to it — shared with `DevicePage`'s own "Open"
+   *  button, so a wait started from either place looks and behaves the same way. */
+  onOpen: (device: string, reason: string) => void;
+  /** Reloads the fleet lists after a device is added — the same poll a live agent's own
+   *  connect/disconnect would eventually produce, just not on a four-second wait for it. */
+  refresh: () => void;
 }
 
-export function SearchPage({ devices, sessions, navigate }: SearchPageProps) {
+export function SearchPage({ client, devices, sessions, navigate, onOpen, refresh }: SearchPageProps) {
   const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [lookup, setLookup] = useState("");
+  // The device form dialog and the open-by-id dialog, both moved in from `App.tsx`: this
+  // is the fleet-admin surface now, so this is where "add a device" and "open a shell on
+  // an id you typed" live.
+  const [adding, setAdding] = useState(false);
+  const [openByID, setOpenByID] = useState<{ device: string; reason: string } | null>(null);
+
+  async function createDevice(input: DeviceForm): Promise<string | null> {
+    try {
+      await client.createDevice(devicePayload(input));
+      refresh();
+      return null;
+    } catch (err) {
+      return deviceOperationError(err);
+    }
+  }
 
   const online = devices.filter((d) => d.enabled !== false && d.connected).length;
   const live = sessions.filter((s) => s.live).length;
@@ -122,7 +146,7 @@ export function SearchPage({ devices, sessions, navigate }: SearchPageProps) {
             {" · "}
             {live} live {live === 1 ? "session" : "sessions"}
           </p>
-          <div className="flex w-full gap-2 sm:w-auto">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
             <input
               className="field min-w-0 sm:w-56"
               placeholder="Search devices"
@@ -141,6 +165,15 @@ export function SearchPage({ devices, sessions, navigate }: SearchPageProps) {
               <option value="offline">Offline</option>
               <option value="disabled">Disabled</option>
             </select>
+            {/* Fleet-admin actions, moved in from the shared header: this is the fleet
+                list now, so this is where adding a device and opening one by a typed id
+                belong. */}
+            <button className="btn" onClick={() => setOpenByID({ device: "", reason: "" })} data-testid="open-by-id">
+              Open by id…
+            </button>
+            <button className="btn btn-primary" onClick={() => setAdding(true)}>
+              Add device
+            </button>
           </div>
         </div>
 
@@ -160,6 +193,23 @@ export function SearchPage({ devices, sessions, navigate }: SearchPageProps) {
           </ul>
         )}
       </section>
+
+      {adding && (
+        <DeviceDialog onClose={() => setAdding(false)} onSave={createDevice} />
+      )}
+
+      {openByID && (
+        <OpenByIdDialog
+          value={openByID}
+          onChange={setOpenByID}
+          onClose={() => setOpenByID(null)}
+          onOpen={() => {
+            const { device, reason } = openByID;
+            setOpenByID(null);
+            onOpen(device, reason);
+          }}
+        />
+      )}
     </div>
   );
 }

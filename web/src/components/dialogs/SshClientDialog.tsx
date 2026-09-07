@@ -1,5 +1,10 @@
+// The pinned local SSH client — moved from `SSHAccess.tsx` verbatim. Renders its own
+// trigger button as well as the dialog: unlike the other three dialogs, nothing else on
+// `DevicePage` needs to know whether it is open, so there is no separate open/closed state
+// for a caller to own.
+
 import { useEffect, useState } from "react";
-import { ApiError, Client, type SSHInfo } from "./api";
+import { ApiError, Client, type SSHInfo } from "../../api";
 
 function errorText(error: unknown): string {
   if (error instanceof ApiError) return error.detail || error.message;
@@ -10,7 +15,7 @@ function sshHost(host: string): string {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }
 
-export function SSHAccess({ client, device }: { client: Client; device: string }) {
+export function SshClientDialog({ client, device }: { client: Client; device: string }) {
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<SSHInfo | null>(null);
   const [identity, setIdentity] = useState("~/.ssh/id_ed25519");

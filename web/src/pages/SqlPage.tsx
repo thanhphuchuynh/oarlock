@@ -1,12 +1,16 @@
+// The SQL explorer — the schema browser and the read-only query surface, moved from
+// `SQLExplorer.tsx`. No dialog here: the whole page fits without one, so it moves as a
+// single file rather than splitting further. Keeps the `sql-explorer` and `run-sql` hooks.
+
 import { useEffect, useMemo, useState } from "react";
-import { ApiError, type Client, type SQLResult, type SQLTable } from "./api";
+import { ApiError, type Client, type SQLResult, type SQLTable } from "../api";
 
 const initialQuery = `SELECT id, platform, mode, disabled, updated_at
 FROM oarlock_devices
 ORDER BY id
 LIMIT 100`;
 
-export function SQLExplorer({ client }: { client: Client }) {
+export function SqlPage({ client }: { client: Client }) {
   const [tables, setTables] = useState<SQLTable[]>([]);
   const [query, setQuery] = useState(initialQuery);
   const [result, setResult] = useState<SQLResult | null>(null);
