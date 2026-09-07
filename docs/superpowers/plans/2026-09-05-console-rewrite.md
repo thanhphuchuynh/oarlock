@@ -47,12 +47,20 @@ permissions  permissions-refused  run-sql  sql-explorer
 person-page  person-sessions  person-access  person-facets
 ```
 
-These are the seams the 185-test suite grips. **Keep every name.** The rewrite changes the
-markup behind them, not the contract with the tests — that is what lets the existing suite
-tell you whether the rewrite lost something, which is the only safety net a rewrite has.
+**These were originally frozen, and freezing them is what turned this rewrite into a
+refactor.** Four tasks produced one search box, because a dozen tests assert on the fleet
+accordion and three assert on a nav button labelled "Fleet" — so the mockup's design could
+not emerge. The product owner has removed that constraint.
 
-Where the new structure has no equivalent for one, that is a feature being dropped: stop
-and say so rather than deleting the hook.
+**The hooks may now move. The capabilities may not.**
+
+A hook that relocates — `device-access` moving from an accordion row to the device page —
+is a capability that found a better home, and its test moves with it. A hook that
+disappears with nothing testing that capability anywhere is a feature being deleted: stop
+and say so.
+
+The distinction is the whole safety net now. **A test may be rewritten to reach a
+capability its new way. A test may not be deleted because the capability is gone.**
 
 ### The four dialogs
 
@@ -88,6 +96,10 @@ set.
 - **Do not hardcode `/ui`.** The router derives the mount prefix; `app.go` mounts it.
 - **The whole suite must pass at every task boundary.** A rewrite whose tests are
   "temporarily red" is a rewrite nobody can tell is finished.
+- **Tests move with the capabilities they cover.** A task that relocates a capability
+  rewrites the tests that reach it, in the same commit. Every rewritten test must be listed
+  in the report with what moved and where — an unexplained test change is a deleted feature
+  wearing a diff.
 
 ---
 
@@ -200,34 +212,46 @@ The search-first home from the mockup, resolving to a person or a device. The na
 from four tabs to three — Search, Permissions, SQL — with `Fleet.tsx` deleted once
 `SearchPage` carries the device list. Hooks: `fleet`, `fleet-summary`.
 
-### Task 5: Session page
+### Task 5: The fleet becomes a list of links
 
-**Files:** `web/src/pages/SessionPage.tsx`
+**Files:** `web/src/pages/SearchPage.tsx`, `web/src/App.tsx`, `tests/console/console.spec.ts`
 
-Terminal, player, failure — chosen by session state, one URL for all three so a link
-pasted while a session is live still resolves after it closes. Carries the
-recorded/unrecorded disclosure and the replay integrity verdict. Hooks: `terminal`,
-`replay`, `failure`, `waits`.
+**This is the task the redesign has been waiting for, and the riskiest in the plan.**
 
-### Task 6: Permissions, SQL, and the four dialogs
+The mockup's device list is a list of **links to `/d/{id}`**. Today each row is an accordion
+that expands in place to show the shell box, who can reach it, who administers it and recent
+sessions — all of which `DevicePage` already renders, built in Task 3.
 
-**Files:** `web/src/pages/{PermissionsPage,SqlPage}.tsx`, `web/src/components/dialogs/*.tsx`
+So: delete the accordion. A device row links to its page. `SearchPage` becomes the search
+box plus a list. The nav becomes **Search / Permissions / SQL**.
 
-The four dialogs from the inventory: device form, open-by-id, SSH client, permission
-editor. Hooks: `permissions`, `permissions-refused`, `sql-explorer`, `run-sql`,
-`open-by-id*`.
+**About a dozen tests use `openRow(page, device)`**, which expands the accordion and asserts
+on its contents. Every one of them is testing a real capability that now lives on
+`DevicePage`. **Rewrite them to navigate there** — do not delete them, and do not weaken
+what they assert. `openRow` itself becomes a helper that navigates rather than expands,
+which is the smallest honest change.
 
-**Delete every remaining old file** in this task. `web/src` should contain only what the
-File Structure table lists.
+List every test you touch and what moved. A test whose capability you cannot find a new
+home for is a feature being dropped: **stop and ask.**
 
-### Task 7: Reconcile the tests
+### Task 6: The session page leads with the evidence
 
-Only after 1-6. Any test that must change is a feature that moved: list each one and why.
-A test deleted without an explanation is a capability deleted without one.
+**Files:** `web/src/pages/SessionPage.tsx`, tests as needed
 
-## Done when
+The mockup puts the header, then the terminal or player, then an **evidence panel** —
+signature, hash chain, verified export. Today the verdict is a strip above the player.
 
-- `pnpm test` green, with every test hook still present.
-- No capability from the inventory is missing.
-- `App.tsx` is an auth shell and a route switch, nothing else.
-- `Timeline` and `Grants` each exist once.
+One URL for all three states, which already holds. Keep the recorded/unrecorded disclosure:
+it is the thing the operator is owed and the reason the banner exists.
+
+### Task 7: The rest, and App.tsx finally shrinks
+
+**Files:** `web/src/pages/{PermissionsPage,SqlPage}.tsx`, `web/src/components/dialogs/*.tsx`,
+`web/src/App.tsx`
+
+The four dialogs from the inventory — device form, open-by-id, SSH client, permission
+editor. Delete `Permissions.tsx`, `SQLExplorer.tsx`, `SSHAccess.tsx`, and everything left in
+`App.tsx` that is not the auth shell and the route switch.
+
+`App.tsx` reaches **under 200 lines** here. It is 1,178 today.
+
