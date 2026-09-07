@@ -281,8 +281,46 @@ something it should not).
 - The boot gate refuses `compliance` against an unlocked bucket.
 - `go test ./...` green from the committed state.
 
+## What "locked" actually buys, and the gap Task 1 found
+
+Task 1 established a limit that changes what may honestly be claimed, so it is recorded
+here rather than left in a package comment.
+
+**S3 requires versioning for Object Lock, so a lock makes each object *version*
+undeletable — it does not make the key unwritable.** Somebody with bucket write access can
+still `PUT` a doctored recording over the key, and `Get` serves the latest version.
+
+What they cannot do is destroy the locked original, and they cannot produce a manifest that
+verifies, because the signing key is deliberately somewhere the recording store cannot
+reach. So:
+
+| claim | true? |
+|---|---|
+| an administrator cannot *delete* the evidence | **yes** — that is what the lock buys |
+| an administrator cannot *forge* evidence undetectably | **yes** — that is what the signature buys |
+| replay always serves the *locked* bytes | **no** — `Get` reads the latest version |
+
+The third row is the gap. It is not a hole in the guarantee so much as a hole in what the
+gateway *shows you*: the real recording survives and the substitute fails verification, but
+an operator hitting replay sees the substitute until they check the verdict.
+
+**Closing it is a follow-up increment: version-pinned reads.** Capture the `versionId` on
+write, record it in the manifest, and read that version back. That needs a seam change —
+`record.Store.Get(ctx, sessionID)` has no version parameter and the manifest is authored by
+`internal/record`, not by the backend — which is exactly why it is not bolted onto this one.
+
+**Task 2's § 4.2 must say all of this.** A compliance-locked recording that replay might
+serve a substitute for is still a strong guarantee, and it is not the guarantee the words
+"immutable recording" put in a reader's head.
+
 ## Not in this increment
 
-Lifecycle policies, cross-region replication, KMS encryption (S3 default encryption covers
-the common case and is a bucket setting, not ours), legal hold as a separate operation, and
-migrating existing `file` recordings into a bucket.
+Version-pinned reads (above), lifecycle policies, cross-region replication, KMS encryption
+(S3 default encryption covers the common case and is a bucket setting, not ours), legal hold
+as a separate operation, and migrating existing `file` recordings into a bucket.
+
+Also unchecked: **bucket versioning can be *suspended* after Object Lock is enabled.**
+`GetObjectLockConfig` still reports enabled, so the store would report a lock that new
+versions no longer get. A `GetBucketVersioning` call in `Immutability` would catch it; it is
+one request and belongs in the follow-up with version-pinned reads, which needs versioning
+to be live anyway.
