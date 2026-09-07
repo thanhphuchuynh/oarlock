@@ -88,30 +88,60 @@ func TestImmutabilityReportsWhatTheBucketSays(t *testing.T) {
 		requested record.Mode
 		want      record.Mode
 		wantFor   time.Duration
+		// wantDetail are substrings the detail must contain. The mode is one number
+		// and some of these cases carry two facts; Detail is where the second one
+		// has to survive, so where it matters it is asserted rather than assumed.
+		wantDetail []string
 	}{
 		{
+			// wantFor is the *configured* retention, which is what each PUT's own
+			// retain-until date carries. That it also equals this bucket's 90-day
+			// default is a coincidence, and one worth naming: it let this case pass
+			// under the old weaker-of rule too, so it was never evidence either way.
 			name:      "a compliance default retention",
 			lock:      &lockConfig{Enabled: true, Mode: "COMPLIANCE", Days: 90},
 			requested: record.ModeCompliance,
 			want:      record.ModeCompliance,
-			wantFor:   90 * 24 * time.Hour,
+			wantFor:   2160 * time.Hour,
 		},
 		{
+			// The same bucket-agrees-with-us case where the two durations differ,
+			// so it actually discriminates: the object's retain-until comes from
+			// RetainFor, not from the bucket's 30-day default.
 			name:      "a governance default retention",
 			lock:      &lockConfig{Enabled: true, Mode: "GOVERNANCE", Days: 30},
 			requested: record.ModeGovernance,
 			want:      record.ModeGovernance,
-			wantFor:   30 * 24 * time.Hour,
+			wantFor:   2160 * time.Hour,
 		},
 		{
-			// The bucket's word beats ours even when ours is the stronger claim:
-			// governance is what an administrator could lift, so governance is what
-			// gets reported.
-			name:      "the bucket's default retention outranks the config",
+			// A per-PUT mode overrides the bucket default, so a recording this
+			// gateway wrote really is compliance-locked and that is what gets
+			// reported — reporting the bucket's weaker default would understate the
+			// lock on the very object whose manifest carries this.
+			//
+			// It is the same reasoning as "lock enabled with no default rule"
+			// below, and the two used to disagree: this case reported the weaker
+			// mode while that one trusted the same header. What the bucket default
+			// does or does not cover is a separate fact, and it lives in Detail.
+			name:      "the config asks for more than the bucket's default",
 			lock:      &lockConfig{Enabled: true, Mode: "GOVERNANCE", Days: 30},
 			requested: record.ModeCompliance,
+			want:      record.ModeCompliance,
+			wantFor:   2160 * time.Hour,
+			// Both facts must be legible to whoever reads the manifest: what this
+			// object got, and what an object written by anything else would get.
+			wantDetail: []string{"compliance", "governance", "other than this gateway"},
+		},
+		{
+			// The reverse, which is an operator mistake worth reporting accurately
+			// rather than flattering: asking for governance against a compliance
+			// bucket writes governance objects, and governance is liftable.
+			name:      "the config asks for less than the bucket's default",
+			lock:      &lockConfig{Enabled: true, Mode: "COMPLIANCE", Days: 90},
+			requested: record.ModeGovernance,
 			want:      record.ModeGovernance,
-			wantFor:   30 * 24 * time.Hour,
+			wantFor:   2160 * time.Hour,
 		},
 		{
 			// Object Lock enabled with no default rule still locks the objects we
@@ -130,6 +160,16 @@ func TestImmutabilityReportsWhatTheBucketSays(t *testing.T) {
 			lock:      &lockConfig{Enabled: true},
 			requested: "",
 			want:      record.ModeMutable,
+		},
+		{
+			// Nothing asked for, but the bucket locks by default — so our PUTs send
+			// no mode and inherit it. The retention is the bucket's, not the
+			// RetainFor nobody asked to apply.
+			name:      "nothing requested, the bucket locks by default",
+			lock:      &lockConfig{Enabled: true, Mode: "COMPLIANCE", Days: 7},
+			requested: "",
+			want:      record.ModeCompliance,
+			wantFor:   7 * 24 * time.Hour,
 		},
 		{
 			// A bucket that reports the lock switch as off is mutable, same as one
@@ -159,6 +199,11 @@ func TestImmutabilityReportsWhatTheBucketSays(t *testing.T) {
 			}
 			if im.RetainFor != tc.wantFor {
 				t.Errorf("retain_for = %v, want %v", im.RetainFor, tc.wantFor)
+			}
+			for _, want := range tc.wantDetail {
+				if !strings.Contains(im.Detail, want) {
+					t.Errorf("detail does not mention %q:\n  %s", want, im.Detail)
+				}
 			}
 		})
 	}

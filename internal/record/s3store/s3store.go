@@ -468,38 +468,56 @@ func (s *Store) Immutability(ctx context.Context) (record.Immutability, error) {
 		return s.mutable("object lock is enabled but neither the bucket nor this " +
 			"gateway asks for a retention mode, so nothing is locked"), nil
 
-	case bucketMode == "":
-		return record.Immutability{
-			Mode: s.requested, Kind: kind, RetainFor: s.cfg.RetainFor,
-			Detail: fmt.Sprintf("object lock is enabled on %s with no default "+
-				"retention rule, so each recording and manifest is written with "+
-				"%s retention for %s; objects written by anything other than this "+
-				"gateway are not covered", s.cfg.Bucket, s.requested,
-				s.cfg.RetainFor.Round(time.Hour)),
-		}, nil
-
-	case s.requested == "" || weakerOf(bucketMode, s.requested) == bucketMode:
-		// The bucket's default rule is the weaker of the two claims, so it is the
-		// one to report. Our own PUTs would put the object in the stronger mode,
-		// but a guarantee that depends on every writer remembering a header is not
-		// the guarantee the bucket makes — and an operator who wanted the stronger
-		// one should set it as the bucket's default, where it also covers whatever
-		// writes to this bucket next.
+	case s.requested == "":
+		// Nothing configured here, so putOptions sends no mode and the bucket's own
+		// default is what every object gets, ours included.
 		return record.Immutability{
 			Mode: bucketMode, Kind: kind, RetainFor: bucketFor,
 			Detail: fmt.Sprintf("%s has object lock enabled with a default "+
-				"retention of %s for %s", s.cfg.Bucket, bucketMode,
-				bucketFor.Round(time.Hour)),
+				"retention of %s for %s, and this gateway asks for no mode of its "+
+				"own", s.cfg.Bucket, bucketMode, bucketFor.Round(time.Hour)),
 		}, nil
 
 	default:
+		// Every PUT carries its own mode and retain-until date, and S3 honours a
+		// per-object mode over the bucket default. So this is what a recording and
+		// its manifest actually get — and it is the honest answer even when the
+		// bucket's default rule is weaker, because reporting the default would
+		// understate the lock on the very object whose manifest records this.
+		//
+		// An earlier version reported the weaker of the two and called it caution.
+		// It was not: it wrote "governance" into the manifest of an object S3 had
+		// locked in compliance mode, and this package's standard is accuracy, not
+		// pessimism. ModeUnknown is treated as mutable because nobody *knows*,
+		// which is a different thing from understating what was measured.
+		//
+		// The bucket default still matters and it answers a different question —
+		// what covers a write that did not come from this gateway. A gap in what
+		// *else* is covered is not a weaker lock on the object in hand, so it goes
+		// in the detail, where the person reading a manifest years later can see
+		// both facts instead of one number that blurs them.
 		return record.Immutability{
 			Mode: s.requested, Kind: kind, RetainFor: s.cfg.RetainFor,
-			Detail: fmt.Sprintf("%s defaults to %s retention; each recording and "+
-				"manifest is written with %s retention for %s", s.cfg.Bucket,
-				bucketMode, s.requested, s.cfg.RetainFor.Round(time.Hour)),
+			Detail: fmt.Sprintf("each recording and manifest is written with %s "+
+				"retention for %s; %s", s.requested,
+				s.cfg.RetainFor.Round(time.Hour),
+				elsewhere(s.cfg.Bucket, bucketMode, bucketFor)),
 		}, nil
 	}
+}
+
+// elsewhere describes what the bucket's own default rule covers, which is not the
+// same question as what this gateway's PUTs get: it is what happens to a recording
+// written by something that is not this gateway — a migration script, an older
+// build, a second deployment pointed at the same bucket.
+func elsewhere(bucket string, bucketMode record.Mode, bucketFor time.Duration) string {
+	if bucketMode == "" {
+		return fmt.Sprintf("%s has no default retention rule, so an object written "+
+			"by anything other than this gateway is not locked at all", bucket)
+	}
+	return fmt.Sprintf("%s defaults to %s retention for %s, which is what an object "+
+		"written by anything other than this gateway gets", bucket, bucketMode,
+		bucketFor.Round(time.Hour))
 }
 
 // mutable is the honest answer for a bucket that cannot lock anything, and it says
@@ -528,15 +546,6 @@ func modeOf(m *minio.RetentionMode) record.Mode {
 		return record.ModeGovernance
 	}
 	return ""
-}
-
-// weakerOf orders the two lock modes by what they survive: governance is what a
-// sufficiently privileged user can lift, compliance is what nobody can.
-func weakerOf(a, b record.Mode) record.Mode {
-	if a == record.ModeGovernance || b == record.ModeGovernance {
-		return record.ModeGovernance
-	}
-	return a
 }
 
 // validityAsDuration converts a bucket's default retention into a duration. S3
