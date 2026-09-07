@@ -814,6 +814,77 @@ test("a deep link to a live session you do not own reports why, not that it does
   }
 });
 
+// Task 6's own regression: the product owner clicked Replay on a session and got a
+// full-page failure screen naming a refusal the row could have absorbed itself — the
+// console offered the action and only refused on click, by replacing the entire page.
+// `visitor@example.com` is seeded with a `shell` grant on treadmill-* and nothing else, so
+// replaying somebody else's closed, recorded session on that device is refused for real —
+// the same "no permission grants replay" the plugin's authoriser actually returns, not one
+// this test fabricates. The fix renders that refusal on the row that made the offer: the
+// device page stays exactly where it was, and neither the player nor the full-page
+// failure screen ever mounts.
+test("a refused replay renders on the row, not as a full page", async ({ page, browser }) => {
+  await signIn(page);
+  const row = await openRow(page, "treadmill-4821");
+  await row.getByTestId("reason").fill("ticket AV-9750");
+  await row.getByTestId("open").click();
+  await expect(page.locator(".oarlock-term .xterm")).toBeVisible({ timeout: 30_000 });
+
+  const sessionID = (await page.getByTestId("terminal").locator(".mono").first().textContent())!;
+  expect(sessionID).toMatch(/^sess_/);
+
+  // Closed and recorded, so the row visitor clicks below is unambiguously a replay
+  // attempt rather than an attach/observe one.
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type("exit");
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Leave" }).click();
+  await waitFor(async () => {
+    const res = await fetch(`http://127.0.0.1:${dep!.http}/api/v1/sessions/${sessionID}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { live: boolean; recording_state: string };
+    return !body.live && body.recording_state === "recorded";
+  }, "the session to close and its recording to finalise");
+
+  // A context of its own: visitor@example.com, not the admin who opened the session above.
+  // `listSessions` is unscoped by identity, so visitor's own device page shows this row —
+  // the offer is real, and so is the refusal behind it.
+  const visitorContext = await browser.newContext();
+  try {
+    const visitorPage = await visitorContext.newPage();
+    await signIn(visitorPage, visitorToken);
+    await visitorPage.goto(`http://127.0.0.1:${dep!.http}/ui/d/treadmill-4821`);
+
+    const sessionRow = visitorPage.locator(`[data-session="${sessionID}"]`);
+    await expect(sessionRow).toBeVisible({ timeout: 30_000 });
+    await sessionRow.click();
+
+    const refusal = visitorPage.getByTestId("session-refused");
+    await expect(refusal).toBeVisible({ timeout: 15_000 });
+    await expect(refusal).toContainText("You don’t have access to do that here.");
+    await expect(refusal).toContainText("no permission grants replay");
+    await expect(refusal).toContainText("treadmill-4821");
+    await expect(refusal).toContainText("visitor@example.com");
+
+    // In place: the row's own page, not a full-page failure and not the player. (The
+    // device page's own default-window effect may have landed a `?since=` on the URL by
+    // now, same as it does on every other visit — this only asserts the path stayed put.)
+    await expect(visitorPage).toHaveURL(/\/ui\/d\/treadmill-4821(\?|$)/);
+    await expect(visitorPage.getByTestId("device-page")).toBeVisible();
+    await expect(visitorPage.getByTestId("failure")).toHaveCount(0);
+    await expect(visitorPage.getByTestId("replay")).toHaveCount(0);
+
+    // The row itself is still exactly what it was — clickable again, not disabled. The
+    // console does not get to decide from the client side that this row is unusable;
+    // only the gateway's refusal, rendered here, says so.
+    await expect(sessionRow.getByRole("button", { name: `Open session ${sessionID}` })).toBeEnabled();
+  } finally {
+    await visitorContext.close();
+  }
+});
+
 test("an administrator can edit, disable, and re-enable a device", async ({ page }) => {
   await signIn(page);
 

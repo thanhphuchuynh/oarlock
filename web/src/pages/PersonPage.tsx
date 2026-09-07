@@ -10,7 +10,7 @@
 // callers.
 
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, type Client } from "../api";
+import { ApiError, type Client, type Session } from "../api";
 import type { Facets, Route } from "../router/routes";
 import { Grants, type GrantsState } from "../components/Grants";
 import { Timeline, type TimelineState } from "../components/Timeline";
@@ -34,11 +34,13 @@ export function PersonPage({
   principal,
   facets,
   navigate,
+  onOpenSession,
 }: {
   client: Client;
   principal: string;
   facets: Facets;
   navigate: Navigate;
+  onOpenSession: (session: Session) => Promise<void>;
 }) {
   // Default to the last 30 days when no `since` facet is present, and land the default in
   // the URL rather than leaving it in state. A default that lives only here produces a
@@ -128,7 +130,7 @@ export function PersonPage({
           <Timeline
             state={sessions}
             onRetry={() => void loadSessions()}
-            navigate={navigate}
+            onOpenSession={onOpenSession}
             testId="person-sessions"
             variant="person"
           />

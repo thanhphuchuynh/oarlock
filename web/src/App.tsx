@@ -46,14 +46,15 @@ const pages: { id: NavPage; label: string; blurb: string }[] = [
   { id: "sql", label: "SQL Explorer", blurb: "Read-only access to operational SQLite data." },
 ];
 
-// What a click on Attach, Watch, Replay or "open a shell" already produced, waiting to be
-// picked up the one time its route is reached. `/s/{id}` always loads its own data (see
-// `SessionRoute` below) — that is what lets a pasted link work cold — but a ticket already
-// in hand needs no second round trip, and `renewAttach` is refused to anyone but the
-// session's own operator (internal/apisrv/apisrv.go's renewAttach: "Only the operator who
-// opened it"), which is exactly wrong for a Watch ticket minted for somebody else's
-// session. So the click handlers below keep minting through the endpoint that already
-// grants the right thing, and hand the result to the route rather than re-deriving it.
+// What a click on a timeline row (`openSessionRow`, below) or "open a shell" (`openSession`)
+// already produced, waiting to be picked up the one time its route is reached. `/s/{id}`
+// always loads its own data (see `SessionRoute` below) — that is what lets a pasted link
+// work cold — but a ticket already in hand needs no second round trip, and `renewAttach`
+// is refused to anyone but the session's own operator (internal/apisrv/apisrv.go's
+// renewAttach: "Only the operator who opened it"), which is exactly wrong for a ticket
+// minted to watch somebody else's session. So the click handlers keep minting through the
+// endpoint that already grants the right thing, and hand the result to the route rather
+// than re-deriving it.
 type SessionBypass =
   | { sessionID: string; kind: "live"; session: Session; attach: Attach; readOnly: boolean; watching?: string }
   | { sessionID: string; kind: "replay"; session: Session; cast: string; verdict?: Verdict };
@@ -240,44 +241,54 @@ export function App() {
     }
   }
 
-  async function attach(s: Session) {
-    try {
-      const a = await client.current.renewAttach(s.id);
-      setBypass({ sessionID: s.id, kind: "live", session: s, attach: a, readOnly: false });
-      navigate({ kind: "session", session: s.id });
-    } catch (err) {
-      fail(err);
+  // Opening a session from its own row on the Person or Device page's timeline: attach
+  // (falling back to observe exactly the way a cold link to somebody else's live session
+  // already does — see `SessionRoute`'s own cold load below), or fetch the recording to
+  // replay. Mints whatever ticket that takes and hands it to `/s/{id}` as a bypass, so the
+  // route's own cold-load fetch is not repeated the moment it mounts.
+  //
+  // Deliberately does not call `fail()` on an error, unlike every other handler in this
+  // file: disabling a device or killing a session has nowhere else to go when refused, but
+  // this one is asked for by a click on one specific row. `Timeline`'s `SessionRow` awaits
+  // this promise and renders whatever it rejects with in place — on the row that made the
+  // offer — rather than this file replacing the whole page for a refusal that belongs to
+  // one line of a list.
+  async function openSessionRow(session: Session): Promise<void> {
+    if (session.live) {
+      try {
+        const a = await client.current.renewAttach(session.id);
+        setBypass({ sessionID: session.id, kind: "live", session, attach: a, readOnly: false });
+      } catch (err) {
+        // A `not_found` here, after the row itself already proved the session exists,
+        // can only mean this principal is not its operator — the same fact the cold
+        // load below falls back on `observe` for.
+        if (!(err instanceof ApiError) || err.code !== "not_found") throw err;
+        const a = await client.current.observe(session.id);
+        setBypass({
+          sessionID: session.id,
+          kind: "live",
+          session,
+          attach: a,
+          readOnly: true,
+          watching: session.principal,
+        });
+      }
+      navigate({ kind: "session", session: session.id });
+      return;
     }
-  }
-
-  async function observe(s: Session) {
-    try {
-      const a = await client.current.observe(s.id);
-      setBypass({
-        sessionID: s.id,
-        kind: "live",
-        session: s,
-        attach: a,
-        readOnly: true,
-        watching: s.principal,
-      });
-      navigate({ kind: "session", session: s.id });
-    } catch (err) {
-      fail(err);
-    }
-  }
-
-  async function replay(s: Session) {
-    try {
-      const { cast, verdict } = await fetchRecording(s.id);
+    if (session.recording_state === "recorded") {
       // The verdict comes from the gateway, which is the only place that has the manifest
       // and a key the deployment trusts. If it did not send one, the player renders
       // "unverified" — which is the honest answer, and not the same as fine.
-      setBypass({ sessionID: s.id, kind: "replay", session: s, cast, ...(verdict ? { verdict } : {}) });
-      navigate({ kind: "session", session: s.id });
-    } catch (err) {
-      fail(err);
+      const { cast, verdict } = await fetchRecording(session.id);
+      setBypass({ sessionID: session.id, kind: "replay", session, cast, ...(verdict ? { verdict } : {}) });
+      navigate({ kind: "session", session: session.id });
+      return;
     }
+    // Nothing to check first: a closed, unrecorded session has no permission question to
+    // ask, only the fact that there is nothing to show — which `SessionPage`'s own cold
+    // load already renders honestly as its "no recording" failure.
+    navigate({ kind: "session", session: session.id });
   }
 
   // The one place that reads a recording — the click that already has the `Session` row,
@@ -548,6 +559,7 @@ export function App() {
                   facets={route.facets}
                   navigate={navigate}
                   onOpen={(id, why) => void openSession(id, why)}
+                  onOpenSession={openSessionRow}
                   onEdit={(candidate) => setDeviceDialog(candidate)}
                   onToggle={(candidate) => void toggleDevice(candidate)}
                   onDelete={(id) => void deleteDevice(id)}
@@ -562,6 +574,7 @@ export function App() {
                   principal={route.principal}
                   facets={route.facets}
                   navigate={navigate}
+                  onOpenSession={openSessionRow}
                 />
               )}
 

@@ -3,12 +3,21 @@
 // on the Person page, or the device, on the Device page. So the column that varies row to
 // row is whichever one *isn't* already fixed — the other one would just repeat the page's
 // own heading.
+//
+// A row's click is not a plain navigation: opening it attaches, watches or replays the
+// session, and every one of those is a gateway decision the console does not get to make
+// for itself — a `replay` grant an administrator does not hold is exactly as real a
+// refusal as an `admin:permissions` one is on `Grants`. So the click asks first
+// (`onOpenSession`, owned by the caller because that is where the bypass ticket and the
+// router already live) and only leaves this page once the gateway has actually agreed.
+// A refusal renders on the row that made the offer — the way `Grants` names the grant
+// that is missing rather than rendering an empty list — instead of borrowing the
+// full-page failure screen `SessionPage` reserves for a session that cannot be shown at
+// all.
 
-import { get as getCondition } from "@oarlock/terminal/conditions";
+import { useState } from "react";
+import { get as getCondition, type Condition } from "@oarlock/terminal/conditions";
 import { ApiError, type Session } from "../api";
-import type { Route } from "../router/routes";
-
-type Navigate = (to: Route, opts?: { replace?: boolean }) => void;
 
 export type TimelineState =
   | { kind: "loading" }
@@ -18,14 +27,17 @@ export type TimelineState =
 export function Timeline({
   state,
   onRetry,
-  navigate,
+  onOpenSession,
   testId,
   variant,
   onKill,
 }: {
   state: TimelineState;
   onRetry: () => void;
-  navigate: Navigate;
+  /** Attaches, watches or replays this session — minting whatever ticket that takes and
+   *  navigating there — or rejects with the gateway's own refusal, which the row that
+   *  called it renders in place. */
+  onOpenSession: (session: Session) => Promise<void>;
   testId: string;
   /** Which column shows the thing that varies. */
   variant: "person" | "device";
@@ -85,7 +97,7 @@ export function Timeline({
             <SessionRow
               key={session.id}
               session={session}
-              navigate={navigate}
+              onOpenSession={onOpenSession}
               variant={variant}
               {...(onKill ? { onKill } : {})}
             />
@@ -98,79 +110,121 @@ export function Timeline({
 
 function SessionRow({
   session,
-  navigate,
+  onOpenSession,
   variant,
   onKill,
 }: {
   session: Session;
-  navigate: Navigate;
+  onOpenSession: (session: Session) => Promise<void>;
   variant: "person" | "device";
   onKill?: (session: Session) => void;
 }) {
-  const open = () => navigate({ kind: "session", session: session.id });
+  // Local to this row: two rows opening different sessions at once is ordinary — the
+  // fleet is shared — and neither the request in flight nor a refusal about it says
+  // anything about a neighbouring row.
+  const [pending, setPending] = useState(false);
+  const [refused, setRefused] = useState<{ condition: Condition; detail: string } | null>(null);
+
+  const open = () => {
+    if (pending) return;
+    setRefused(null);
+    setPending(true);
+    void onOpenSession(session)
+      .catch((err: unknown) => {
+        const e = err instanceof ApiError ? err : null;
+        setRefused({
+          condition: e?.condition ?? getCondition("internal"),
+          detail: e?.detail ?? String(err),
+        });
+      })
+      .finally(() => setPending(false));
+    // No `navigate()` here on success: `onOpenSession` already left for `/s/{id}` once
+    // the gateway agreed, which is why this row usually unmounts before the promise
+    // above even settles.
+  };
+
   const recorded = session.recording_state === "recorded";
   return (
-    <tr
-      className="cursor-pointer border-t border-border align-top hover:bg-bg-raised/60"
-      data-session={session.id}
-      onClick={open}
-    >
-      <td className="px-3 py-2">
-        <span className="mono block whitespace-nowrap text-fg-muted" title={session.created_at}>
-          {relative(session.created_at)}
-        </span>
-      </td>
-      <td className="px-3 py-2">
-        <span className="mono block whitespace-nowrap">
-          {variant === "person" ? session.device_id : session.principal}
-        </span>
-      </td>
-      <td className="px-3 py-2">
-        <span className="mono">{session.profile}</span>
-        {/* The reason the operator gave, wrapped rather than truncated to three
-            characters — it is the field that says why somebody was on this machine, and
-            the fleet list's row used to be the only place that said so. */}
-        <span className="mt-0.5 block max-w-[16rem] whitespace-normal text-sm text-fg-faint">
-          {session.reason || "opened over ssh"}
-        </span>
-      </td>
-      <td className="px-3 py-2">
-        <Outcome session={session} />
-      </td>
-      <td className="px-3 py-2">
-        <Badge tone={recorded ? "text-state-recorded" : "text-state-unrecorded"}>
-          {recorded ? "Recorded" : "Not recorded"}
-        </Badge>
-      </td>
-      <td className="px-3 py-2">
-        <span className="flex items-center justify-end gap-1.5">
-          {onKill && session.live && (
+    <>
+      <tr
+        className="cursor-pointer border-t border-border align-top hover:bg-bg-raised/60"
+        data-session={session.id}
+        aria-busy={pending}
+        onClick={open}
+      >
+        <td className="px-3 py-2">
+          <span className="mono block whitespace-nowrap text-fg-muted" title={session.created_at}>
+            {relative(session.created_at)}
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          <span className="mono block whitespace-nowrap">
+            {variant === "person" ? session.device_id : session.principal}
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          <span className="mono">{session.profile}</span>
+          {/* The reason the operator gave, wrapped rather than truncated to three
+              characters — it is the field that says why somebody was on this machine, and
+              the fleet list's row used to be the only place that said so. */}
+          <span className="mt-0.5 block max-w-[16rem] whitespace-normal text-sm text-fg-faint">
+            {session.reason || "opened over ssh"}
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          <Outcome session={session} />
+        </td>
+        <td className="px-3 py-2">
+          <Badge tone={recorded ? "text-state-recorded" : "text-state-unrecorded"}>
+            {recorded ? "Recorded" : "Not recorded"}
+          </Badge>
+        </td>
+        <td className="px-3 py-2">
+          <span className="flex items-center justify-end gap-1.5">
+            {onKill && session.live && (
+              <button
+                type="button"
+                className="btn btn-danger"
+                aria-label={`End session ${session.id}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onKill(session);
+                }}
+              >
+                End
+              </button>
+            )}
             <button
               type="button"
-              className="btn btn-danger"
-              aria-label={`End session ${session.id}`}
+              className="icon-btn"
+              aria-label={`Open session ${session.id}`}
+              disabled={pending}
               onClick={(event) => {
                 event.stopPropagation();
-                onKill(session);
+                open();
               }}
             >
-              End
+              <span aria-hidden="true">{pending ? "…" : "›"}</span>
             </button>
-          )}
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={`Open session ${session.id}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              open();
-            }}
-          >
-            <span aria-hidden="true">›</span>
-          </button>
-        </span>
-      </td>
-    </tr>
+          </span>
+        </td>
+      </tr>
+      {/* The refusal, in place — beside the row that made the offer, naming the action
+          the gateway said was missing, the same way `Grants` names `admin:permissions`
+          rather than rendering an empty list. Never a full-page failure: that screen is
+          for a session that cannot be shown at all, not for one this row was not allowed
+          to open. */}
+      {refused && (
+        <tr className="border-t border-border/60 bg-bg-raised/60">
+          <td colSpan={6} className="px-3 py-2">
+            <p className="text-sm text-state-refused" role="alert" data-testid="session-refused">
+              {refused.condition.headline}{" "}
+              <span className="mono text-fg-muted">{refused.detail}</span>
+            </p>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

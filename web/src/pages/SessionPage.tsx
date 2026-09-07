@@ -12,10 +12,10 @@
 // `renewTicket` exist only because <Terminal> needs them mid-session, before any close
 // button is pressed.
 
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Terminal } from "@oarlock/react";
 import { get as getCondition, type Condition } from "@oarlock/terminal/conditions";
-import type { Verdict } from "@oarlock/terminal";
+import { describeVerdict, type Verdict } from "@oarlock/terminal";
 import type { Attach, Session } from "../api";
 
 // The replay player is loaded on demand: it carries its own terminal emulator, and most
@@ -82,13 +82,14 @@ type TerminalBodyProps = SessionPageProps & { session: Session; attach: Attach }
 
 function TerminalBody(props: TerminalBodyProps) {
   return (
-    <section className="flex flex-col gap-3" data-testid="terminal">
+    <section className="flex flex-col gap-4" data-testid="terminal">
       <div className="flex items-center justify-between gap-3">
         <span className="mono text-sm text-fg-muted">{props.session.id}</span>
         <button className="btn" onClick={props.onLeave}>
           Leave
         </button>
       </div>
+      <SessionMeta session={props.session} {...(props.watching ? { watching: props.watching } : {})} />
       <Terminal
         url={sameOriginSocketURL(props.attach.url)}
         ticket={props.attach.ticket}
@@ -99,6 +100,7 @@ function TerminalBody(props: TerminalBodyProps) {
         onClosed={props.onSessionEnded}
         style={{ height: "70vh" }}
       />
+      <LiveEvidence session={props.session} />
     </section>
   );
 }
@@ -107,13 +109,14 @@ type ReplayBodyProps = SessionPageProps & { session: Session; cast: string };
 
 function ReplayBody(props: ReplayBodyProps) {
   return (
-    <section className="flex flex-col gap-3" data-testid="replay">
+    <section className="flex flex-col gap-4" data-testid="replay">
       <div className="flex items-center justify-between gap-3">
         <span className="mono text-sm text-fg-muted">{props.session.id}</span>
         <button className="btn" onClick={props.onClose}>
           Back
         </button>
       </div>
+      <SessionMeta session={props.session} />
       <Suspense fallback={<p className="text-fg-muted">Loading the player…</p>}>
         <Player
           cast={props.cast}
@@ -122,8 +125,166 @@ function ReplayBody(props: ReplayBodyProps) {
           style={{ height: "70vh" }}
         />
       </Suspense>
+      <EvidencePanel verdict={props.verdict} />
     </section>
   );
+}
+
+// The header the mockup asks for: who, what device, when, and — the fact `Grants`
+// already treats this way — the answer to a yes/no question stated plainly rather than
+// left to be inferred from a colour. Shared by both bodies so a live session and its own
+// eventual replay describe themselves the same way.
+function SessionMeta({ session, watching }: { session: Session; watching?: string }) {
+  const recorded = session.recording_state === "recorded";
+  const closeCondition = session.close_reason ? getCondition(session.close_reason) : undefined;
+  return (
+    <dl className="grid grid-cols-2 gap-px overflow-hidden border border-border bg-border text-sm sm:grid-cols-3 lg:grid-cols-6">
+      <MetaCell label="Person">
+        <span className="mono">{session.principal}</span>
+      </MetaCell>
+      <MetaCell label="Device">
+        <span className="mono">{session.device_id}</span>
+      </MetaCell>
+      <MetaCell label="Profile">
+        <span className="mono">{session.profile}</span>
+      </MetaCell>
+      <MetaCell label="Opened">
+        <span className="mono">{relative(session.created_at)}</span>
+      </MetaCell>
+      <MetaCell label={session.live ? "Status" : "Closed"}>
+        {session.live ? (
+          watching ? (
+            <>
+              Observing <span className="mono">{watching}</span>
+            </>
+          ) : (
+            "Attached"
+          )
+        ) : (
+          closeCondition?.headline ?? (session.close_reason || "—")
+        )}
+      </MetaCell>
+      <MetaCell label="Recording">
+        <span className={recorded ? "text-state-recorded" : "text-state-unrecorded"}>
+          {recorded ? (session.live ? "Recording" : "Recorded") : "Not recorded"}
+        </span>
+      </MetaCell>
+    </dl>
+  );
+}
+
+function MetaCell({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="bg-bg-raised px-3 py-2">
+      <dt className="label mb-0.5">{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+// The evidence panel the mockup places after the body, for a session still being
+// recorded: there is nothing to verify yet, because the chain is sealed and signed only
+// once the session ends. Saying so plainly is the disclosure's own point extended one
+// step further — an operator should never have to guess whether "no verdict yet" means
+// "nothing to worry about" or "the page forgot to ask".
+function LiveEvidence({ session }: { session: Session }) {
+  const recorded = session.recording_state === "recorded";
+  return (
+    <section className="flex items-start gap-3 rounded-md border border-border bg-bg-raised p-4" data-testid="evidence">
+      <span aria-hidden="true" className="mt-0.5 text-lg text-fg-faint">
+        ◷
+      </span>
+      <div>
+        <h3 className="font-semibold">
+          {recorded ? "Recording in progress" : "This session is not being recorded"}
+        </h3>
+        <p className="mt-0.5 text-sm text-fg-muted">
+          {recorded
+            ? "The chain is sealed and signed when the session ends. Nothing to verify yet."
+            : "No recording exists for this session, so there will be nothing to verify once it ends either."}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+// The evidence panel for a closed session: the integrity verdict, given the panel the
+// mockup shows instead of the strip that used to sit only above the player.
+//
+// The copy comes from `describeVerdict` — the same function `<Player>` calls internally
+// to draw the banner it always renders above itself — so this panel can never tell a
+// reader something different about the same recording than the player already did. It is
+// not a second opinion; it is the same one, given room of its own the way the mockup
+// draws it. What it must never do is decide anything: a status this build does not
+// recognise still falls through to the same "could not be verified" reading the shared
+// function gives it.
+function EvidencePanel({ verdict }: { verdict: Verdict | undefined }) {
+  const copy = verdict
+    ? describeVerdict(verdict)
+    : {
+        tone: "broken" as const,
+        headline: "This recording could not be verified.",
+        body: "No verification result was supplied for this recording.",
+      };
+  const toneClass =
+    copy.tone === "trusted"
+      ? "border-state-recorded"
+      : copy.tone === "partial"
+        ? "border-state-unrecorded"
+        : "border-state-refused";
+  const iconClass =
+    copy.tone === "trusted"
+      ? "text-state-recorded"
+      : copy.tone === "partial"
+        ? "text-state-unrecorded"
+        : "text-state-refused";
+  const icon = copy.tone === "trusted" ? "✓" : copy.tone === "partial" ? "◐" : "!";
+
+  return (
+    <section
+      className={`flex items-start gap-3 rounded-md border bg-bg-raised p-4 ${toneClass}`}
+      data-testid="evidence"
+      role={copy.tone === "trusted" ? "status" : "alert"}
+    >
+      <span aria-hidden="true" className={`mt-0.5 text-lg ${iconClass}`}>
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <h3 className="font-semibold">{copy.headline}</h3>
+        <p className="mt-0.5 text-sm text-fg-muted">{copy.body}</p>
+        {verdict && (
+          <dl className="mono mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-fg-faint">
+            <dt className="not-mono">Verdict</dt>
+            <dd>{String(verdict.status)}</dd>
+            {verdict.events_expected !== undefined && (
+              <>
+                <dt className="not-mono">Events</dt>
+                <dd>
+                  {verdict.events_found ?? 0} of {verdict.events_expected}
+                </dd>
+              </>
+            )}
+            {verdict.detail && (
+              <>
+                <dt className="not-mono">Detail</dt>
+                <dd>{verdict.detail}</dd>
+              </>
+            )}
+          </dl>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function relative(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
 }
 
 type FailedBodyProps = {

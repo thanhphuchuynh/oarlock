@@ -36,6 +36,7 @@ export function DevicePage({
   facets,
   navigate,
   onOpen,
+  onOpenSession,
   onEdit,
   onToggle,
   onDelete,
@@ -50,6 +51,10 @@ export function DevicePage({
   facets: Facets;
   navigate: Navigate;
   onOpen: (device: string, reason: string) => void;
+  /** Attaches, watches or replays a row from the timeline below — see `Timeline`'s own
+   *  prop of the same name for why this is a promise the row awaits rather than a plain
+   *  navigation. */
+  onOpenSession: (session: Session) => Promise<void>;
   /** The device form dialog, opened for this device rather than for a new one. */
   onEdit: (device: Device) => void;
   onToggle: (device: Device) => void;
@@ -199,7 +204,7 @@ export function DevicePage({
           <Timeline
             state={sessions}
             onRetry={() => void loadSessions()}
-            navigate={navigate}
+            onOpenSession={onOpenSession}
             testId="device-sessions"
             variant="device"
             onKill={onKill}
