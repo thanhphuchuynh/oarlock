@@ -5,21 +5,28 @@ is not an inconvenience, so this policy is deliberate about what we promise and 
 
 ## Reporting a vulnerability
 
-**Use GitHub's private vulnerability reporting** on this repository — the *Security* tab,
-then *Report a vulnerability*. It gives us a private thread, keeps the report out of public
-issues, and produces an advisory we can publish with a fix.
+**Email <nguoigiaumat100@gmail.com>.** That is the channel, and until there is a
+public repository it is the only one.
 
-**If you cannot use GitHub**, email <nguoigiaumat100@gmail.com>. That reaches one
-person rather than a rota, so GitHub is the better route if you have the choice — but a
-report by email is worth far more than a report you did not send.
+It reaches one person rather than a rota, which is worth knowing before you wait on a reply:
+the acknowledgement target below assumes that person is not on leave. **If you have heard
+nothing in five working days, send it again** rather than conclude it was received and
+ignored — a single-person channel fails silently, and this is the failure it has.
 
-Please **do not** open a public issue, a pull request, or a discussion for a security report.
-A public report on a project like this one hands a working technique to anyone reading, before
-anybody running it can patch.
+Please **do not** make a security report public before there has been a chance to fix it —
+not in an issue, a pull request, a discussion, a blog post, or a talk. On a project like this
+one, a public report hands a working technique to everyone reading it before anybody running
+it can patch.
 
 Include, as far as you have it: what you did, what happened, what you expected, the version
 or commit, and whether you believe it is remotely exploitable. A rough report is worth far
 more than no report — do not sit on something because it is not written up.
+
+**On GitHub private vulnerability reporting:** it is the better mechanism — a private thread,
+and an advisory that publishes with the fix — and it is not offered here because there is no
+public repository to offer it on. It will be named as the preferred route when there is one.
+Pointing a reporter at a *Security* tab that does not exist is how a report gets abandoned
+halfway, so this policy would rather say the plain thing and be usable.
 
 ## What we will do
 
@@ -63,7 +70,7 @@ mitigation rather than let the deadline pass quietly.
 We will not pursue or support legal action against research that is a good-faith effort to
 follow this policy: testing against your own deployment, avoiding privacy violations and
 service degradation, and giving us a reasonable window before disclosure. If you are unsure
-whether something is in bounds, ask first through the private channel.
+whether something is in bounds, ask by email first.
 
 Do not test against somebody else's gateway or somebody else's devices. On this project that
 means real hardware in real homes and gyms.
