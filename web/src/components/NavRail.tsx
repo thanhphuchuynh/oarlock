@@ -31,10 +31,8 @@ export function NavRail({
         <div className="border-b border-border-strong px-2 pb-3">
           <div className="flex items-center gap-2.5">
             <span className="grid size-8 shrink-0 place-items-center border border-border-strong text-[11px] font-semibold leading-none tracking-[0.08em]">
-              A<br />O
+              O<br />L
             </span>
-            {/* Two lines, the way a title block stacks a name: one line of letterspaced
-                caps does not fit a 13.5rem rail beside the monogram. */}
             <span className="text-[13px] font-semibold uppercase leading-tight tracking-[0.1em]">
               Oarlock
             </span>
@@ -64,7 +62,7 @@ export function NavRail({
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5">
             <span className="grid size-8 shrink-0 place-items-center border border-border-strong text-[11px] font-semibold leading-none tracking-[0.08em]">
-              A<br />O
+              O<br />L
             </span>
             <span className="text-[13px] font-semibold uppercase tracking-[0.14em]">
               Oarlock

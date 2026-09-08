@@ -177,7 +177,7 @@ function chrome({ title, sheet, docNo, nav, body, depthNote, self }) {
   <body>
     <main class="sheet">
       <header class="head">
-        <div class="monogram" aria-hidden="true">A<br />O</div>
+        <div class="monogram" aria-hidden="true">O<br />L</div>
         <div class="head-mid">
           <h1 class="wordmark">Oarlock<span>gateway-terminated ssh</span></h1>
           <nav class="sheet-nav" aria-label="Sheet">${nav}</nav>
