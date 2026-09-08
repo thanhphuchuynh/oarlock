@@ -262,6 +262,21 @@ why it works on Android and other places where you cannot install and supervise 
 
 Existing tools worth choosing over Oarlock:
 
+- **`ssh -R` and a bastion** — if your targets can run `sshd`, and the alternative most
+  readers arrive already using. It is also the only entry here that beats Oarlock on a
+  security property rather than on maturity: the tunnel is end-to-end encrypted, so a
+  compromised bastion cannot read a keystroke, where
+  [threat model § 4](docs/threat-model.md#4-gateway-compromise-is-total) says a compromised
+  gateway reads every one of them and can inject its own. `scp`, `sftp`, `ssh -L` and agent
+  forwarding arrive free, and the device authenticates the operator itself rather than
+  trusting a gateway's word for who is at the other end. What it costs is the recording —
+  a bastion sees ciphertext, so there is nothing at that point to record — plus a host key
+  and a supervised `ssh -R` on every device, a bastion port per device to allocate and
+  reclaim, and revoking an operator meaning an `authorized_keys` edit across the fleet
+  while established sessions survive it. Choose Oarlock over this when the device cannot
+  host a listener at all, or when you need the recording; and note that
+  [mode A](ARCHITECTURE.md#42-mode-a--passthrough-opt-in-per-device) is this shape, gated
+  so an unrecorded session cannot happen by accident.
 - **[Teleport](https://goteleport.com)** — if your targets are Linux hosts with system
   users. Far more mature, and its proxy does exactly what Oarlock's gateway does. Note the
   licensing: the OSS core moved from Apache 2.0 to **AGPLv3** in December 2023, and
