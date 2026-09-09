@@ -53,6 +53,44 @@ RELEASE_AGENT_ONLY ?= netbsd/amd64
 # when it misbehaves at 03:00. Both variables already existed and nothing had ever set them.
 RELEASE_LD_SERVER := -s -w -X github.com/oarlock/oarlock/cmd/oarlockd/app.Version=$(RELEASE_VERSION)
 RELEASE_LD_AGENT := -s -w -X main.version=$(RELEASE_VERSION)
+
+# ── supply chain ────────────────────────────────────────────────────────────────
+#
+# There are two things a checksum file cannot do: say what is inside a binary, and say who
+# built it. SHA256SUMS proves a download arrived intact and nothing more — anyone who can
+# replace the binaries can replace the checksums sitting beside them. So: an SBOM per
+# binary, and one signature over SHA256SUMS, which transitively covers every artefact
+# listed in it, SBOMs included.
+#
+# Per *binary*, not per release, because the binaries genuinely differ — and along more than
+# one axis. The 15 `oarlockd` outputs have five distinct dependency sets: 27 modules on
+# linux/riscv64, 31 on darwin, freebsd, openbsd and windows, and three shapes in between.
+# Off linux the sqlite driver reaches for go-isatty and go-strftime; on riscv64 it drops
+# cpuid and bigfft. `oarlock-agent` links 4 modules everywhere except linux/s390x, which
+# links 5 — it is the one target that pulls in golang.org/x/sys.
+#
+# So a single release-wide SBOM would be wrong for 14 of those 15 gateways, and would tell
+# an operator scanning the agent for CVEs that it contains SQLite and MinIO. It does not.
+# An SBOM that overstates a binary is worse than no SBOM: it is a false statement in the
+# one document a scanner will believe without checking.
+#
+# The tool is built once for this machine and then run with GOOS/GOARCH set per target.
+# That is not decoration: `cyclonedx-gomod bin` reads the module list out of the binary
+# itself, but stamps the purl qualifiers from its own environment. Run it unset and every
+# artefact in the matrix is labelled `goos=darwin&goarch=arm64` — the machine that built
+# it, not the machine it runs on.
+SBOM_TOOL_VERSION ?= v1.12.0
+MINISIGN_VERSION ?= v0.3.0
+TOOLS_DIR := $(CURDIR)/.cache/tools
+SBOM_TOOL := $(TOOLS_DIR)/cyclonedx-gomod
+MINISIGN := $(TOOLS_DIR)/minisign
+
+# The release signing key, outside the repository by default — and it has to stay outside.
+# A private key in a working tree is one `git add -A` away from being public forever, and
+# this repository has already had a stray signing key land in its root once. The signing
+# targets check the path rather than trusting .gitignore to catch it.
+RELEASE_SECKEY ?= $(HOME)/.minisign/oarlock.key
+RELEASE_PUBKEY ?= $(HOME)/.minisign/oarlock.pub
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.1.12297006
 MOBILE_BIN := $(CURDIR)/.cache/mobile/bin
@@ -63,7 +101,7 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean release release-list landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean release release-list release-sign release-verify release-keygen landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
@@ -74,6 +112,9 @@ help:
 		'  make check        Run typecheck, UI build, Go tests, and go vet' \
 		'  make release      Build oarlockd and oarlock-agent for every supported machine' \
 		'  make release-list Show that matrix without building it' \
+		'  make release-keygen Generate the release signing key, outside the repo' \
+		'  make release-sign Sign SHA256SUMS with that key' \
+		'  make release-verify Verify the signature and every checksum under it' \
 		'  make test         Run Go tests and frontend tests' \
 		'  make vet          Run go vet ./...' \
 		'  make demo-url     Point demo/oarlock.yaml at the current LAN address' \
@@ -107,7 +148,7 @@ ui:
 # release need the frontend toolchain, which is deliberate: `go build` alone still works on
 # a clean checkout thanks to the .gitkeep in the embed directory, but shipping that to
 # somebody means shipping a gateway whose console is an empty page.
-release: ui
+release: ui $(SBOM_TOOL)
 	@rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	@printf 'oarlock %s\n\n' '$(RELEASE_VERSION)'
 	@set -e; \
@@ -128,15 +169,19 @@ release: ui
 	    out=$(RELEASE_DIR)/$$cmd-$$os-$$label$$ext; \
 	    GOOS=$$os GOARCH=$$arch GOARM=$$goarm CGO_ENABLED=0 GOCACHE=$(GOCACHE) \
 	      $(GO) build -trimpath -ldflags="$$ld" -o $$out ./cmd/$$cmd; \
-	    printf '  %-38s %6s\n' "$${out#$(RELEASE_DIR)/}" "$$(du -h $$out | cut -f1)"; \
+	    GOOS=$$os GOARCH=$$arch $(SBOM_TOOL) bin -json -output-version 1.6 \
+	      -version '$(RELEASE_VERSION)' -output $$out.cdx.json $$out; \
+	    printf '  %-38s %6s  %2s deps\n' "$${out#$(RELEASE_DIR)/}" \
+	      "$$(du -h $$out | cut -f1)" "$$(( $$(grep -c '"purl"' $$out.cdx.json) - 1 ))"; \
 	  done; \
 	done
 	@cd $(RELEASE_DIR) && \
 	  { command -v sha256sum >/dev/null 2>&1 && sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS; }
-	@printf '\n%s binaries in %s, and SHA256SUMS beside them.\n' \
-	  "$$(ls -1 $(RELEASE_DIR) | grep -cv SHA256SUMS)" '$(RELEASE_DIR)'
-	@printf 'Checksums, not signatures: they prove a download is intact, not that it came\n'
-	@printf 'from you. Signing and an SBOM are named as not-built in the threat model.\n'
+	@printf '\n%s binaries in %s, an SBOM beside each, and SHA256SUMS over the lot.\n' \
+	  "$$(ls -1 $(RELEASE_DIR) | grep -cvE 'SHA256SUMS|[.]cdx[.]json$$')" '$(RELEASE_DIR)'
+	@printf '\nUnsigned. SHA256SUMS proves a download is intact, not that it came from you:\n'
+	@printf 'whoever can replace the binaries can replace the checksums beside them. Run\n'
+	@printf '`make release-sign` to sign it — `make release-keygen` first if you have no key.\n'
 
 # The matrix, without spending four minutes to see it. GOARM=7 is explicit because an
 # armv7 binary dies with SIGILL on armv6 and the filename is the only warning a reader gets.
@@ -146,6 +191,88 @@ release-list:
 	@printf 'server   %s  (agent: no Setsid on windows)\n' '$(RELEASE_SERVER_ONLY)'
 	@printf 'agent    %s  (gateway: sqlite driver does not build)\n' '$(RELEASE_AGENT_ONLY)'
 	@printf 'excluded android/amd64  (needs cgo linking; these builds are CGO_ENABLED=0)\n'
+
+# ── the two tools, built once into .cache/tools ─────────────────────────────────
+#
+# Pinned, and built rather than downloaded as a binary: the whole point of this section is
+# provenance, so fetching an unverified executable to produce a provenance document would
+# be a joke at its own expense. `go install pkg@version` verifies against the checksum
+# database, which is a real check that costs nothing.
+$(SBOM_TOOL):
+	@mkdir -p $(TOOLS_DIR)
+	@printf 'building cyclonedx-gomod %s, once\n' '$(SBOM_TOOL_VERSION)'
+	@GOBIN=$(TOOLS_DIR) GOCACHE=$(GOCACHE) $(GO) install \
+	  github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(SBOM_TOOL_VERSION)
+
+$(MINISIGN):
+	@mkdir -p $(TOOLS_DIR)
+	@printf 'building minisign %s, once\n' '$(MINISIGN_VERSION)'
+	@GOBIN=$(TOOLS_DIR) GOCACHE=$(GOCACHE) $(GO) install \
+	  aead.dev/minisign/cmd/minisign@$(MINISIGN_VERSION)
+
+# Ed25519 over SHA256SUMS, in minisign's format, so a downloader verifies with whichever
+# minisign they already have rather than a tool of ours. One signature covers the release:
+# every binary and every SBOM is named in the file being signed.
+#
+# The key is encrypted at rest and this prompts for its password. That is deliberate — a
+# release is a thing a person decides to make, and an unattended signing key is a signing
+# key an intruder also has.
+release-sign: $(MINISIGN)
+	@test -f '$(RELEASE_DIR)/SHA256SUMS' || { \
+	  printf 'No %s/SHA256SUMS — run `make release` first.\n' '$(RELEASE_DIR)' >&2; exit 1; }
+	@case '$(RELEASE_SECKEY)' in \
+	  '$(CURDIR)'|'$(CURDIR)'/*) \
+	    printf 'Refusing: RELEASE_SECKEY is inside the working tree.\n' >&2; \
+	    printf 'A private key here is one `git add -A` from being public forever, and\n' >&2; \
+	    printf 'this repository has had a stray signing key in its root once already.\n' >&2; \
+	    exit 1;; \
+	esac
+	@test -f '$(RELEASE_SECKEY)' || { \
+	  printf 'No signing key at %s.\n' '$(RELEASE_SECKEY)' >&2; \
+	  printf '`make release-keygen` makes one.\n' >&2; exit 1; }
+	$(MINISIGN) -S -s '$(RELEASE_SECKEY)' -m '$(RELEASE_DIR)/SHA256SUMS' \
+	  -c 'oarlock $(RELEASE_VERSION)' \
+	  -t 'oarlock $(RELEASE_VERSION) — checksums for every artefact in this release'
+	@printf '\nSigned: %s/SHA256SUMS.minisig\n' '$(RELEASE_DIR)'
+	@printf 'Ship the .minisig beside SHA256SUMS. The public key belongs somewhere a\n'
+	@printf 'downloader can reach without trusting the download: SECURITY.md, not the\n'
+	@printf 'release directory, which an attacker replacing binaries also controls.\n'
+
+# What a downloader does, run against your own release so it is known to work before
+# somebody else is the first to try it.
+release-verify: $(MINISIGN)
+	@test -f '$(RELEASE_DIR)/SHA256SUMS.minisig' || { \
+	  printf 'Not signed. `make release-sign` signs it.\n' >&2; exit 1; }
+	@test -f '$(RELEASE_PUBKEY)' || { \
+	  printf 'No public key at %s.\n' '$(RELEASE_PUBKEY)' >&2; exit 1; }
+	$(MINISIGN) -V -p '$(RELEASE_PUBKEY)' -m '$(RELEASE_DIR)/SHA256SUMS'
+	@cd $(RELEASE_DIR) && \
+	  { command -v sha256sum >/dev/null 2>&1 && sha256sum -c SHA256SUMS >/dev/null \
+	    || shasum -a 256 -c SHA256SUMS >/dev/null; } && \
+	  printf '%s artefacts match the checksums that signature covers.\n' \
+	    "$$(wc -l < SHA256SUMS | tr -d ' ')"
+
+# Generating a key is a one-time act with a long tail: every signature you ever make is
+# tied to it, so this refuses to overwrite one that exists rather than quietly orphaning
+# every signature already in the world.
+release-keygen: $(MINISIGN)
+	@case '$(RELEASE_SECKEY)' in \
+	  '$(CURDIR)'|'$(CURDIR)'/*) \
+	    printf 'Refusing: RELEASE_SECKEY is inside the working tree.\n' >&2; \
+	    printf 'A private key here is one `git add -A` from being public forever, and\n' >&2; \
+	    printf 'this repository has had a stray signing key in its root once already.\n' >&2; \
+	    exit 1;; \
+	esac
+	@if [ -f '$(RELEASE_SECKEY)' ]; then \
+	  printf 'A key already exists at %s — refusing to overwrite it.\n' '$(RELEASE_SECKEY)' >&2; \
+	  printf 'Overwriting orphans every signature it has already made.\n' >&2; \
+	  exit 1; \
+	fi
+	@mkdir -p "$$(dirname '$(RELEASE_SECKEY)')"
+	$(MINISIGN) -G -s '$(RELEASE_SECKEY)' -p '$(RELEASE_PUBKEY)'
+	@printf '\nPublish this public key where a downloader finds it independently of the\n'
+	@printf 'artefacts — SECURITY.md and the landing page:\n\n'
+	@cat '$(RELEASE_PUBKEY)'
 
 typecheck:
 	$(NPM) run typecheck

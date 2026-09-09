@@ -77,22 +77,60 @@ means real hardware in real homes and gyms.
 
 ## Supported versions
 
-| version | supported |
+| version | security fixes until |
 |---|---|
-| `main` | yes — pre-release, no stability promise |
-| tagged releases | **none yet** |
+| the current release | it is superseded, plus 90 days |
+| the previous minor | 90 days after whatever superseded it |
+| anything older | no |
+| `main` | not a release: fixes land here first, and nothing here is promised |
 
-There has been no release. Once there is one, this table names the versions receiving
-security fixes and for how long, and that window is a commitment rather than an intention.
+There are still no tagged releases, so for now that table says what will happen rather than
+what is happening. The number is the commitment: **90 days** from the moment a release stops
+being current — long enough to get an upgrade into a maintenance window, short enough that
+one person can promise it and mean it.
+
+**Read that number before you embed this in a product.** The CRA expects a support period
+that reflects how long the product is actually expected to be in use, and for a treadmill or
+a headset that is years, not ninety days. This project cannot promise years. Saying so is
+more use to you than a number nobody would meet: if you ship Oarlock inside a device, plan
+for the gap. Pin a version, keep the ability to build it yourself, and budget for carrying
+security fixes forward on a schedule that is yours rather than this project's.
 
 ## Supply chain
 
-Per release, once releases exist:
+`make release` produces, and every release carries:
 
-- an **SBOM** (CycloneDX or SPDX) published as a release asset;
-- **signed artefacts** with verifiable provenance;
-- a changelog that marks security fixes as security fixes, so an operator scanning it can
-  tell what they must take.
+- **an SBOM for each binary** — CycloneDX 1.6 JSON, written as `<binary>.cdx.json` beside
+  it, and read out of the compiled binary rather than guessed from the source tree. Per
+  binary rather than per release, because the binaries are not the same: across the 15
+  `oarlockd` builds there are five distinct dependency sets, from 27 modules on
+  `linux/riscv64` to 31 on darwin, freebsd, openbsd and windows. `oarlock-agent` links 4
+  everywhere except `linux/s390x`, which links 5. One SBOM for the whole release would be
+  wrong for 14 of those 15 gateways and would tell you the agent contains SQLite and MinIO —
+  and a scanner reading it would believe that.
+- **SHA256SUMS** over every artefact — binaries and SBOMs alike.
+- **`SHA256SUMS.minisig`** — an Ed25519 signature over that file, in minisign's format, so
+  you verify it with whatever minisign you already have rather than a tool of ours. One
+  signature covers the release: everything in it is named in the file being signed.
+
+A changelog that marks security fixes as security fixes arrives with the first release,
+so an operator scanning it can tell what they must take.
+
+### Verifying a download
+
+```sh
+minisign -V -p oarlock.pub -m SHA256SUMS   # who built it
+sha256sum -c SHA256SUMS                    # that it arrived intact
+```
+
+In that order, and both. Checking the checksums alone proves only that your download matches
+a list — and whoever replaced the binaries could write the list. The signature is the half
+that says where the list came from.
+
+**The public key is not published yet.** No release exists and no key has been generated.
+When one is, it goes *in this file*, not only beside the artefacts: a release directory is
+controlled by exactly the person who would be replacing the artefacts. Until the key appears
+here, treat any signature claiming to be this project's as unverifiable, because it is.
 
 Dependencies are pinned. `golang.org/x/crypto` is held at **≥ 0.17.0 with strict key
 exchange enabled and asserted in CI** — Terrapin (CVE-2023-48795) is a live attack class
@@ -107,5 +145,6 @@ in a connected device sold in the EU is such a component.
 
 **This policy does not discharge your obligations.** If you ship Oarlock inside a product,
 you are the manufacturer, and the reporting duties are yours. What this project undertakes is
-to make them possible to meet: a real disclosure channel, an SBOM, signed releases, published
-advisories, and a documented support window.
+to make them possible to meet: a real disclosure channel, an SBOM for every binary, signed
+releases, and a documented support window — those exist now, above. Published advisories
+follow the first release, because there is nothing yet to advise about.
