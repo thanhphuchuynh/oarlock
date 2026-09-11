@@ -1,0 +1,27 @@
+---
+title: "Every plugin's latency and error rate"
+description: "plugin is the configured backend kind (rules, sqlite, webhook, file, mqtt, …)."
+mode: wide
+---
+
+| metric | type | labels |
+|---|---|---|
+| `oarlock_plugin_calls_total` | counter | `plugin`, `method`, `outcome` |
+| `oarlock_plugin_duration_seconds` | histogram | `plugin`, `method` |
+
+`plugin` is the configured backend kind (`rules`, `sqlite`, `webhook`, `file`, `mqtt`, …).
+Backends are wrapped at the `pkg/plugin` seam rather than instrumented inside themselves,
+so a backend somebody else wrote is measured exactly like a built-in one.
+
+`outcome` distinguishes three things where two would be misleading:
+
+- **`allow` / `deny`** on the authorizer. A denial is the backend working.
+- **`error`** — the backend could not answer. This is the one an alert should watch;
+  folding denials into it would alarm on an authorizer doing its job, so the alert would be
+  turned off, and then it would not fire when the backend actually broke.
+- **`unsupported`** — the documented answer for a method a backend does not offer, like a
+  key file asked about an HTTP request. Not a failure of anything.
+
+Latency is recorded for failures too. A backend that is slow *and* failing is the
+interesting case, and a histogram that counted only successes would show it getting faster
+as it broke.

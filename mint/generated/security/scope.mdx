@@ -1,0 +1,25 @@
+---
+title: "Scope"
+description: "In scope"
+mode: wide
+---
+
+**In scope**
+
+- The gateway (`oarlockd`) — SSH front door, the WebSocket surfaces, the control API.
+- The agent and the agent library, including the reference Android binding.
+- `pkg/frame`, `pkg/plugin`, and the published SDKs.
+- The wire protocol itself: a design flaw is in scope, not only an implementation bug.
+- Default configuration that is unsafe in a way the documentation does not warn about.
+
+**Out of scope**
+
+- Third-party plugins and forks we do not publish.
+- Anything requiring a compromised gateway host. [The threat model](/generated/threat-model/4-gateway-compromise-is-total)
+  states plainly that the gateway is fully trusted; an attack that starts with code execution
+  inside `oarlockd` is not a new finding.
+- Missing hardening that the documentation already names as a known gap
+  ([threat model § 12](/generated/threat-model/12-what-is-actually-built)) — though a *working exploit* of
+  one of those gaps is very much in scope and welcome.
+- Denial of service through resource exhaustion that the documented limits are designed to
+  bound, unless you can show the limits do not hold.

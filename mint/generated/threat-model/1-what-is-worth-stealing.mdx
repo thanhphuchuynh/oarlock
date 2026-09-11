@@ -1,0 +1,26 @@
+---
+title: "1. What is worth stealing"
+description: "Oarlock hands a shell on a remote device to a human over the internet."
+mode: wide
+---
+
+Oarlock hands a shell on a remote device to a human over the internet. That is a
+high-value capability, so this document says plainly what it protects, what it does not,
+and which risks it accepts on purpose.
+
+Originally written against the design in [ARCHITECTURE.md](/generated/architecture/1-scope), and since
+revised against the code. **§12 says which of the mitigations below are actually built**,
+and it is the section to read first if you are deciding whether to trust any of this.
+
+---
+
+
+| asset | why an attacker wants it |
+|---|---|
+| **A shell on a device** | Root-adjacent code execution on hardware in a customer's home or gym. The whole point. |
+| **A shell on *every* device** | Fleet-wide execution. The difference between an incident and a company-ending one. |
+| **Session recordings** | Durable, greppable, and nobody is watching them being read. They contain command history, file contents, tokens pasted into a prompt — and if `record_input` is on, typed passwords. |
+| **Operator credentials** | Reusable, and usually good for more than Oarlock. |
+| **Device identity keys** | Impersonate a device, receive sessions meant for it, feed an operator fabricated output. |
+| **Tickets in flight** | Single-use and short-lived, but a redeemed one is a session. |
+| **The device registry** | A map of the fleet: ids, tags, which devices allow unrecorded sessions. |

@@ -1,0 +1,50 @@
+---
+title: "1. Transport"
+description: "The framed protocol between oarlockd and an agent."
+mode: wide
+---
+
+The framed protocol between `oarlockd` and an agent. Also used on the browser leg
+(`/ws/attach`), because one codec is cheaper to get right than two.
+
+**Status: `v0`, unstable.** It will change without ceremony until a `v1` tag. Anything
+implementing this today should pin a commit.
+
+**Public codec.** `pkg/frame` is the reference implementation and part of the public API.
+A third-party agent — Android, Rust, embedded — needs this document and that package and
+nothing else.
+
+---
+
+
+WebSocket over TLS, `Sec-WebSocket-Protocol: oarlock.v0`.
+
+- **Every message is a binary WebSocket frame.** No text frames. A text frame is a
+  protocol error and closes the connection.
+- One protocol frame per WebSocket message. The message boundary *is* the frame boundary,
+  so there is no length prefix to get wrong — and no length field an attacker can lie about
+  to force an allocation.
+- WebSocket ping/pong at the transport layer is not used for liveness. Some proxies answer
+  it themselves, which makes it a test of the proxy rather than of the peer. Oarlock's own
+  `PING`/`PONG` frames (§4.5) are end-to-end.
+- Idle-timeout survival is the `PING` frame's second job: ingress controllers that close
+  quiet connections after 60 s are the common case, so the default interval is 30 s.
+
+<a id="11-endpoints"></a>
+### 1.1 Endpoints
+
+| path | who dials | authenticated by |
+|---|---|---|
+| `/ws/control` | the agent, `persistent` mode | the device key, challenge–response (§ 3.1) |
+| `/ws/session` | the agent, once per session, in both modes | a single-use ticket in `OPEN` (§ 3.2) |
+| `/ws/attach` | the browser | ticket, in the `OPEN` frame body |
+
+<a id="12-tickets-never-travel-in-a-url"></a>
+### 1.2 Tickets never travel in a URL
+
+A ticket is carried in an `OPEN` frame body. Not a query string, not a path segment.
+Query strings land in ingress access logs, load-balancer logs, APM traces and browser
+history, and a single-use ticket in a log file is still a ticket until it is redeemed.
+
+`Sec-WebSocket-Protocol` is also not a credential channel: it is logged by roughly
+everything and capped at a length that will not hold one anyway.

@@ -1,0 +1,84 @@
+---
+title: "1. How a plugin is wired"
+description: "Every integration point in Oarlock is a Go interface in pkg/plugin with a working default."
+mode: wide
+---
+
+Every integration point in Oarlock is a Go interface in `pkg/plugin` with a working
+default. Two rules shape all of them:
+
+1. **`go run` needs nothing.** Clone, build, run — no database, no broker, no identity
+   provider. Every default is in-process or a file on disk.
+2. **Scale must not need a fork.** Nothing that talks to the outside world is reached
+   except through one of these interfaces, so replacing it is a config line and an import,
+   never a patch.
+
+---
+
+
+**Not** via Go's `plugin` package. It requires an exact toolchain and dependency-version
+match between host and plugin, does not work on every platform Oarlock targets, and cannot
+be unloaded. The cure is worse than the disease.
+
+Instead: a registry, populated by `init()`, selected by name in config.
+
+```go
+// plugins/oidc/oidc.go
+package oidc
+
+import "github.com/oarlock/oarlock/pkg/plugin"
+
+func init() {
+    plugin.RegisterAuthenticator("oidc", New)
+}
+
+func New(cfg plugin.Config) (plugin.Authenticator, error) { /* … */ }
+```
+
+```yaml
+# oarlock.yaml
+authenticator:
+  kind: oidc
+  issuer: https://id.example.com
+  audience: oarlock
+```
+
+Built-ins under `plugins/` are imported by `cmd/oarlockd`. **For something out of tree,
+you write your own `main`** — twelve lines, and it is the supported path, not a workaround:
+
+```go
+package main
+
+import (
+    "github.com/oarlock/oarlock/cmd/oarlockd/app"
+    _ "example.com/our-stack/oarlock-dispatcher"
+    _ "example.com/our-stack/oarlock-casdoor"   // yours
+)
+
+func main() { app.Main() }
+```
+
+You get a single static binary with your integrations in it, your own release cadence, and
+no ABI to keep in step. `pkg/plugin` is versioned as public API; the rest of the tree is
+not.
+
+<a id="11-rules-every-plugin-obeys"></a>
+### 1.1 Rules every plugin obeys
+
+- **Take a `context.Context` and honour it.** The gateway sets deadlines and cancels; a
+  plugin that ignores cancellation holds a session open after the operator has gone.
+- **Be safe for concurrent use.** One instance serves every session.
+- **Do not block the pump.** Anything on the per-frame path must return in microseconds.
+  `Recorder` writes are the only per-byte call, and they are expected to buffer internally
+  and flush on their own schedule.
+- **Fail closed, but distinguish a denial from an outage.** Returning
+  `Decision\{Allow:false\}` is a decision, and it closes the session as `revoked`. Returning
+  an `error` means *you could not decide*: new sessions are refused immediately, live ones
+  get `authz.grace` re-checks before closing as `authz_unavailable`. Never return
+  `Allow:false` to signal that your backend is down — that writes a lie into the audit
+  trail. `Recorder` errors are absorbed by the spool until it is exhausted. An `AuditSink`
+  error is logged and swallowed, because audit must never be the thing that breaks a shell —
+  that turns the audit trail into a denial-of-service lever.
+- **Expose metrics through the passed registry.** Every plugin gets a
+  `prometheus.Registerer`; a plugin whose latency you cannot see is a plugin you cannot
+  operate.

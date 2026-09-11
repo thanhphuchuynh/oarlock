@@ -1,0 +1,33 @@
+---
+title: "1. Scope"
+description: "In scope."
+mode: wide
+---
+
+> Companion documents: [protocol](/generated/protocol/1-transport) for the bytes,
+> [plugins](/generated/plugins/1-how-a-plugin-is-wired) for the interfaces, [threat model](/generated/threat-model/1-what-is-worth-stealing)
+> for what happens when a piece of this is hostile.
+
+
+**In scope.** Give an operator an interactive shell — and file transfer and port
+forwarding — on a device that cannot be dialed from the network the operator is on,
+with central authorisation, central revocation, and a replayable recording of the session.
+
+**Out of scope, deliberately.**
+
+- *Device management.* Oarlock opens shells. It does not do enrollment, inventory, OTA,
+  telemetry or configuration. It expects to be embedded in something that does.
+- *Identity.* There is no user database. `Authenticator` and `Authorizer` are interfaces;
+  bring Casdoor, Okta, an OIDC provider, or a YAML file.
+- *An L3 overlay.* A session is a pipe to one process on one device, scoped to one ticket.
+  If you want the fleet on a network, you want OpenZiti or Tailscale, not this.
+- *Running the agent for you.* Supervision, restart, and reaching the network are the
+  host platform's job — an Android `Service`, a systemd unit, a container's entrypoint.
+
+<a id="the-one-assumption-that-shapes-everything"></a>
+### The one assumption that shapes everything
+
+**The device can make an outbound TLS connection on 443, and nothing else.** No inbound
+port, no stable address, no VPN, and — on the platforms this was designed for — no ability
+to install and supervise a separate `sshd` binary. Every decision below follows from that
+sentence.

@@ -1,0 +1,140 @@
+---
+title: "11. Writing one — a worked example"
+description: "An Authorizer backed by an internal permissions API, with revocation over SSE:"
+mode: wide
+---
+
+An `Authorizer` backed by an internal permissions API, with revocation over SSE:
+
+```go
+package ourauthz
+
+import (
+    "context"
+    "net/http"
+    "time"
+
+    "github.com/oarlock/oarlock/pkg/plugin"
+)
+
+func init() { plugin.RegisterAuthorizer("ourstack", New) }
+
+type authz struct {
+    api   *http.Client
+    base  string
+    cache *plugin.TTLCache[plugin.Decision] // provided; 5 s default, metrics included
+}
+
+func New(cfg plugin.Config) (plugin.Authorizer, error) {
+    base, err := cfg.RequireString("base_url")
+    if err != nil {
+        return nil, err // config errors must fail at boot, never at first session
+    }
+    return &authz{
+        api:   cfg.HTTPClient(),           // timeouts, tracing and metrics pre-wired
+        base:  base,
+        cache: plugin.NewTTLCache`cfg.Duration("cache_ttl", 5*time.Second`),
+    }, nil
+}
+
+func (a *authz) Authorize(ctx context.Context, p *plugin.Principal,
+    dev *plugin.Device, act plugin.Action, tgt plugin.Target) (plugin.Decision, error) {
+
+    // The target belongs in the cache key. Without it the first question about a device
+    // answers every later one, so "may I forward port 3000" hands back its yes for port
+    // 22 — and the cache becomes the hole the target exists to close. It fails open, and
+    // only under load.
+    key := p.ID + "|" + dev.ID + "|" + string(act) + "|" + tgt.String()
+    if d, ok := a.cache.Get(key); ok {
+        return d, nil
+    }
+    d, err := a.ask(ctx, p, dev, act, tgt)
+    if err != nil {
+        // An error is not a denial. The gateway refuses NEW sessions immediately and gives
+        // live ones authz.grace re-checks before closing them as authz_unavailable.
+        // Returning Decision{Allow:false} here would write "revoked" into the audit trail
+        // for what is actually an outage.
+        return plugin.Decision{}, err
+    }
+    a.cache.Put(key, d)
+    return d, nil
+}
+
+func (a *authz) Watch(ctx context.Context) (<-chan plugin.RevocationEvent, error) {
+    ch := make(chan plugin.RevocationEvent, 64)
+    go a.streamSSE(ctx, ch) // reconnects with backoff; closes ch when ctx is done
+    return ch, nil
+}
+```
+
+Then build your own gateway:
+
+```go
+package main
+
+import (
+    "github.com/oarlock/oarlock/cmd/oarlockd/app"
+    _ "example.com/our-stack/ourauthz"
+)
+
+func main() { app.Main() }
+```
+
+```yaml
+authorizer:
+  kind: ourstack
+  base_url: https://api.internal/permissions
+  cache_ttl: 5s
+recheck_interval: 30s
+```
+
+<a id="111-the-test-kit"></a>
+### 11.1 The test kit
+
+`pkg/plugin/plugintest` is a conformance suite. Call it from your own tests:
+
+```go
+func TestConformance(t *testing.T) {
+    plugintest.Authorizer(t, plugintest.AuthorizerHarness{
+        New:     func(t *testing.T) plugin.Authorizer { return newMyAuthz(t) },
+        Allowed: func() (*plugin.Principal, *plugin.Device, plugin.Action) { … },
+        Denied:  func() (*plugin.Principal, *plugin.Device, plugin.Action) { … },
+
+        // Make your dependency unavailable. This is the case the suite exists for.
+        BreakDependency: func(t *testing.T) (restore func()) { … },
+    })
+}
+```
+
+It checks what is easy to get wrong and hard to notice: that you distinguish "no" from
+"I could not decide", that a denial carries a reason an operator can act on, that
+cancellation is honoured, that concurrent calls agree, that a per-grant limit only
+tightens, and that a dropped `Watch` stream closes its channel rather than leaking a
+goroutine per reconnect.
+
+**The suite fails a backend that returns `Allow: false` when its dependency is down.**
+That is its reason for existing. A backend that conflates the two writes `revoked` into
+an audit trail for an outage, tells an operator their access was withdrawn when nothing
+about it changed, and converts one service's bad minute into a fleet-wide session kill —
+during the incident that put those operators on those devices. Documenting the contract
+was the first attempt at preventing this; the suite is the second.
+
+**Nothing in it skips quietly.** A conformance suite whose most important case can be
+omitted by leaving a field nil reports success for a backend it never tested, so the cases
+that carry a contract *fail* when their harness is incomplete. Opting out takes a field
+whose name says what it costs — `NoDependencyToBreak` for an authorizer that genuinely
+has nothing that can be unavailable, `NoTransportToBreak` for an in-process dispatcher —
+and even then the suite checks the part of the claim that is checkable.
+
+Suites available now: `Authorizer`, `Authenticator`, `Dispatcher`. The shipped backends
+run through them (`plugins/authz/rules`, `plugins/authz/webhook`,
+`plugins/dispatch/exec`, `plugins/dispatch/webhook`, `plugins/dispatch/mqtt`,
+`internal/auth/authorizedkeys`, `internal/auth/statictoken`), which is not ceremony:
+a suite the first-party implementations do not pass is one nobody should trust.
+
+**The suite tests itself.** `plugintest`'s own tests run each suite against backends that
+are wrong in each specific way — denies on error, allows on error, errors instead of
+denying, denies with no reason, ignores cancellation, disagrees under concurrency, hangs
+on `Watch`, leaks a `Watch` goroutine, blames the device for its own outage, leaks a
+ticket into an error message — and assert that the suite *fails* them. A conformance suite
+that passes a wrong backend is worthless, and the only way to know it does not is to try.

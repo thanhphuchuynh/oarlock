@@ -1,0 +1,43 @@
+---
+title: "Build"
+description: "Two ways to run the agent on Android, and they differ in one thing that matters more than the packaging: what a session can touch."
+mode: wide
+---
+
+Two ways to run the agent on Android, and they differ in one thing that matters more than
+the packaging: **what a session can touch.**
+
+| | app (APK) | `init` service |
+|---|---|---|
+| Needs your own system image | no | **yes** |
+| Foreground service and notification | required | none |
+| Survives a reboot by itself | sticky service | yes, from `init` |
+| A session can read | your app's files | whatever the uid allows |
+| `pm`, `am`, `dumpsys`, `logcat` | no | yes, as `shell` |
+| MDM can install it | yes | no — it ships in the image |
+
+There is no third option where an MDM runs a shell command. Android Enterprise has no
+such capability: the command set is `LOCK`, `REBOOT`, `RESET_PASSWORD`, `CLEAR_APP_DATA`,
+`WIPE`. Apps are sandboxed under separate uids and nothing privileged is exposed to a
+device-owner app. If you need a session that can see the system, the image has to be
+yours.
+
+The APK runs Oarlock in-process as a foreground service. It does not extract or execute
+the `oarlock-agent` command, and it does not need `adb` after installation.
+
+
+Requirements: Go 1.26, Java 17, Android SDK 35, Android NDK 27.1, and network access the
+first time the pinned gomobile tools are installed.
+
+```sh
+make android-apk
+```
+
+The debug APK is written to:
+
+```text
+dist/oarlock-agent-android-arm64-debug.apk
+```
+
+It supports `arm64-v8a`, Android 8.0 (API 26) and newer. The debug certificate is for
+device testing only; a store, MDM, or production sideload needs a release signing key.

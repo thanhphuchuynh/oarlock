@@ -1,0 +1,32 @@
+---
+title: "8. Events out"
+description: "Webhooks for anyone; the AuditSink plugin if you are compiling your own gateway."
+mode: wide
+---
+
+Webhooks for anyone; the `AuditSink` plugin if you are compiling your own gateway.
+
+| event | fires when |
+|---|---|
+| `session.opened` | both ends paired, first byte imminent |
+| `session.closed` | with `close_reason`, exit code, byte counts, duration |
+| `session.revoked` | a grant was withdrawn mid-session |
+| `recording.available` | finalised and readable — the one to trigger retention or review on |
+| `device.connected` / `device.disconnected` | `persistent` mode only |
+| `authz.denied` | someone was refused. Worth alerting on in volume. |
+
+```http
+POST /your/webhook
+Oarlock-Signature: t=1787218725,v1=5c3a…
+Oarlock-Event: session.closed
+Oarlock-Delivery: dlv_01J8Z…
+```
+
+HMAC-SHA256 over `t.body` with a shared secret; reject anything older than 5 minutes.
+**Delivery is at-least-once, so consumers must be idempotent** — `Oarlock-Delivery` is
+stable across retries and is what you dedupe on. Failed deliveries retry with backoff for
+an hour, then land in a dead-letter list you can read from the API.
+
+Webhooks are for reacting, not for state. If you need to know what is live right now, ask
+`GET /sessions` — an event stream you replay to derive current state will be wrong exactly
+once, on the delivery you missed.

@@ -1,0 +1,88 @@
+---
+title: "7. `DeviceRegistry` — what the gateway knows about a device"
+description: "Keys are Ed25519, not SSH keys."
+mode: wide
+---
+
+```go
+type DeviceRegistry interface {
+    Get(ctx context.Context, id string) (*Device, error)
+    List(ctx context.Context, q DeviceQuery) ([]*Device, string, error)
+}
+
+type Device struct {
+    ID               string
+    Platform         Platform             // android | linux | container | other
+    Disabled         bool                 // revoke access without deleting history
+    Mode             Mode                 // persistent | dispatch | "" = resolve from Platform
+    Keys             []ed25519.PublicKey  // control-channel identity; a list, so keys rotate
+    RetiredKeys      []ed25519.PublicKey  // old identities that must no longer authenticate
+    AllowPassthrough bool                 // mode A, per device, default false
+    Tags             map[string]string    // what Authorizer and policy selectors match on
+    Profiles         []string             // what this device may be asked to do
+}
+```
+
+**`Keys` are Ed25519, not SSH keys.** A device's identity key signs a challenge on
+the control channel; it is not an SSH key and never appears in an SSH handshake.
+Typing it as `ssh.PublicKey` would pull an SSH library into the device-identity
+layer for nothing. The registry file still accepts the `ssh-ed25519 AAAA…` form
+because that is what `ssh-keygen -t ed25519` produces, and requiring a bespoke
+encoding for no reason is how a config file becomes something only a script can
+write.
+
+Rotation is publish-then-retire:
+
+```yaml
+devices:
+  - id: treadmill-4821
+    platform: linux
+    keys:
+      - "<old public key>"
+      - "<new public key>"
+
+# after the device has rolled:
+devices:
+  - id: treadmill-4821
+    platform: linux
+    keys:
+      - "<new public key>"
+    retired_keys:
+      - "<old public key>"
+```
+
+A key cannot appear in both lists. A retired key that signs a control-channel handshake is
+rejected with the same `auth_failed` response as any other authentication failure; the
+specific reason is logged server-side, not sent to the unauthenticated peer.
+
+The registry contract starts read-only: Oarlock can read from whatever already owns the
+fleet. A backend may also implement `DeviceRegistryAdmin` to create, update and delete
+devices through the admin API/UI. The default `file` backend remains a YAML list, which is
+enough for a lab and intentionally not rewritten by the gateway; the built-in `sqlite`
+backend stores editable devices in the operational DB with `oarlock_` table prefixes.
+
+Disabling a device is an operational revocation: the gateway stops its connected agent,
+rejects new control-channel handshakes, and refuses new SSH or browser sessions. The registry
+row and all existing session history remain available. Re-enabling allows the device to
+authenticate and reconnect again.
+
+```yaml
+store:
+  kind: sqlite
+  path: ./oarlock.db
+
+devices:
+  kind: sqlite
+```
+
+**`Platform` exists to pick the reachability default**, and it earns its place because the
+right default differs by platform rather than by deployment: `android` resolves to
+`dispatch`, because the platform resists held connections; `linux` and `container` resolve to
+`persistent`, because nothing there objects and it needs no doorbell. An explicit `Mode`
+always wins. The resolved value is logged at registration, so a surprising default is visible
+once rather than never.
+
+**`Tags` do double duty** — `Authorizer` selectors and `record_input` policy selectors both
+match on them ([ARCHITECTURE § 8.2](/generated/architecture/8-recording#82-record_input-is-a-policy-not-a-preference)).
+That is deliberate: compliance scope and jurisdiction get expressed through a mechanism that
+already exists, and no tenancy concept has to be invented to carry them.

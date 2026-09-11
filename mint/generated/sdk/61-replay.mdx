@@ -1,0 +1,40 @@
+---
+title: "6.1 Replay"
+description: "The integrity verdict is not a prop."
+mode: wide
+---
+
+```tsx
+import { Player } from "@oarlock/react";
+import "@oarlock/terminal/player.css";   // replay only; not needed for a live terminal
+
+<Player cast={cast} verdict={verdict} sessionID={session.id} />
+```
+
+**The integrity verdict is not a prop.** `<Player>` renders it above the recording, in the
+document as well as visually, and there is no option that removes it. A player that shows a
+tampered recording exactly like an intact one is a player that launders it — and the hash
+chain and the signed manifest exist precisely so that somebody reading a session afterwards
+can tell the difference.
+
+You supply the verdict; the component does not compute one. Verification needs the manifest
+and a public key your *deployment* trusts, which is not a decision a browser can make for
+itself. What the component guarantees is that the answer is shown — including when the
+answer is "you did not give me one", which renders as **unverified** rather than as fine.
+
+The five outcomes are separate screens on purpose, because they send somebody to different
+places:
+
+| verdict | what it means | how it reads |
+|---|---|---|
+| `valid` | the chain reaches the signed head with the expected count | intact |
+| `truncated` | everything present is intact and the file stops early | *incomplete*, with how much verifies — usually a process that died, not tampering |
+| `altered` | the contents do not match what was signed | tampering |
+| `bad_signature` | the manifest is not signed by the expected key | possibly another deployment's recording; not an accusation |
+| `malformed` | not a readable asciicast | nothing to verify and nothing to play |
+
+An unrecognised verdict withholds the claim of integrity rather than implying it: a
+verifier newer than your build is a reason not to vouch for a recording.
+
+`player.css` is a separate import from `oarlock.css` deliberately — asciinema-player ships
+around 120 global rules, and embedding a live terminal should not drag them in.

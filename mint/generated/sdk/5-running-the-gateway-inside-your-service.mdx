@@ -1,0 +1,30 @@
+---
+title: "5. Running the gateway inside your service"
+description: "If your backend is already Go, the gateway can be a library rather than a deployment."
+mode: wide
+---
+
+If your backend is already Go, the gateway can be a library rather than a deployment. It
+mounts on a mux you already have and reuses the auth you already wrote.
+
+```go
+gw, err := oarlock.NewGateway(oarlock.Config{
+    Authenticator: myAuth,       // your existing session cookies and service tokens
+    Authorizer:    myPerms,      // your existing permission checks
+    Recorder:      gcsRecorder,
+    SessionStore:  pgStore,
+})
+
+mux.Handle("/oarlock/", gw.HTTPHandler())   // /ws/control, /ws/session, /ws/attach, /api/v1
+go gw.RunSSH(ctx, ":2222")                  // optional; skip it for browser-only
+go gw.Run(ctx)
+```
+
+You get one binary, one deployment, one identity system, and no service-to-service auth to
+configure. What you give up is the isolation: **the gateway reads every keystroke in every
+session** ([threat model § 4](/generated/threat-model/4-gateway-compromise-is-total)), so embedding
+it means your application process now carries that capability. A bug in an unrelated
+handler is a bug in something that can open a shell on any device you manage.
+
+Embed it for a small deployment or an internal tool. Keep it separate when the blast radius
+of your main application is already something you worry about.

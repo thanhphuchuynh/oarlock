@@ -1,0 +1,63 @@
+---
+title: "A starter alert set"
+description: "Thresholds are a starting point, not a recommendation: the right numbers depend on your fleet's size and how much of it is usually asleep."
+mode: wide
+---
+
+Thresholds are a starting point, not a recommendation: the right numbers depend on your
+fleet's size and how much of it is usually asleep.
+
+```yaml
+groups:
+  - name: oarlock
+    rules:
+      # The trail has holes. Nothing else here matters as much: an audit log that
+      # silently dropped events is one nobody can rely on afterwards.
+      - alert: OarlockAuditDropping
+        expr: rate(oarlock_audit_events_dropped_total[5m]) > 0
+        for: 0m
+        labels: {severity: critical}
+
+      # A dependency is down, as opposed to saying no.
+      - alert: OarlockPluginErrors
+        expr: |
+          sum by (plugin) (rate(oarlock_plugin_calls_total{outcome="error"}[5m]))
+            / sum by (plugin) (rate(oarlock_plugin_calls_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: warning}
+
+      # The recorder is falling behind. This one has minutes in it before sessions
+      # start being refused, because a recorder that cannot start fails the session.
+      - alert: OarlockRecordingSpoolGrowing
+        expr: oarlock_recording_spool_bytes > 32 * 1024 * 1024
+        for: 10m
+        labels: {severity: warning}
+
+      # Sessions ending for reasons that are not somebody leaving.
+      - alert: OarlockSessionsFailing
+        expr: |
+          sum(rate(oarlock_sessions_closed_total{reason!~"operator_close|device_close"}[10m]))
+            / sum(rate(oarlock_sessions_closed_total[10m])) > 0.1
+        for: 10m
+        labels: {severity: warning}
+
+      # Devices are being invited and not answering.
+      - alert: OarlockDevicesNotAnswering
+        expr: oarlock_invitations_outstanding > 20
+        for: 5m
+        labels: {severity: warning}
+
+      # NFR1: p95 session open under ten seconds in dispatch mode.
+      - alert: OarlockSlowSessionOpen
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, mode) (rate(oarlock_session_open_duration_seconds_bucket[10m]))) > 10
+        for: 10m
+        labels: {severity: warning}
+
+      # The scrape itself. An alert set nobody notices has stopped is not an alert set.
+      - alert: OarlockDown
+        expr: up{job="oarlock"} == 0
+        for: 2m
+        labels: {severity: critical}
+```

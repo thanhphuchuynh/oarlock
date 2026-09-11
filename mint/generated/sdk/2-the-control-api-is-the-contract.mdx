@@ -1,0 +1,214 @@
+---
+title: "2. The control API is the contract"
+description: "/api/v1, JSON over HTTPS."
+mode: wide
+---
+
+`/api/v1`, JSON over HTTPS. An OpenAPI 3.1 document is served at
+`/api/v1/openapi.json` and is generated from the handlers, not written beside them — a
+spec that drifts from the code is worse than no spec, because people trust it.
+
+| method | path | does |
+|---|---|---|
+| `POST` | `/api/v1/sessions` | Open a session. Returns the session and a single-use attach ticket. |
+| `GET` | `/api/v1/sessions` | List. Filter by `device_id`, `principal`, `state`, `live`. Cursor-paginated: the next cursor is in the body *and* in `Oarlock-Next-Cursor`, so a caller can page without parsing. |
+| `GET` | `/api/v1/sessions/\{id\}` | One session, including live byte counts. |
+| `DELETE` | `/api/v1/sessions/\{id\}` | Kill it. `close_reason` becomes `admin_kill`. Your own session needs nothing; somebody else's needs `admin:kill` on its device. |
+| `POST` | `/api/v1/sessions/\{id\}/attach` | Mint a fresh attach ticket — for a reconnecting browser, or a second viewer. |
+| `GET` | `/api/v1/agents` | Connected `oarlock-agent` control channels on this gateway node. |
+| `DELETE` | `/api/v1/agents/\{device_id\}` | Stop one connected reference agent. It exits instead of reconnecting. Requires `admin:kill` on the device. |
+| `GET` | `/api/v1/devices/\{id\}/file?path=…` | Read one file under the device's configured root, streamed. Requires `file:read`. Paths are relative to that root and cannot climb out of it. |
+| `PUT` | `/api/v1/devices/\{id\}/file?path=…&mode=644` | Write one file under the root, committed atomically. Requires `file:write` and a `Content-Length` — the device is told the exact size so a short transfer cannot be committed as a whole file. |
+| `POST` | `/api/v1/devices/\{id\}/exec` | Run one allow-listed command, wait, return stdout, stderr and exit code. No terminal, no attach, no ticket. Creates its own session row and is recorded like any other session. Requires the `exec` action, which `shell` does not imply. `argv` is an array — there is no shell on this path. |
+| `GET` | `/api/v1/devices` | What the gateway knows. Connection state, mode, capabilities. |
+| `GET` | `/api/v1/devices/\{id\}` | One device. |
+| `GET` | `/api/v1/devices/\{id\}/access` | Which policy rules are written about this device, denials first, evaluated by the gateway's own matcher. Requires `admin:permissions` on `gateway`. Also returns `admin_actions`, so a caller can tell "who can reach this" from "who can administer it" without keeping its own copy of the vocabulary. |
+| `POST` | `/api/v1/devices` | Add one device when the registry backend is writable, such as SQLite. |
+| `PUT` | `/api/v1/devices/\{id\}` | Replace one device definition when the registry backend is writable. |
+| `DELETE` | `/api/v1/devices/\{id\}` | Delete one device when the registry backend is writable. Existing session rows stay in the ledger. |
+| `GET` | `/api/v1/permissions` | List database-backed authorization permissions. Available with `authorizer.kind: sqlite`. |
+| `GET` | `/api/v1/permissions/\{id\}` | Read one permission. |
+| `POST` | `/api/v1/permissions` | Create an allow or deny permission. |
+| `PUT` | `/api/v1/permissions/\{id\}` | Replace a permission; changes affect subsequent authorization checks. |
+| `DELETE` | `/api/v1/permissions/\{id\}` | Delete a permission. Live sessions are rechecked on the configured interval. |
+| `GET` | `/api/v1/ssh` | Public SSH connection metadata, gateway host key/fingerprint, and a ready `known_hosts` entry. Never returns an operator private key. |
+| `GET` | `/api/v1/sql/schema` | List the operational tables and columns exposed to SQL Explorer. Requires `sql:read` on the synthetic `gateway` device. |
+| `POST` | `/api/v1/sql/query` | Run one bounded `SELECT` or `WITH` query against a curated read-only snapshot. Requires `sql:read` on `gateway`. |
+| `GET` | `/api/v1/recordings/\{session_id\}` | The asciicast, or a redirect to a signed URL. |
+| `GET` | `/api/v1/recordings/\{session_id\}/meta` | The sidecar: exit code, close reason, durations, byte counts. |
+| `POST` | `/api/v1/sessions/\{id\}/attach` | A fresh attach ticket for a session that is already open. |
+| `POST` | `/api/v1/sessions/\{id\}/observe` | A ticket for watching a live session read-only. |
+| `GET` | `/api/v1/events` | Server-sent events. The pull alternative to webhooks. |
+| `GET` | `/healthz`, `/readyz`, `/metrics` | Unversioned, and outside the API's compatibility promise. |
+
+**`POST /sessions` is the one that matters.** Everything else is bookkeeping.
+
+```http
+POST /api/v1/sessions
+Authorization: Bearer svc_…
+On-Behalf-Of-Token: eyJhbGciOi…
+On-Behalf-Of: admin@mail.com
+Idempotency-Key: 01J8Z6QK4M7N2P
+Content-Type: application/json
+
+{ "device_id": "treadmill-4821",
+  "profile": "shell",
+  "pty": { "cols": 132, "rows": 38, "term": "xterm-256color" },
+  "reason": "ticket AV-9182: display frozen after firmware update",
+  "limits": { "max_duration": "30m" } }
+```
+
+```json
+201 Created
+{ "session": { "id": "sess_01J8Z…", "state": "waking", "device_id": "treadmill-4821",
+               "principal": "admin@mail.com", "opened_by": "svc-crm",
+               "recording": true, "mode": "gateway", "created_at": "2026-08-20T09:14:02Z" },
+  "attach": { "ticket": "hK3…", "url": "wss://gw.example.org/ws/attach",
+              "expires_at": "2026-08-20T09:15:02Z" } }
+```
+
+Three fields worth arguing about:
+
+- **`reason` is required by default** (`api.require_reason: true`). A free-text note costs
+  the caller nothing and turns the session list from a log into an explanation. Set it
+  false if your own system already records the why.
+- **`limits` may only tighten.** A caller cannot raise a ceiling the gateway operator set.
+- **`Idempotency-Key`** is honoured for 24 h. Retrying a `POST` that already opened a
+  session returns *that* session rather than opening a second one — which matters because
+  `sessions_per_device` defaults to 1, so a naive retry would otherwise fail with a
+  concurrency error that looks like a real conflict.
+
+<a id="renewing-an-attach-ticket"></a>
+### Renewing an attach ticket
+
+```http
+POST /api/v1/sessions/sess_01J8Z…/attach
+Authorization: Bearer svc_…
+```
+```json
+201 Created
+{ "ticket": "9pQ…", "url": "wss://gw.example.org/ws/attach",
+  "expires_at": "2026-08-20T09:16:04Z" }
+```
+
+The ticket from `POST /sessions` is single-use and lives 60 s, which means the ordinary
+things a browser does — reloading the page, losing the WebSocket handshake to a flaky
+network, sitting on the response for a minute — leave an operator holding a live session
+and a dead credential. Renewal is what keeps single-use survivable; without it the only
+recourse is a second session on the same device, which `sessions_per_device: 1` then
+refuses.
+
+It is not a loosening of the rules. The new ticket is scoped and short-lived exactly like
+the first, **minting it revokes the one it replaces** (so three reloads leave one live
+credential, not three), and the renewal is a fresh authenticated request — which makes it
+the moment authorisation is re-checked, for free, against a principal who may have been
+revoked since the session opened.
+
+Only the principal the session belongs to may renew it. A session that has ended answers
+`409 session_closed`; somebody else's session and a session that never existed both
+answer `404`, so an authenticated caller cannot discover live sessions by trying ids.
+
+**Rate limits** are per principal, per minute, reported on every response:
+`Oarlock-RateLimit-Limit`, `-Remaining`, `-Reset` (seconds until the window rolls).
+A `429` carries `Retry-After` pointing at the window boundary rather than a guess, so
+a well-behaved client stops for exactly as long as it needs to. Unauthenticated
+callers are limited by address, because otherwise the limit only protects callers who
+already have credentials.
+
+**`DELETE /sessions/\{id\}` is idempotent.** The caller's intent is "this must not be
+running", and that is satisfied by a session that has already ended — so deleting a
+closed session succeeds. Returning an error there would make a retry after a timeout
+look like a failure. A session that is live in the ledger but not on the node you
+asked returns **409 `wrong_node`**: a 404 would be a lie, and a 500 would suggest the
+gateway is broken.
+
+<a id="21-errors"></a>
+### 2.1 Errors
+
+RFC 9457 `application/problem+json`, with the machine-readable code from
+[protocol § 6](/generated/protocol/6-error-codes) so one vocabulary covers both the wire and the API:
+
+```json
+409 Conflict
+{ "type": "https://oarlock.dev/errors/session_limit",
+  "title": "Device already has a live session",
+  "status": 409, "code": "session_limit",
+  "detail": "treadmill-4821 has 1 of 1 allowed sessions",
+  "instance": "req_01J8Z…", "retryable": true,
+  "meta": { "existing_session_id": "sess_01J8Y…" } }
+```
+
+`instance` is the correlation id and appears in the gateway's logs, the audit event, and
+every SDK error. It is the one string to quote in a bug report.
+
+<a id="22-retrying-safely"></a>
+### 2.2 Retrying safely
+
+`POST /sessions` does real work — it creates a row, wakes a device and mints a credential —
+so a client that times out cannot tell whether any of it happened. Send an
+`Idempotency-Key` and the retry is safe:
+
+```
+POST /api/v1/sessions
+Idempotency-Key: 018f2c1e-9b3a-7c4d-8e1f-2a5b6c7d8e9f
+```
+
+The key is an opaque string you choose, at most 255 bytes, scoped to your own principal —
+two callers picking the same key never see each other's sessions.
+
+| what happened | what you get |
+|---|---|
+| first request | `201 Created`, the new session |
+| retry, same body | `200 OK`, **the same session**, with a freshly minted attach ticket |
+| retry, different body | `400`, `idempotency_key_reused` |
+| retry while the first is still running | `409`, `idempotency_in_flight`, retryable |
+| the first request failed | the key is free; retry it |
+| the session has since ended | `409`, `session_closed` — open a new one with a new key |
+
+Two details worth knowing, because they are the ones an integration gets wrong:
+
+- **A replay returns 200, not 201.** If you branch on "did I create this", branch on the
+  status. The body is the same shape either way.
+- **The ticket in a replay is a new one.** Nothing is cached: the gateway looks the session
+  up as it is now and mints a fresh attach ticket. A cached response would carry the first
+  request's 60-second ticket, and a retry two minutes later would hand you a dead credential
+  and call it success.
+
+A failed request frees its key deliberately. The common failure is a device that did not
+answer, which is exactly when you want to retry the same key — a key that stayed consumed
+after a transient failure would be one you could never use again, for a session that does
+not exist.
+
+Idempotency records are held for 24 hours, in memory, on the node that served the request.
+
+<a id="23-long-poll-dont-poll"></a>
+### 2.3 Long-poll, don't poll
+
+A session opens asynchronously — `waking` while the doorbell rings, `opening` while the
+agent dials. `GET /sessions/\{id\}?wait=30s` holds the request until the state changes.
+Polling every 200 ms to watch a state machine that moves twice is a waste of a TLS
+handshake, an authentication and a rate-limit slot per tick.
+
+```
+GET /api/v1/sessions/sess_01J8Y…?wait=30s&state=waking
+```
+
+**Send `state` — the one you already have.** Without it the wait is relative to whatever
+the state is when your request *arrives*, so a transition between your last read and this
+request is one you will not be told about: you will wait for the one after it. With it,
+a state that has already moved on comes back immediately.
+
+- `wait` is a Go duration, clamped to **60 s**. Absent or `0` answers straight away, which
+  is what every existing caller does and what they keep doing.
+- **A wait that expires is a `200` with the unchanged session, not an error.** "Still the
+  same" is the ordinary outcome of a long-poll; re-issue the request. A client that had
+  to special-case a timeout would be special-casing its most common answer.
+- A session that has already finished answers immediately. It will never move again, and
+  holding your request to tell you that would waste the whole timeout.
+- The states are `waking`, `opening`, `attached`, `closed`, `rejected`. Only `state`
+  changes release a wait; bytes moving do not.
+
+On the default single-node gateway the wait is event-driven — the store wakes it the
+moment the row moves. A store shared with another process cannot see writes it did not
+make, so the gateway polls it internally instead. The behaviour you see is the same; the
+difference is how quickly the answer arrives.

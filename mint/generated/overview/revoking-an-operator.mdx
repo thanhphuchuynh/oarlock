@@ -1,0 +1,26 @@
+---
+title: "Revoking an operator"
+description: "This is the feature that justifies terminating SSH at the gateway, so it gets more than a return false at connect time:"
+mode: wide
+---
+
+This is the feature that justifies terminating SSH at the gateway, so it gets more than a
+`return false` at connect time:
+
+1. **At session open**, `Authorizer.Authorize(principal, device, action)` must say yes.
+2. **Every `recheck_interval` (default 30 s)** while the session is live, the same call is
+   made again. A `no` closes the session with reason `revoked`.
+3. **`Authorizer.Watch()`** streams revocations as they happen, so a webhook backend can
+   kill a live shell in under a second instead of waiting for the next re-check.
+4. **`DELETE /api/sessions/\{id\}`** kills one session immediately (`admin_kill`). Your own
+   session needs no grant; somebody else's needs `admin:kill` on its device.
+
+The same `Authorizer` gates the admin surface, which is the part that is easy to forget:
+`admin:devices`, `admin:permissions` and `admin:kill` are actions like any other, because a
+token that proves who you are must not thereby let you rewrite the policy that decides what
+you may do. `authorizer.admins` in the config file is the break-glass for an empty policy
+store, and it grants those three and nothing else — see
+[docs/plugins.md § 3.1.1](/generated/plugins/1-how-a-plugin-is-wired).
+
+There is no key on the device to un-deploy and no offline device that keeps honouring a
+departed employee's credential — because the device never held one.

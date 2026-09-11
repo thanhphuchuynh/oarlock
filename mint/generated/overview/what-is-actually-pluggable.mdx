@@ -1,0 +1,21 @@
+---
+title: "What is actually pluggable"
+description: "Every integration point is a Go interface with a working default, so go run needs no external service — and nothing forces the defaults on you at scale."
+mode: wide
+---
+
+Every integration point is a Go interface with a working default, so `go run` needs no
+external service — and nothing forces the defaults on you at scale.
+
+| Interface | Default | Also shipped |
+|---|---|---|
+| `Authenticator` | `authorized_keys` file | **OIDC** (bearer JWT + SSH device code), SSH certificate CA, static token |
+| `Authorizer` | allow-listed `principal → device` rules in YAML | SQLite permissions with an admin UI, HTTP webhook (with revocation stream) |
+| `Recorder` | asciicast v3 on local disk | S3 / GCS streaming, `none` |
+| `SessionStore` | in-memory | SQLite, Postgres |
+| `Dispatcher` | n/a (`persistent` mode) | MQTT, HTTP webhook, `exec` |
+| `AgentAuthenticator` | Ed25519 device key, challenge–response | mTLS, one-time ticket |
+| `AuditSink` | JSON lines on stderr | HTTP, syslog |
+| `Ownership` | in-memory (single node) | Redis (multi-node) |
+
+Full signatures and a worked example in [docs/plugins.md](/generated/plugins/1-how-a-plugin-is-wired).

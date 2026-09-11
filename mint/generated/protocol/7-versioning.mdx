@@ -1,0 +1,13 @@
+---
+title: "7. Versioning"
+description: "versions in HELLO, one integer chosen in WELCOME."
+mode: wide
+---
+
+`versions` in `HELLO`, one integer chosen in `WELCOME`. Additive changes — a new frame
+type, a new optional JSON field — do not bump it: session-scoped unknowns are ignored and
+unknown JSON fields are dropped. Anything that changes the meaning of an existing frame
+bumps it, and gateways support one version back for a rolling upgrade.
+
+Agents are the slow half of any fleet. Some device will be on `v0` a year after `v2`
+ships, because it was in a box, and the gateway is the side that has to accommodate that.

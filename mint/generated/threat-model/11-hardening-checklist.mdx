@@ -1,0 +1,21 @@
+---
+title: "11. Hardening checklist"
+description: "For anyone actually deploying this:"
+mode: wide
+---
+
+For anyone actually deploying this:
+
+- [ ] `Authenticator: sshca` or `oidc`. Not `authorized_keys`, past a handful of operators.
+- [ ] `recheck_interval` at or below 30 s, and `Authorizer.Watch` implemented.
+- [ ] `allow_unrecorded: false` unless there is a written reason.
+- [ ] `AllowPassthrough: false` on every device that does not specifically need it.
+- [ ] `record_input: false` unless recordings are handled as a credential store.
+- [ ] Recordings encrypted at rest, `replay` granted separately, retention set, reads audited.
+- [ ] `tcp` and `file` allow-lists empty unless used; never a proxy port, never `0.0.0.0`.
+- [ ] Agent pins the gateway certificate.
+- [ ] Device keys in hardware-backed storage where the platform offers it.
+- [ ] Gateway on its own node pool, read-only root filesystem, no shell in the image, no
+      `pprof` listener in production.
+- [ ] Audit shipped off the gateway host, and host access audited separately.
+- [ ] Fuzzing in CI for `pkg/frame` and the `file` profile path handling.

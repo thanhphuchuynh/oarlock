@@ -1,0 +1,64 @@
+---
+title: "2. Frame layout"
+description: "One byte."
+mode: wide
+---
+
+```
+  ┌────────┬──────────────────────────────────────┐
+  │ byte 0 │ bytes 1 … n                          │
+  │  type  │ payload                              │
+  └────────┴──────────────────────────────────────┘
+```
+
+One byte. That is the entire header, on every connection, in both reachability
+modes.
+
+**There is no stream id, because Oarlock does not multiplex.** A connection is
+exactly one of two things:
+
+| connection | carries | who dials it | authenticated by |
+|---|---|---|---|
+| **session connection** | `0x0x` frames — one session's traffic | the agent, or the browser | a single-use ticket in `OPEN` |
+| **control channel** | `0x1x` frames — and no session traffic at all | the agent, in `persistent` mode | the device key (§ 3.1) |
+
+The control channel is the doorbell and nothing more: it exists so the gateway can
+say *dial me for session X*. Session bytes never cross it.
+
+**Why not multiplex** (ADR-024). Multiplexing was specified — a four-byte stream id
+and a `WINDOW` credit frame — and then removed, for a reason worth recording so it
+is not reintroduced by someone who thinks it was an oversight:
+
+- **Adopting a library** (`smux`, `yamux`) means handing it a byte stream. Wrapping
+  a WebSocket as one puts length-prefixed framing back inside the connection, and a
+  length field is precisely what a hostile peer lies about to make a decoder
+  allocate. That is the surface this format exists to remove.
+- **Hand-rolling it** means owning a flow-control protocol, plus the head-of-line
+  problem that makes per-stream credit necessary in the first place: refusing to
+  read a connection in order to slow one stalled session would stall every other
+  session sharing it.
+- **Not multiplexing** costs one TLS handshake per session, against a control
+  channel that is already warm, for sessions the whole design assumes are rare and
+  short. In exchange the stream id goes, `WINDOW` goes, the credit accounting goes,
+  and the two reachability modes converge on one data path — in both, a session is
+  its own connection, and the only difference is how the agent learns to dial.
+
+**Payload encoding.** `DATA`, `DATA_ERR`, `PING` and `PONG` payloads are raw bytes —
+terminal traffic is binary and a JSON envelope would put base64 on the one path
+where volume and latency matter. Every other frame carries compact JSON: they happen
+a handful of times per session and readable beats compact when you are debugging a
+handshake at 2 a.m.
+
+**Limits.** A frame larger than `limits.frame` (default 1 MiB) closes the connection
+with `frame_too_large`. `DATA` frames are bounded well below that by `limits.batch`
+(64 KiB), the ceiling on one coalesced batch — so a `DATA` frame anywhere near the
+protocol ceiling is a bug or an attack, never traffic. The three throughput numbers
+are chosen as one set; see
+[ARCHITECTURE § 9.3](/generated/architecture/9-flow-control-limits-and-profiles#93-limits).
+
+**Unknown types.** Unknown session-scoped types are ignored *on that connection*
+with a logged counter; unknown connection-scoped types close it. Forward
+compatibility for what can be skipped, strictness for what cannot. A frame from the
+wrong family — a session frame arriving up a control channel, a `DIAL` arriving down
+a session connection — closes the connection too: the peer is confused about which
+connection it is holding, and there is no sane per-frame recovery from that.

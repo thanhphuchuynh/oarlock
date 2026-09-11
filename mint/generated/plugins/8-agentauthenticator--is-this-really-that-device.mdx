@@ -1,0 +1,22 @@
+---
+title: "8. `AgentAuthenticator` — is this really that device"
+description: "RedeemTicket must be atomic — a compare-and-delete, not a read then a delete."
+mode: wide
+---
+
+```go
+type AgentAuthenticator interface {
+    // Persistent mode: verify the challenge-response from protocol §3.1.
+    VerifyDeviceKey(ctx context.Context, deviceID string, nonces Nonces, sig []byte) error
+    // Dispatch mode: redeem a one-time ticket, atomically.
+    RedeemTicket(ctx context.Context, ticket string) (*TicketClaims, error)
+}
+```
+
+`RedeemTicket` **must be atomic** — a compare-and-delete, not a read then a delete. A
+ticket that can be redeemed twice is a ticket an attacker can race the real agent for.
+
+| built-in | notes |
+|---|---|
+| `devicekey` (default) | Ed25519, keys from `DeviceRegistry`. |
+| `mtls` | client certificates; moves the whole problem into the TLS layer and skips the in-band handshake. If you already run a device PKI — an MQTT mTLS one, say — this reuses it. |

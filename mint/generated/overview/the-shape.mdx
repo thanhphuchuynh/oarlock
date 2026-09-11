@@ -1,0 +1,42 @@
+---
+title: "The shape"
+description: "An SSH gateway for machines you cannot dial."
+mode: wide
+---
+
+**An SSH gateway for machines you cannot dial.**
+
+Oarlock gives you a real `ssh` prompt on a device sitting behind NAT, on a cellular
+APN, or on a customer's LAN — without putting a listener, a host key, or an open port
+on that device. The gateway is the SSH server. The device only ever dials out.
+
+Because the gateway is the SSH endpoint, it sits in the plaintext: every session can be
+recorded to [asciicast v3](https://docs.asciinema.org/manual/asciicast/v3/) and replayed
+later, and authorisation is checked centrally and **can be revoked mid-session**.
+
+> **Name is a placeholder.** `oarlock` / `oarlockd` / `oarlock-agent` appear throughout;
+> they are one `sed` away from anything else. Decide before the first tag, not after.
+
+---
+
+
+```
+        ┌──────────────┐                                        ┌──────────────┐
+ CLI ──▶│  ssh client  │──── SSH ────┐                          │              │
+        └──────────────┘             │      ┌───────────┐       │   agent      │
+                                     ├─────▶│  oarlockd │──WS──▶│   PTY        │
+        ┌──────────────┐             │      │  records  │ frames│  no listener │
+ UI  ──▶│   browser    │──── WSS ────┘      └───────────┘       │  no host key │
+        └──────────────┘                          ▲             └──────┬───────┘
+                                                  │                    │
+                                            plaintext lives         dials out
+                                            here, on purpose        :443 only
+```
+
+Two operator front doors, one device leg. An operator with a terminal types
+`ssh treadmill-4821@gw.example.org` and uses their own client, their own key, their own
+muscle memory. An operator in a browser gets xterm.js over a WebSocket. Both land on the
+same session, the same recorder, the same authorisation check.
+
+The device leg is always outbound and always framed. **Nothing new listens on the
+internet, and nothing at all listens on the device.**

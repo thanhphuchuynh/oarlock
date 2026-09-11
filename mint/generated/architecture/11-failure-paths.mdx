@@ -1,0 +1,56 @@
+---
+title: "11. Failure paths"
+description: "The UI never infers why a session died."
+mode: wide
+---
+
+The UI never infers why a session died. Each state is rendered from exactly one
+condition, and the mapping is part of the contract — which means it has to live somewhere
+a build can check, not in a table in a document. It lives in **`pkg/condition`**: the
+closed set, with the operator-facing sentence and the next action for each entry.
+
+Both surfaces read it. The SSH front door prints the sentence; the browser component
+renders a screen per condition from a copy generated out of the same table, and CI fails
+when the two diverge. A condition the gateway can emit is therefore a screen the browser
+has, by construction.
+
+**This table is the summary, not the source.** It was the source until E3.S4, and it
+drifted: it listed nine conditions while the planning documents specified eleven screens,
+and the epic's own acceptance criterion named a tenth (`authz_unavailable`) that was in
+neither. Worse, three distinct conditions shared the wire code `device_offline` with the
+distinguishing sentence in `ERROR`'s `message` — a field the protocol says is for humans
+and is never parsed, so a browser could render one screen for all three or break the
+contract to tell them apart. They now have their own codes.
+
+| condition | detected | recorded as | what the operator is told |
+|---|---|---|---|
+| `device_not_connected` | hub lookup, before dispatch (`persistent`) | `rejected` | "This device isn't connected." |
+| `device_on_another_node` | ownership lookup, after the hub misses (`persistent`) | `rejected` | "This device is connected to a different gateway node." Told apart from the row above because they send somebody to different places: one to a machine, one to a deployment. |
+| `device_unreachable` | `Dispatcher.Wake` reported the device is not reachable | `rejected` | "This device isn't reachable right now." |
+| `device_offline` | `answer_deadline`, 30 s (`dispatch`) | `closed` / `device_offline` | "The agent didn't answer." |
+| `doorbell_failed` | `Dispatcher.Wake` returned an error | `rejected` | "Can't reach the device right now" — *not* "device offline". A broken doorbell is our fault, and saying "offline" sends someone to look at hardware. |
+| `no_wake_method` | dispatch-mode device, no `Dispatcher` configured | `rejected` | A deployment mistake, reported as ours. |
+| `not_authorized` | `Authorizer` at open | `403`, no session row | "You don't have shell access to this device." |
+| `revoked` | re-check or `Watch` | `closed` / `revoked` | "Your access was revoked." |
+| `authz_unavailable` | `Authorizer` unreachable for `authz.grace` re-checks | `closed` / `authz_unavailable` | "We couldn't confirm your access… your access hasn't changed." Never a revocation: the two send somebody to different places. |
+| `policy_denied` | policy, at open | `rejected` / `policy_denied` | "Unrecorded sessions aren't allowed here." |
+| `recorder_failed` | the spool ran out (§ 8.1) | `closed` / `recorder_failed` | The session stopped rather than continue unrecorded. |
+| `session_limit`, `already_attached` | the store, and the pump's operator port | `409`, or refused at attach | The device or the session already has somebody on it. |
+| operator socket dropped | gateway; session untouched | stays `attached` | "Connection lost, reconnecting…" then scrollback (§ 5.3 of the protocol) — deliberately *not* a failure screen |
+| `idle_timeout`, `max_duration` | gateway timers | `closed` | Why the slot was released, and that a new session is fine |
+| `admin_kill` | `DELETE /api/sessions/\{id\}` | `closed` / `admin_kill` | "An administrator ended this session… not by a failure." |
+| normal end | either end closes | `closed` / `operator_close` \| `device_close` | "Session ended" + recording link |
+
+**Audience.** The wire's closed set also contains conditions no operator can act on — a
+malformed frame, a version mismatch, a ticket used twice. Giving each its own screen would
+be writing eight ways to say "this is a bug in the application you are using", so they are
+marked `Integrator` and share one screen that says exactly that, with the code and the
+correlation id shown small and labelled for support. The distinction is the point: an
+operator-facing condition tells somebody what to do next, and an integrator-facing one
+tells them it is not their fault.
+
+**One thing § 11 promises that is not built yet.** The idle timer's screen explains why a
+session closed, but the *countdown* before it closes — "closing in N seconds", a warning
+rather than a surprise — needs a frame that carries it, and no frame does. The screen is
+honest about what happened; the warning ahead of it is outstanding work, not a
+misdescription of what exists.

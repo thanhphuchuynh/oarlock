@@ -1,0 +1,27 @@
+---
+title: "2. Trust boundaries"
+mode: wide
+---
+
+```
+ operator ──┬── SSH / TLS ──▶ ┃ oarlockd ┃ ──── TLS ────▶ agent ──▶ PTY
+ browser ──┘                  ┃          ┃
+                              ┃  FULLY   ┃
+                              ┃ TRUSTED  ┃
+                              ┗━━━━━━━━━━┛
+                                   │
+                    ┌──────────────┼───────────────┐
+                    ▼              ▼               ▼
+              Authenticator   Recorder        Dispatcher
+              Authorizer      SessionStore    Ownership
+              (trusted, in-process, but network-adjacent)
+```
+
+| actor | trusted with |
+|---|---|
+| **Operator** | Nothing until authenticated, then exactly the actions `Authorizer` allows on the devices it names. |
+| **Agent** | Its own device only. It cannot open a session, cannot address another device, and cannot enumerate anything. It is a target, not a participant. |
+| **Gateway** | Everything. See §4. |
+| **Plugins** | Whatever they need. They are compiled in and run in-process; a hostile plugin is a hostile gateway. |
+| **Recording store** | Confidentiality and integrity of every past session. Frequently under-protected relative to what it holds. |
+| **Doorbell** (`dispatch`) | Availability of session setup, and it sees ticket material in transit. |

@@ -1,0 +1,78 @@
+---
+title: "5. Opening a session"
+description: "The operator can arrive before the device does, always."
+mode: wide
+---
+
+<a id="51-persistent-mode-mode-c-from-a-cli"></a>
+### 5.1 `persistent` mode, mode C, from a CLI
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O as ssh client
+    participant G as oarlockd
+    participant P as Authorizer
+    participant A as agent
+    Note over A,G: WSS held open since boot; hub knows treadmill-4821
+    O->>G: SSH transport + publickey auth
+    G->>P: Authenticate(principal)
+    G->>P: Authorize(principal, treadmill-4821, shell)
+    P-->>G: allow
+    G->>G: SessionStore.Create -> sess_01J8Z...
+    G->>A: DIAL(session, ticket, url, profile shell, pty 132x38)
+    A->>G: WSS connect + OPEN(ticket)
+    A->>A: forkpty
+    A-->>G: READY(stream 3)
+    G->>G: Recorder.Open -> asciicast header
+    G-->>O: banner + first prompt
+    loop while attached
+        O->>G: DATA (keystrokes)
+        G->>A: DATA
+        A-->>G: DATA (output, coalesced <=25 ms)
+        G-->>O: DATA
+        G->>G: tee to recorder
+    end
+```
+
+<a id="52-dispatch-mode"></a>
+### 5.2 `dispatch` mode
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O as operator
+    participant G as oarlockd
+    participant D as Dispatcher
+    participant A as agent
+    O->>G: connect + authenticate + authorize
+    G->>G: mint device ticket (32 random bytes, TTL 60 s, single use)
+    G->>D: Wake(treadmill-4821, ticket)
+    D-->>A: doorbell
+    Note over G,O: operator waits - this is a distinct wait from "authenticating"
+    A->>G: WSS connect
+    A->>G: OPEN(ticket, profile, pty, agent version)
+    G->>G: ticket redeemed atomically; a second use is refused
+    G->>G: pair(operator, agent)
+    G-->>A: READY
+    G-->>O: READY + banner
+    Note over G,A: if no OPEN lands within answer_deadline (30 s): session closed, reason device_offline
+```
+
+The operator can arrive before the device does, always. The gateway holds the first
+arrival and pairs on the second, and the UI must show *waking the agent* and *opening the
+tunnel* as two separate lines — they are genuinely separate waits and either can be the
+one that stalls.
+
+<a id="53-tickets"></a>
+### 5.3 Tickets
+
+Only `dispatch` mode and the browser leg use tickets. Both are the same primitive:
+
+- 32 bytes from `crypto/rand`, base64url, 43 characters.
+- Single use. Redemption is an atomic compare-and-delete; the second attempt fails.
+- TTL 60 s, and the TTL is a *deadline for connecting*, not a session lifetime.
+- Carried in the `OPEN` frame body, **never in the URL** — a query string ends up in
+  ingress logs, load-balancer logs, and browser history.
+- Scoped to one device, one profile, and one principal. A ticket is not a credential for
+  the gateway; it is a credential for exactly one pending session.

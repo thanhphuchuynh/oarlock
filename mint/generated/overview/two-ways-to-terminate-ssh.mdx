@@ -1,0 +1,20 @@
+---
+title: "Two ways to terminate SSH"
+description: "Mode C — gateway-terminated (default)."
+mode: wide
+---
+
+**Mode C — gateway-terminated (default).** The gateway speaks SSH to the operator and
+framed WebSocket to the agent, which runs a PTY. The gateway sees plaintext, so it can
+record, rate-limit, and inject a policy banner. This is what Teleport does, and it is the
+only shape that gives you a browser terminal *and* a real `ssh` client *and* a recording.
+
+**Mode A — passthrough (opt-in, per device).** The gateway becomes a blind pipe and raw
+SSH is tunneled to a `sshd` the device already runs. End-to-end encrypted; the gateway
+cannot read a byte. You get `scp`, `sftp` and `ssh -L` free — and you get **no recording**,
+no per-command audit, and a much coarser failure story, because it is all ciphertext.
+
+Passthrough is off by default and refused unless a device is explicitly flagged for it and
+the policy sets `allow_unrecorded: true`. Sessions that run this way are written to the
+session log with `recording_state: not_recorded`, so an unrecorded session is a fact you
+can query for, never an absence you have to notice.

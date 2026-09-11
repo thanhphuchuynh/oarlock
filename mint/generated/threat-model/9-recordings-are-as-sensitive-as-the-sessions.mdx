@@ -1,0 +1,24 @@
+---
+title: "9. Recordings are as sensitive as the sessions"
+description: "A recording is a durable copy of a privileged session, read when nobody is watching."
+mode: wide
+---
+
+A recording is a durable copy of a privileged session, read when nobody is watching. It is
+routinely the least-protected asset in a deployment like this, so:
+
+- **`replay` is its own action.** Being able to open a shell is not being able to read what
+  someone else did in one.
+- **Encrypt at rest**, and prefer a store that can enforce object-level access rather than
+  one bucket everyone can list.
+- **Set a retention period and mean it.** Recordings you have no plan for are liability
+  with storage costs.
+- **`record_input` is off by default** because keystroke capture records what is typed into
+  a password prompt — echo is suppressed on the device, so the gateway sees the characters
+  regardless of what the screen showed. Turning it on makes recordings a credential store.
+- **Audit reads.** `AuditSink` gets a `replay` event with principal, session and time. An
+  unusual pattern of recording access is a signal worth having.
+- **Consider who else is in the recording.** Sessions capture file contents, customer data,
+  and in some jurisdictions the operator's own keystrokes are personal data with its own
+  legal weight. That is a question for whoever owns privacy at your organisation, and it is
+  better asked before the first recording than after a request to produce them.

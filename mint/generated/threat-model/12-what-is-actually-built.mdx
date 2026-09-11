@@ -1,0 +1,104 @@
+---
+title: "12. What is actually built"
+description: "The first version of this document ended with \"nothing is written yet\"."
+mode: wide
+---
+
+The first version of this document ended with "nothing is written yet". That stopped being
+true, and a threat model that understates what exists is worse than one that overstates it:
+a reader who cannot tell which rows are real cannot tell which rows are **not**.
+
+So this section is the status of everything above. It is a self-review — code read by
+somebody who also wrote some of it, not an independent audit — and the statuses mean:
+
+- **tested** — implemented, and there is a test that fails when the guarantee is removed.
+- **built** — implemented and read, with no test pinning the specific property.
+- **not built** — described above, absent from the code. These are the ones that matter.
+
+| § | mitigation | status | where |
+|---|---|---|---|
+| 5 | Operator authentication by key or OIDC | tested | `internal/auth/authorizedkeys`, `internal/auth/oidc` |
+| 5 | JWT algorithm allow-list bound to the key kind, and a `kid`-flood limiter | tested | `internal/auth/oidc/verify.go`, `jwks.go` |
+| 5 | `sshca` short-lived certificates | tested | `internal/auth/sshca` — expiry becomes `Principal.Expiry`, so a session cannot outlive the certificate |
+| 5 | Per-action, per-device authorisation | tested | `internal/authz`, `pkg/plugin/authz.go` |
+| 5 | Per-target authorisation for `tcp`, `file:*`, `exec` | tested | `plugin.Target`; `rules` and `sqlite` backends |
+| 5 | Re-check every 30 s, `Watch` as the optimisation | tested | `internal/authz/supervisor.go` |
+| 5 | Re-checks replay the target the session opened with | tested | `internal/authz/target_test.go` |
+| 5 | An outage is refused as `authz_unavailable`, never `revoked` | tested | `internal/authz`, and `plugintest` fails a backend that gets it wrong |
+| 5 | Tickets single-use, 60 s, scoped, compare-and-delete | tested | `internal/ticket` |
+| 5 | Pre-authentication budget and connection ceiling on the SSH door | tested | `internal/sshsrv/preauth.go` |
+| 5 | Per-client connection rate limit on the SSH door | tested | `internal/sshsrv/ratelimit.go` — keyed by IPv4 address or IPv6 /64 |
+| 5 | Per-IP rate limit on the HTTP/API surface | tested | `internal/apisrv` — and keyed correctly for IPv6, which it was not |
+| 6 | Connection rate limit on the WebSocket legs | tested | `internal/ratelimit` — one budget across `/ws/control`, `/ws/session` and `/ws/attach`, refused before the upgrade |
+| 5 | Delegated authority needs a signed assertion | built | `internal/auth/delegated` |
+| 5 | Audit of open, close, deny and revocation | built | `plugin.AuditSink` |
+| 6 | Ed25519 challenge-response, key generated on-device | tested | `internal/handshake` |
+| 6 | Signing input length-prefixed and domain-separated | tested | `handshake.SigningInput` |
+| 6 | Gateway certificate pinning, additive, over the SPKI | built | `pkg/transport/websocket` |
+| 6 | Channel binding on the agent handshake | tested | `internal/handshake` v1 — a simulated relay with two channels is refused |
+| 6 | No allocation from an attacker-controlled length | tested, fuzzed in CI | `pkg/frame` — there is no length field to lie about |
+| 6 | Terrapin: strict key exchange | tested | the `x/crypto` floor is asserted in CI |
+| 6 | `tcp` confined to device loopback, per-port allow-list on the device | tested | `internal/sshsrv/tcpip.go`, `agent/tcp.go` |
+| 6 | `file` confined by `os.Root`, no TOCTOU window | tested, fuzzed in CI | `agent/file.go` |
+| 6 | `exec` allow-listed argv, no shell interpretation | built | `agent/exec.go` |
+| 6 | Escape sequences escaped before reaching a log or an audit event | tested | slog's TextHandler quotes and the audit sink is JSONL; `internal/sshsrv/safetext_test.go` pins both |
+| 6 | The gateway's own terminal chrome cannot be forged | tested | `internal/sshsrv/safetext.go` — checking the row above found this one was not true |
+| 6 | `close_reason` is enforced against the closed set it is specified as | tested | `pkg/condition.IsCloseReason`, applied in `internal/pump` to both peers |
+| 9 | `replay` is its own action | built | the action set is closed and checked |
+| 4 | Mode A needs two keys, a grant and a disclosure said twice | tested | `internal/sshsrv/passthrough.go` — `policy.allow_unrecorded` and `devices[].allow_passthrough` are both required, and were both dead configuration until this landed |
+| 9 | Recordings signed and hash-chained | built | `internal/record` |
+| 10 | Frame and batch ceilings, coalescing, backpressure | tested | `internal/pump`, `pkg/frame` |
+| 10 | `sessions_per_device` by unique index, not check-then-act | tested | `internal/sessions` |
+| 10 | Forwarded connections capped apart, never claiming the device slot | tested | `sessions.HoldsDevice` |
+| 10 | Handshake budget on the WebSocket legs | built | `internal/handshake` (5 s) |
+| 11 | The boot gate refuses dangerous configurations rather than warning | tested | `internal/safety` |
+
+<a id="gaps-recorded-here-rather-than-discovered-later"></a>
+### Gaps, recorded here rather than discovered later
+
+1. **Channel binding is used by default and required only where configured.** v1 exists
+   and a relay is refused when both ends run it. But the version is chosen by the gateway,
+   so nothing cryptographic prevents a downgrade to v0 — a v0 handshake has nothing to bind
+   with, which makes refusing one a policy rather than a verification. Both ends default to
+   *off* on purpose: requiring binding means refusing to connect where it is unavailable,
+   and a fleet in the field that will not reconnect needs physical access. So a deployment
+   that has not set `listen.require_channel_binding` and `require_channel_binding` on its
+   agents is downgradeable, and the boot gate says so in production.
+2. **`authorized_keys` as the default authenticator** is the wrong default for anything
+   past a lab, and it is the default because it needs no dependencies. The README and this
+   document both say so; a warning at boot would say it louder.
+3. **The `sshca` backend is single-node and trusts whatever the CA signs.** It now
+   exists, and two things about it are worth knowing before relying on it. Revocation
+   inside a certificate's lifetime needs the serial list, which is a file pushed to every
+   replica — the same weakness `authorized_keys` has, which is why the expiry is the
+   mechanism and the list is the exception. And the gateway checks that the CA signed;
+   whether the CA *should have* is the CA's problem, so a compromised CA is a compromised
+   fleet until its key is removed from `auth.ca_keys`.
+4. **The device writes half the policy for `tcp`, `file` and `exec`.** The gateway can now
+   narrow to a port, a path or an argv, but the device's own allow-list is what holds when
+   the gateway is lying — and changing that list is a fleet push, not a policy edit. Both
+   gates are deliberate (§6); the asymmetry in how fast each can be changed is the part
+   worth knowing before an incident.
+5. **A backend that ignores `Target` grants every target**, and forgetting to read it is
+   not a compile error. The widening direction is the quiet one. Review backends for it.
+6. **The SSH rate limit counts connections, not authentication attempts**, at six tries
+   each, and does nothing about an attempt spread across many sources. It makes a single
+   source useless, which is all a per-client limit can honestly claim.
+7. **Two rate limits in this codebase key IPv6 differently.** `internal/ratelimit` groups
+   an IPv6 client by its /64, because a per-address counter is defeated by rotating the
+   low half; `internal/apisrv` keys per address, and a test there asserts that on the
+   reasoning that a shared bucket lets one caller spend a bystander's. Both arguments are
+   real, and they point opposite ways on the door where the limit exists to bound *token
+   guessing*. The API surface is the one that is guessable, so it is the one where the
+   weaker key matters most. Unresolved.
+8. **All three rate limits are per node and in memory.** A gateway behind a load balancer
+   with N replicas gives an attacker N times the budget, and a restart clears every
+   counter. Shared state would fix it and would put a dependency in the path of accepting
+   a connection, which is its own risk. Not attempted.
+9. **The `close_reason` set is enforced at the pump and nowhere else.** A future writer
+   that puts a reason in the ledger without going through it can still invent one; the
+   check belongs to `pkg/condition` and is one call, but nothing makes calling it
+   compulsory. The same is true of `safeText`: it is applied at every site that exists
+   today, and a new line of chrome that forgets it is a lint nobody runs.
+10. **None of this has been reviewed by anyone who did not write it.** The statuses above
+   say what the code does, not that the code is right.

@@ -1,0 +1,113 @@
+---
+title: "8. Recording"
+description: "Recorder is handed a session and returns a writer."
+mode: wide
+---
+
+`Recorder` is handed a session and returns a writer. The default implementation streams
+[asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/) — a JSON header line
+followed by one `[time, "o", data]` line per output chunk, flushed as it goes.
+
+Streaming rather than buffering is deliberate: **a gateway killed mid-session must still
+leave a playable file.** An asciicast truncated at any line boundary plays perfectly up to
+that point, which is a property worth more than a tidy footer.
+
+**Detection is not prevention.** The chain and the signature mean an altered
+recording can be *shown* to be altered. They do not stop the alteration — only storage
+does, and only if it is configured to. Whatever the store can enforce is recorded in
+the manifest and signed, so the guarantee is provenance rather than folklore. See
+[plugins § 4.2](/generated/plugins/4-recorder--the-artefact#42-storage-immutability-and-why-the-chain-is-not-enough).
+
+<a id="81-what-happens-when-the-recorder-fails"></a>
+### 8.1 What happens when the recorder fails
+
+A session whose recording cannot be written does not stay open indefinitely — an audit
+trail with silent holes is one nobody can rely on. But "the recorder returned an error"
+must not mean "every session dies", because the recorder's backend is object storage over
+a network, and object storage has bad minutes.
+
+So there is a spool between the pump and the `Recorder`:
+
+| | default | behaviour |
+|---|---|---|
+| `recorder.spool_bytes` | 64 MiB per session | writes land here first and drain to the backend |
+| `recorder.flush_deadline` | 60 s | how long a backend may be failing before the session closes, measured from when it *started* failing — a store that briefly succeeds does not reset the clock indefinitely |
+| on either limit | — | session closed with `recorder_failed`, and the unflushed remainder dumped to `recorder.spool_dir` as `<session>.offset-<n>.castfragment` |
+
+**The fragment carries the byte offset it belongs at**, which is what makes recovery
+mechanical rather than archaeological: append it to whatever reached the store at exactly
+that position and the hash chain verifies again. Without the offset it is a pile of lines
+somebody has to guess the position of.
+
+**There is no buffer above the spool.** An earlier version put a `bufio.Writer` between the
+encoder and the spool, and it was a bug: an event's bytes could be counted into the hash
+chain while still sitting in that buffer, so when the spool gave up the manifest claimed one
+more event than the file contained. Off by exactly one, only under failure.
+
+Inside those bounds a failing backend is invisible to the operator and produces an
+`recorder.degraded` audit event. Outside them the session closes and the partial recording
+is still on disk, which is the point of streaming in the first place.
+
+`Recorder: none` remains a deliberate, configured choice. A *failing* recorder is not, and
+the difference is what the spool exists to preserve.
+
+- Recorded: device→operator output, and operator→device input if
+  `record_input: true` (off by default — see below).
+- Not recorded: the `tcp` and `file` profiles (not terminal-shaped), and every mode A
+  session (ciphertext).
+- Finalised on close with the exit code and `close_reason` in a sidecar JSON.
+- Replay is authorised separately (`replay` action). A recording is a *more* sensitive
+  artefact than a live session: it is durable, greppable, and nobody is watching it being
+  read.
+
+**`record_input` is off by default, and this is not laziness.** Keystroke capture records
+whatever an operator types into a `sudo` prompt or a `mysql -p` prompt. Terminal echo is
+suppressed on the *device*, so the gateway sees the characters regardless of what the
+screen shows. If you turn it on, your recordings are a credential store and must be
+treated as one.
+
+Output-only recording still shows most commands, because a line-mode shell echoes them. Be
+precise about what it loses: **anything in raw mode** — `vi`, `less`, a TUI — leaves only the
+rendered screen, not the keys that drove it, and anything typed with echo suppressed does not
+appear at all. Output-only is a defensible default, not a complete record.
+
+<a id="82-record_input-is-a-policy-not-a-preference"></a>
+### 8.2 `record_input` is a policy, not a preference
+
+Two compliance regimes point opposite ways on this single setting:
+
+- **PCI DSS 4.0.1** expects privileged session recording that captures administrator
+  keystrokes in a tamper-evident log.
+- **GDPR and EU employment law** treat continuous keystroke logging as effectively
+  prohibited, require a DPIA before systematic monitoring is deployed, and give works
+  councils co-determination rights in several member states.
+
+So it cannot be one global boolean. `record_input` resolves per session from a selector
+policy, and the selector matches **both** sides of the session, because the two regimes
+attach to different parties:
+
+| regime attaches to | matched on | why |
+|---|---|---|
+| employment and privacy law | the **operator's** attributes — `Principal.Attrs`, groups | keystroke capture is monitoring of *that employee*, governed where they work |
+| PCI and equivalent scope | the **device's** tags | the obligation follows the cardholder-data environment the device sits in |
+
+```yaml
+policy:
+  record_input:
+    default: false
+    rules:
+      - when: { device_tags: { pci_scope: "true" } }
+        value: true
+      - when: { principal_groups: ["eu-staff"] }
+        value: false
+        authority: employment-law   # marks this rule non-overridable
+```
+
+**Conflicts are refused, not silently resolved.** If a device requires capture and the
+operator's jurisdiction forbids it, the session does not open — it is rejected with
+`policy_conflict`, and the audit event names both rules. The alternative is a gateway that
+quietly picks one regime to violate, and picks it differently depending on rule ordering.
+
+Note what this deliberately does **not** introduce: any tenancy concept. Selectors match
+attributes that already exist — principal attributes from the `Authenticator`, device tags
+from the `DeviceRegistry` — which is the same mechanism the `rules` authorizer already uses.

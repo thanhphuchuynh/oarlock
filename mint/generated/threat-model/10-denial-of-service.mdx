@@ -1,0 +1,19 @@
+---
+title: "10. Denial of service"
+mode: wide
+---
+
+| threat | mitigation |
+|---|---|
+| A device flooding output | 25 ms coalescing, `limits.batch` (64 KiB per frame), `limits.rate` (256 KiB/s sustained, 1 MiB burst), and `shell` backpressures rather than buffering. Memory is bounded by the ring buffer and socket buffers. |
+| Recorder backend failure killing every session | A bounded spool (`recorder.spool_bytes`, `recorder.flush_deadline`) absorbs a failing backend; only exhaustion closes the session, and the partial recording survives on disk. |
+| Authz backend failure killing every session | `authz.grace` re-checks before closing, and the close reason says `authz_unavailable` rather than `revoked`. |
+| One session stalling another on the same connection | **Not possible:** a connection carries one session (ADR-024), so socket backpressure slows exactly the session that is not keeping up. This is what removing multiplexing bought — there is no head-of-line class to defend against. |
+| An operator opening many sessions | `sessions_per_principal`, enforced atomically in `SessionStore`. |
+| Many sessions per device | `sessions_per_device` (default 1), enforced by a unique index, not a check-then-act. |
+| Unauthenticated connection flood on `/ws/control` or `/ws/session` | 5 s handshake budget; a per-client connection rate limit (default 120/min, shared across all three `/ws/*` doors, keyed by IPv4 address or IPv6 /64) applied before the upgrade; and the handshake does no allocation on behalf of an unauthenticated peer beyond a fixed-size buffer. Neither door can be *guessed* at — Ed25519 challenge-response and a 32-byte random ticket — so the limit bounds work rather than attempts. |
+| Idle sessions accumulating | `limits.idle` (5 min) and `limits.max_duration` (4 h). |
+| A malformed length forcing an allocation | There is no length field. The WebSocket message boundary is the frame boundary, and messages over `limits.frame` are rejected by the transport. |
+| Thundering-herd reconnect after a restart (`persistent`) | Jittered backoff in the agent, and `GOAWAY` carries a per-agent `reconnect_after_ms` during a drain. |
+| A plugin hanging | Every plugin call has a context deadline. `AuditSink.Emit` cannot fail or block by contract, so audit can never become the lever. |
+| The doorbell being down (`dispatch`) | Sessions cannot open. Reported as `doorbell_failed`, not `device_offline`, so on-call looks at the broker rather than at hardware. |

@@ -1,0 +1,226 @@
+---
+title: "2. `Authenticator` — who is this operator"
+description: "The SSH *user* is the device id, not the operator: ssh treadmill-4821@gw."
+mode: wide
+---
+
+```go
+type Authenticator interface {
+    // AuthPublicKey is called during SSH publickey auth. Returning a nil error
+    // accepts the key and binds the connection to the returned principal.
+    AuthPublicKey(ctx context.Context, user string, key ssh.PublicKey) (*Principal, error)
+
+    // AuthDelegated verifies that `service` may act for the subject named in a signed
+    // assertion, and returns the SUBJECT's principal. The assertion is a token the
+    // subject's own login produced — never a bare identifier in a header. Returning
+    // ErrUnsupported disables delegated access, which refuses every On-Behalf-Of call.
+    AuthDelegated(ctx context.Context, service *Principal, assertion string) (*Principal, error)
+
+    // AuthInteractive backs keyboard-interactive: an OIDC device-code flow, a TOTP
+    // prompt, anything conversational. Nil means "not supported by this backend".
+    AuthInteractive(ctx context.Context, user string, c Challenger) (*Principal, error)
+
+    // AuthHTTP authenticates the browser and API surface: a session cookie, a bearer
+    // token, an OIDC id_token.
+    AuthHTTP(ctx context.Context, r *http.Request) (*Principal, error)
+}
+
+type Principal struct {
+    ID     string            // stable, unique, and what gets recorded — never the SSH user
+    Email  string
+    Groups []string
+    Attrs  map[string]string // opaque, passed to Authorizer
+    Expiry time.Time         // zero means "no expiry known"; drives the re-check floor
+}
+```
+
+The SSH *user* is the **device id**, not the operator: `ssh treadmill-4821@gw`. The
+operator's identity comes from their key or their token. This is the one piece of SSH
+convention Oarlock breaks, and it earns it — an operator connects to a fleet of thousands
+of devices with one set of credentials, so the addressable thing in the connection string
+has to be the device.
+
+`Expiry` is worth setting. It puts a ceiling on how long a session can outlive the
+credential that opened it, independent of the re-check interval.
+
+| built-in | notes |
+|---|---|
+| `authorized_keys` (default) | one file, `oarlock` extension comments carry the principal id. Fine for a handful of operators; revocation means editing a file on every replica. |
+| `oidc` | device-code flow over keyboard-interactive for CLI, standard code flow for the browser. The one most people should use. |
+| `sshca` | trust one CA, accept short-lived user certificates, read the principal from the cert. No per-operator state on the gateway at all, and the certificate's expiry becomes the session's ceiling. Set `auth.ca_keys`. |
+| `static` | tokens in config. For tests and CI. Refuses to start if `env != dev`. |
+
+**`sshca` is the recommendation at any real size.** One key to trust, certificates that
+expire on their own, and revocation becomes "stop issuing" rather than a push to every
+replica. It is the one idea worth importing from the mode-A world without importing mode A.
+
+Three things about the implementation are worth knowing before you configure it.
+
+The **SSH username is the device id**, so it is not the certificate principal — which is
+the opposite of every other SSH CA integration, and the reason this backend drives
+`CheckCert` itself instead of using `CertChecker.Authenticate`. The identity comes from
+`valid_principals` (the first entry, or the key id with `principal_from: key_id`), and
+*all* the principals become groups, because in a CA deployment principals are roles and a
+rule that can match `oncall` is worth having.
+
+A certificate that **never expires is refused**, and one issued for longer than
+`auth.max_lifetime` (24h by default) is too. A CA that can mint an eternal certificate is
+an `authorized_keys` file with extra steps, and this backend's whole claim is the expiry.
+
+**`source-address` is enforced here**, not by x/crypto. x/crypto applies that critical
+option from the `Permissions` its own callback returns, and this gateway returns a
+principal instead — so without an explicit check a certificate restricted to one office
+would work from anywhere. Where the surface did not record a peer address, such a
+certificate is refused rather than honoured unchecked.
+
+<a id="20-the-log-action"></a>
+### 2.0 The `log` action
+
+`log` is its own action and carries a target: `Target.Log` is the logical source name, so a
+grant can name `agent` without naming `messages`. Worth separating, because one of a
+device's logs is usually the one recording what everybody else did.
+
+The name is not a path. The device publishes a map of name to file and the gateway only
+ever sees the name, so an authorisation rule written once applies to a fleet whose members
+keep the same log in different places — and a backend cannot be tricked into approving a
+path it did not expect, because it never sees one.
+
+<a id="20a-mode-a-and-the-passthrough-action"></a>
+### 2.0a Mode A and the `passthrough` action
+
+`passthrough` is an action like any other, and a grant for it names a port the way a `tcp`
+grant does — so "may open an unrecorded session on this device" is a distinct decision from
+"may open a shell". It is also not sufficient on its own: the deployment must set
+`policy.allow_unrecorded` and the device must carry `allow_passthrough`, and both are
+checked before the authorizer is consulted at all. Two keys, because the person who
+administers a fleet and the person who decides whether the deployment permits unrecorded
+sessions are usually not the same person.
+
+<a id="21-gateway-ssh-host-key"></a>
+### 2.1 Gateway SSH host key
+
+`ssh.host_key` is the gateway's SSH identity, not an operator credential and not a
+recording-signing key. Every replica behind the same operator-facing name must load the
+same private host key, or operators will see a host-key-mismatch warning whenever a load
+balancer moves them. That trains people to ignore the one SSH warning that matters.
+
+Generate it once, put the private key in a secret store, and mount the same bytes at
+`ssh.host_key` on every replica:
+
+```bash
+ssh-keygen -t ed25519 -N "" -f oarlock_host_ed25519 -C oarlock-gateway
+ssh-keygen -y -f oarlock_host_ed25519 > oarlock_host_ed25519.pub
+```
+
+`ssh.generate_host_key: true` is for development only. The boot gate refuses a generated
+host key in production, and startup logs only the path, never the private key material.
+
+Rotation is an operator trust event, so do it like an SSH host-key rotation rather than a
+silent deploy:
+
+1. Generate the replacement key and publish its public half through the same channel your
+   operators use for known-hosts material.
+2. Deploy the replacement private key to every replica while the old key is still the one
+   operators know.
+3. Drain replicas and restart them as one change window, so all replicas present the same
+   new key.
+4. Remove the old public key from managed `known_hosts` after the window.
+
+Do not reuse the recording signing key here. The SSH host key is presented to every SSH
+client; the recording key attests to archived bytes. Rotating one must not force rotating
+the other.
+
+<a id="21-the-oidc-backend"></a>
+### 2.1 The `oidc` backend
+
+The one that makes production possible. Both surfaces, one identity:
+
+| surface | mechanism |
+|---|---|
+| API and browser | a bearer JWT, verified offline against the provider's published keys |
+| SSH | the device authorization grant (RFC 8628) over keyboard-interactive |
+
+```yaml
+auth:
+  kind: oidc
+  issuer: https://accounts.example.com
+  client_id: oarlock-gateway
+  scopes: [email, groups]
+  subject_claim: email      # what becomes the principal id
+  groups_claim: groups
+```
+
+**SSH with no key and no password.** The gateway prints a URL and a short code; the
+operator approves in a browser that already holds their session and whatever second factor
+the provider enforces. The gateway never sees a password and cannot weaken the MFA, and no
+key material lands on a laptop. Offered only when the backend implements the optional
+`plugin.InteractiveAuthenticator`, so a key-only deployment does not advertise a method it
+cannot answer.
+
+**The principal id is a policy decision, not a default.** `subject_claim` defaults to
+`email` because the authorisation language is globs over principal ids and people write
+`*@oncall.example.com`, not a list of opaque uuids. The cost is that email is mutable at
+the provider — so a token whose `email_verified` is false is refused outright, since an
+unverified email is a name its owner chose rather than an identity anyone vouches for. Set
+`subject_claim: sub` where immutability matters more than legibility; `sub` and `iss` are
+kept in `Principal.Attrs` either way.
+
+**Only asymmetric algorithms, ever.** `RS256/384/512` and `ES256/384/512`. There is no
+shared secret between a gateway and a provider that could make an HMAC meaningful, so
+accepting `HS*` would only ever be the algorithm-confusion attack succeeding — and the
+verification routine is chosen from the *key's* type, never from the token header, so a
+header claiming one thing over a key of another gets nowhere.
+
+**Key rotation and key revocation are different problems**, and both are handled:
+
+- A token naming a key we have not got triggers one refetch, rate-limited to once every
+  thirty seconds so a flood of invented `kid`s cannot become a flood of requests aimed at
+  the provider. A rotation is therefore picked up within seconds.
+- The cached set is refetched once it is older than `jwks_refresh` (default five minutes),
+  whether or not anything is missing. **This is the bound on how long a key the provider
+  has withdrawn keeps verifying tokens** — without it a retired key works for as long as
+  the process lives. If the provider is unreachable the stale set is served rather than
+  refusing every login, and that is logged loudly, because a key retired during the outage
+  keeps working until it ends.
+
+**Opaque access tokens are refused.** Send the `id_token`. Verifying an opaque token means
+calling `userinfo`, which turns every API request into a second round trip and makes the
+provider's availability a dependency of every list of sessions.
+
+**The browser login** is mounted at `/auth/*` when `auth.redirect_url` is set:
+
+```yaml
+auth:
+  kind: oidc
+  issuer: https://accounts.example.com
+  client_id: oarlock-gateway
+  redirect_url: https://gw.example.com/auth/callback   # registered with the provider
+```
+
+Authorization code with PKCE (S256 only — `plain` makes the challenge equal the verifier,
+which protects against nobody who can read the request). `state` and PKCE are both present
+and do different jobs: PKCE stops a stolen code being spent, `state` stops an attacker
+starting a flow and having somebody else's browser finish it.
+
+`redirect_url` is required rather than derived from the request's `Host`. A provider
+matches it byte for byte, and deriving it from a header would let a proxy — or anyone who
+can set one — choose where an authorization code is delivered. It must be `https` outside
+loopback.
+
+**No session cookie.** The obvious design is a cookie the API accepts, and that is also how
+an API acquires a CSRF surface. Instead the callback sets a one-hop cookie, the console
+exchanges it once at `/auth/token` for the provider's own `id_token`, and the cookie is
+cleared in the same response. From then on the console sends a bearer header like any other
+client and the API has no cookie path at all. The token is the provider's, not one this
+gateway minted: a self-signed token would be a second credential system to rotate, revoke
+and get wrong.
+
+**`return_to` accepts only a path on this origin**, matched against an allow-list of
+characters rather than parsed. `url.Parse` reports no host for `/\evil.example.com`, and a
+browser normalises that backslash to a slash — so a parser-based check hands you an open
+redirect on the one endpoint every operator visits.
+
+**Static tokens alongside OIDC are refused at boot.** A long-lived shared secret next to a
+real identity provider is just the easier way in. A key file alongside is *allowed* — for a
+break-glass account, or automation that cannot do a browser flow — but it warns, because
+revoking that operator then means editing a file on every replica as well.

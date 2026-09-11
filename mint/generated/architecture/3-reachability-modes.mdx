@@ -1,0 +1,94 @@
+---
+title: "3. Reachability modes"
+description: "The agent connects once at boot and keeps the channel alive with PING every 30 s."
+mode: wide
+---
+
+<a id="31-persistent--the-agent-holds-a-connection-open"></a>
+### 3.1 `persistent` — the agent holds a connection open
+
+```
+agent ──── WSS control channel, held open ────▶ oarlockd
+                                                 hub: "treadmill-4821" → conn#7
+
+new session:  gateway ──DIAL{ticket, url}──▶ agent      (down the control channel)
+              agent   ──WSS + OPEN{ticket}──▶ gateway   (a fresh connection)
+```
+
+The agent connects once at boot and keeps the channel alive with PING every 30 s. The hub
+holds `device_id → control channel`. Opening a session means sending `DIAL` and waiting for
+the agent to come back on a new connection.
+
+**The control channel carries no session traffic.** It is the doorbell and nothing else,
+which is what makes this mode and `dispatch` converge: in both, a session is its own
+connection authenticated by a single-use ticket, and the only difference is how the
+invitation reached the agent (ADR-024, § 3.3).
+
+The cost is one TLS handshake per session. Against a warm channel, with resumption, for
+sessions the design assumes are rare and short, that buys away the stream id, the credit
+accounting, the head-of-line problem, and a whole second path through the pump.
+
+- **Cost:** one idle socket and ~16 KiB of buffers per device, on the gateway, forever.
+  At 10 000 devices that is real but unremarkable for a Go process; at 500 000 it is a
+  fleet-sized stateful service and you want `dispatch`.
+- **Latency:** one round trip to first byte.
+- **Failure mode:** the gateway restarting drops every agent at once, and they all
+  reconnect together. The agent's backoff is therefore jittered
+  (`base 1 s, ×1.6, cap 60 s, ±25 % jitter`) — without jitter, a rolling restart of two
+  replicas is a self-inflicted thundering herd.
+
+<a id="311-a-held-channel-wins-whatever-the-mode-says"></a>
+### 3.1.1 A held channel wins, whatever the mode says
+
+The mode describes how to reach a device that is **not** connected. A device holding a
+control channel right now is reachable through it, so that is what the gateway uses —
+whatever the registry says its mode is.
+
+This was not the original behaviour, and the original behaviour was wrong in a way a first
+deployment hits immediately. `android` resolves to `dispatch` because the platform
+*resists* a held connection, not because it forbids one; an agent on a desk, or a
+foreground service, or a device on mains power holds one perfectly well. Branching on the
+mode alone meant the gateway refused the session with `no_wake_method` — "no wake-up method
+is configured for this device" — while holding that very device's control channel. It was
+declining to use a connection it already had, because a doorbell it did not need was not
+configured.
+
+The preference is not a commitment. If the channel dies between the check and the send, a
+`dispatch` device falls back to its doorbell; a `persistent` device has none, so that is
+the device being gone. And where the channel does apply it is strictly better: no doorbell
+delivery latency and no external dependency.
+
+<a id="32-dispatch--the-gateway-rings-a-doorbell"></a>
+### 3.2 `dispatch` — the gateway rings a doorbell
+
+```
+oarlockd ── Dispatcher.Wake(device, ticket) ──▶ [ MQTT | webhook | exec ]
+                                                        │
+agent ──── WSS + one-time ticket ─────────────▶ oarlockd
+```
+
+If you already run an always-on channel to every device — an MQTT broker, a push service,
+a polling loop — you already have the expensive part, and the tunnel can be dialed on
+demand. `Dispatcher.Wake` hands the transport a device id and an opaque ticket; the agent
+dials in and spends it.
+
+- **Cost:** nothing at rest. This is strictly cheaper than `persistent` when shells are
+  rare, which for most fleets they are.
+- **Latency:** doorbell delivery + a fresh TLS handshake. Budget 30 s before giving up
+  (`dispatch.answer_deadline`), because a sleeping radio is slow, not broken.
+- **Failure mode:** the doorbell is now a dependency of the shell feature. When MQTT is
+  down, sessions cannot open — and the operator must be told *that*, not "device offline".
+
+<a id="33-what-the-modes-share-which-is-almost-everything"></a>
+### 3.3 What the modes share, which is almost everything
+
+Both modes end in the same place: the agent dials a session connection and presents a
+single-use ticket. `hub.pair()` joins the two ends, `pump()` moves bytes, the recorder tees.
+The mode decides only **how the invitation is delivered** — a `DIAL` frame down a held
+channel, or a `Dispatcher` over MQTT, a webhook or an exec — and both deliver the *same*
+`Invitation` payload, so downstream of arrival there is one code path.
+
+The mode is a property of the *device*, not the gateway, and it defaults from
+`Device.Platform`: `android` resolves to `dispatch` because the platform resists held
+connections, `linux` and `container` resolve to `persistent`. One gateway serves both,
+because a fleet mid-migration is the normal case, not an edge one.

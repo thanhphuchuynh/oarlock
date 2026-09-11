@@ -1,0 +1,43 @@
+---
+title: "2. Components"
+description: "One binary for the gateway, one for the reference agent."
+mode: wide
+---
+
+```
+┌────────────────────────── oarlockd (one binary) ─────────────────────────┐
+│                                                                          │
+│  sshsrv        gliderlabs/ssh front door        :2222                    │
+│    ├─ auth          Authenticator  ──▶ plugin                            │
+│    ├─ authz         Authorizer     ──▶ plugin  (+ Watch for revocation)  │
+│    └─ channels      session, exec, sftp subsystem, direct-tcpip          │
+│                                                                          │
+│  httpsrv       HTTPS                            :8443                    │
+│    ├─ /ws/control   held channel, framed, device key   (persistent only) │
+│    ├─ /ws/session   one per session, framed, ticket    (both modes)      │
+│    ├─ /ws/attach    browser leg,  framed, ticket                         │
+│    ├─ /api/…        sessions, devices, recordings, health                │
+│    └─ /ui           embedded xterm.js + asciinema-player (optional)      │
+│                                                                          │
+│  hub           device → control channel · pair() · pending invitations   │
+│  pump          byte pump · coalesce · per-profile flow control           │
+│  record        Recorder plugin  ──▶ asciicast v2                         │
+│  store         SessionStore plugin · Ownership plugin                    │
+│  dispatch      Dispatcher plugin (dispatch mode only)                    │
+│  audit         AuditSink plugin                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────── oarlock-agent (reference) ─────────────────────────┐
+│  dialer        outbound WSS, backoff, HELLO / challenge–response         │
+│  session       one goroutine per stream                                  │
+│    ├─ shell    forkpty → the platform's shell                            │
+│    ├─ exec     allow-listed argv, no shell interpretation                │
+│    ├─ file     read / write under a configured root                      │
+│    ├─ tcp      dial 127.0.0.1:port from the allow-list                   │
+│    └─ sshpass  dial the device-local sshd  (mode A only)                 │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+One binary for the gateway, one for the reference agent. The gateway is stateless with
+respect to *sessions it does not hold* — everything durable lives behind `SessionStore`
+and `Recorder`, which is what makes a restart survivable and multi-node possible (§10).

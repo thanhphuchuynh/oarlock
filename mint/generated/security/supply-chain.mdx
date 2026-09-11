@@ -1,0 +1,44 @@
+---
+title: "Supply chain"
+description: "make release produces, and every release carries:"
+mode: wide
+---
+
+`make release` produces, and every release carries:
+
+- **an SBOM for each binary** — CycloneDX 1.6 JSON, written as `<binary>.cdx.json` beside
+  it, and read out of the compiled binary rather than guessed from the source tree. Per
+  binary rather than per release, because the binaries are not the same: across the 15
+  `oarlockd` builds there are five distinct dependency sets, from 27 modules on
+  `linux/riscv64` to 31 on darwin, freebsd, openbsd and windows. `oarlock-agent` links 4
+  everywhere except `linux/s390x`, which links 5. One SBOM for the whole release would be
+  wrong for 14 of those 15 gateways and would tell you the agent contains SQLite and MinIO —
+  and a scanner reading it would believe that.
+- **SHA256SUMS** over every artefact — binaries and SBOMs alike.
+- **`SHA256SUMS.minisig`** — an Ed25519 signature over that file, in minisign's format, so
+  you verify it with whatever minisign you already have rather than a tool of ours. One
+  signature covers the release: everything in it is named in the file being signed.
+
+A changelog that marks security fixes as security fixes arrives with the first release,
+so an operator scanning it can tell what they must take.
+
+<a id="verifying-a-download"></a>
+### Verifying a download
+
+```sh
+minisign -V -p oarlock.pub -m SHA256SUMS   # who built it
+sha256sum -c SHA256SUMS                    # that it arrived intact
+```
+
+In that order, and both. Checking the checksums alone proves only that your download matches
+a list — and whoever replaced the binaries could write the list. The signature is the half
+that says where the list came from.
+
+**The public key is not published yet.** No release exists and no key has been generated.
+When one is, it goes *in this file*, not only beside the artefacts: a release directory is
+controlled by exactly the person who would be replacing the artefacts. Until the key appears
+here, treat any signature claiming to be this project's as unverifiable, because it is.
+
+Dependencies are pinned. `golang.org/x/crypto` is held at **≥ 0.17.0 with strict key
+exchange enabled and asserted in CI** — Terrapin (CVE-2023-48795) is a live attack class
+against custom SSH servers, which is exactly what the gateway is.

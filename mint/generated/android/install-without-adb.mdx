@@ -1,0 +1,42 @@
+---
+title: "Install without adb"
+description: "Transfer the APK through the headset browser, cloud storage, MDM, vendor device manager, or a private app store."
+mode: wide
+---
+
+Transfer the APK through the headset browser, cloud storage, MDM, vendor device manager,
+or a private app store. Allow installation from that source when Android asks, then open
+**Oarlock Agent** from the headset's app library.
+
+The app creates an Ed25519 key in its private storage and displays the public half. Add a
+device in the Oarlock admin UI using the same device ID and that public key:
+
+```text
+Platform: Android
+Mode: Dispatch
+Profiles: shell
+```
+
+Set the gateway to a URL the headset can reach, for example:
+
+```text
+wss://gateway.example.com/ws/control
+```
+
+`127.0.0.1` on the headset is the headset, not the gateway. Cleartext `ws://` is enabled
+for local development; production deployments should use `wss://` and configure the
+gateway certificate pin shown by the deployment.
+
+After **Start agent**, the foreground notification owns the control channel. The activity
+may be closed. **Stop** in the notification, **Stop agent** in the app, disabling the
+device in the admin UI, or disconnecting the live agent all terminate the service cleanly.
+
+For the database-backed demo authorizer, initialize the standard grants after starting
+the gateway:
+
+```sh
+make demo-seed-permissions
+```
+
+The **Permissions** tab can then grant `shell` or `exec` to an operator principal for the
+Android device ID without editing `rules.yaml`.

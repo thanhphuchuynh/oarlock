@@ -1,0 +1,28 @@
+---
+title: "Two ways to reach a device"
+description: "Oarlock ships both, because the right answer depends on how many devices you have and whether you already run a message bus."
+mode: wide
+---
+
+Oarlock ships both, because the right answer depends on how many devices you have and
+whether you already run a message bus.
+
+| | `persistent` (default) | `dispatch` |
+|---|---|---|
+| How the agent is reached | it holds one outbound WSS open, and the gateway rings it through that | the gateway rings a doorbell (MQTT, webhook, exec); the agent dials out per session |
+| External dependencies | **none** — two binaries and you are done | whatever the doorbell is |
+| Cost at rest | one idle socket per device, on the gateway | nothing |
+| Session setup latency | one round trip | doorbell delivery + TLS handshake |
+| Best for | tens to low thousands of devices; anyone evaluating Oarlock | large fleets that already have an always-on control channel |
+
+Both converge on the same pairing and pumping code the moment a session opens — the mode
+only decides how the two ends find each other. A session is always its own connection:
+Oarlock does not multiplex, because a connection is either one session or the control
+channel, never several at once.
+
+**A held control channel is used whatever the mode says.** The mode describes how to reach
+a device that is *not* connected, and a device holding a channel right now is reachable
+through it — so a `dispatch` device whose agent happens to be holding one needs no doorbell
+at all. `android` resolves to dispatch because the platform *resists* a held connection, not
+because it forbids one, and an agent running on a desk holds one perfectly well. See
+[ARCHITECTURE.md § Reachability](/generated/architecture/3-reachability-modes).

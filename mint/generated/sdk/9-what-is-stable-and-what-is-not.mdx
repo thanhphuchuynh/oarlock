@@ -1,0 +1,19 @@
+---
+title: "9. What is stable, and what is not"
+description: "Agents are the slow half of any fleet — some device will be a year behind because it was in a box — so the gateway supports one wire version back, and the API"
+mode: wide
+---
+
+| | promise |
+|---|---|
+| `/api/v1` | Additive changes only. New optional fields and new endpoints, never a changed meaning. A `v2` would run beside `v1`, not replace it. |
+| SDK majors | Semver. A breaking change is a major, and the previous major gets six months. |
+| `pkg/frame`, `pkg/plugin` | Public Go API, semver, deprecation before removal. |
+| The wire protocol | **`v0`, unstable.** It will change. Anything speaking it should pin a commit until there is a `v1`. |
+| `internal/…` | No promise at all. Do not import it; that is what `internal` means. |
+| `/metrics`, `/healthz` | Operational surface, not API. Names may change between minors. |
+
+Agents are the slow half of any fleet — some device will be a year behind because it was in
+a box — so the gateway supports one wire version back, and the API supports the previous
+major. Both of those are the *gateway's* problem by design, because it is the side that can
+be upgraded on purpose.

@@ -1,0 +1,273 @@
+---
+title: "4. Frame reference"
+description: "Twenty types."
+mode: wide
+---
+
+Twenty types. `0x0x` travel on a session connection; `0x1x` travel on a control
+channel. Only `DATA` is hot — everything else happens a handful of times per session.
+
+<a id="41-0x01-data--both-directions"></a>
+### 4.1 `0x01 DATA` — both directions
+
+Raw bytes. The stream. Device→operator output is coalesced into ≤25 ms batches; operator
+input is forwarded immediately, because a human is waiting on the echo.
+
+<a id="42-0x02-data_err--device--gateway"></a>
+### 4.2 `0x02 DATA_ERR` — device → gateway
+
+Raw bytes on the error channel. Only the `exec` profile uses it: a PTY merges stderr into
+the terminal by definition, but `exec` needs the separation to map onto SSH extended data
+(`SSH_EXTENDED_DATA_STDERR`) and to give automation a clean stdout.
+
+<a id="43-0x03-open--agent-or-browser--gateway"></a>
+### 4.3 `0x03 OPEN` — agent or browser → gateway
+
+First frame on a session connection, within 5 s of connect or the socket closes.
+
+```json
+{ "ticket": "hK3…43 chars", "device_id": "treadmill-4821",
+  "profile": "shell", "pty": {"cols": 132, "rows": 38, "term": "xterm-256color"},
+  "agent": {"version": "0.1.0", "platform": "android/34", "arch": "arm64"} }
+```
+
+`term` matters more than it looks: a PTY told `TERM=dumb` will not emit the escape
+sequences a browser terminal is built to render, and a PTY told `xterm-256color` when the
+client is not will emit sequences it cannot.
+
+<a id="44-0x04-ready--gateway--both-ends"></a>
+### 4.4 `0x04 READY` — gateway → both ends
+
+```json
+{ "session_id": "sess_01J8Z…", "scrollback_len": 4096,
+  "recording": true, "mode": "gateway", "limits": {"rate": 262144} }
+```
+
+Watchers get their own `READY` with `read_only: true` and `watching` set to the operator
+they are watching, so a client disables input rather than accepting keystrokes it will
+silently drop.
+
+Both ends are present and the pump is live. `recording` and `mode` are here so a client
+can say which it is out loud — a session the gateway cannot read
+(`mode: "passthrough"`, `recording: false`) must be visibly different from one it can.
+They are sent on **every** attach, not only the first: the disclosure is a property of
+the session, not a greeting.
+
+`scrollback_len` is the number of bytes of replay that follow this frame — zero on a
+first attach, and on a reattach the exact size of the snapshot the gateway is about to
+send. It may be smaller than what the device produced while the operator was away, in
+two ways the gateway does not hide: bytes the ring overwrote, and a leading fragment
+skipped because replaying it would have started in the middle of an escape sequence
+(§ 5.3).
+
+<a id="45-0x05-resize--operator--device"></a>
+### 4.5 `0x05 RESIZE` — operator → device
+
+```json
+{ "cols": 132, "rows": 38 }
+```
+
+Sent on every window change, coalesced to at most one per 100 ms — dragging a browser
+window edge generates hundreds of events and the PTY only needs the last. A terminal that
+lies about its size wraps every line wrong, and `vi` draws over itself.
+
+<a id="46-0x06-signal--operator--device"></a>
+### 4.6 `0x06 SIGNAL` — operator → device
+
+```json
+{ "signal": "INT" }
+```
+
+`INT`, `TERM`, `QUIT`, `HUP`, `KILL`, `USR1`, `USR2`, `WINCH`. Interactive `Ctrl-C` is
+*not* this — it is the byte `0x03` inside `DATA`, interpreted by the device's line
+discipline. `SIGNAL` exists for the SSH `signal` channel request and for a browser's
+"stop" button on an `exec` with no PTY to interpret anything.
+
+<a id="47-0x07-exit--device--gateway"></a>
+### 4.7 `0x07 EXIT` — device → gateway
+
+```json
+{ "code": 130, "signal": null }
+```
+
+The process exited. `exec` needs this to mean anything at all; `shell` reports it so the
+recording sidecar and the session row can carry it.
+
+<a id="48-0x08-close--either--either"></a>
+### 4.8 `0x08 CLOSE` — either → either
+
+```json
+{ "reason": "operator_close" }
+```
+
+One of the `close_reason` values in
+[ARCHITECTURE.md § 6](/generated/architecture/6-session-lifecycle). A session connection
+carries one session, so closing the session closes the connection.
+
+<a id="49-0x09-throttle--gateway--operator"></a>
+### 4.9 `0x09 THROTTLE` — gateway → operator
+
+```json
+{ "dropped_bytes": 8192, "profile": "log" }
+```
+
+Sent only for profiles whose policy is drop (`log`, `exec`). **Never sent on a `shell`
+stream**, because `shell` never drops — it backpressures. A `THROTTLE` on a shell stream
+is a bug in the gateway, and a client that receives one should say so loudly rather than
+render a marker into a terminal it will corrupt.
+
+<a id="410-0x0a-error--gateway--either-on-either-kind-of-connection"></a>
+### 4.10 `0x0A ERROR` — gateway → either, **on either kind of connection**
+
+```json
+{ "code": "device_offline", "message": "agent did not answer in 30s", "retryable": false }
+```
+
+`code` is from the closed set in § 6 and is what the UI switches on. `message` is for
+humans and logs and is never parsed.
+
+**`ERROR` is valid on both connection kinds**, and it has to be. It is how a peer
+explains why a connection is about to end, and a control-channel handshake that
+fails has to be able to say why — otherwise a rejected agent learns only that the
+socket closed, and cannot tell `version_unsupported` from `auth_failed`. `PING` and
+`PONG` are exempt for the same reason (§ 4.12); every other type belongs to exactly
+one connection kind.
+
+<a id="411-0x0b-observers--gateway--operator-and-watchers"></a>
+### 4.11 `0x0B OBSERVERS` — gateway → operator and watchers
+
+```json
+{ "observers": [ { "principal": "sam@example.com", "since": "2026-08-21T10:14:02Z" } ] }
+```
+
+Who is watching this session read-only (FR13), sent whenever it changes. **The whole
+list, never a delta**: a client that missed one frame would otherwise show a watcher who
+has left, or miss one who arrived, and be wrong about the single fact this frame exists to
+convey. An empty array means nobody and *is* sent — the indicator has to be able to go
+away, and a session sitting at a prompt produces no output to carry the news.
+
+`principal` is always present. Anonymous observation is not offered at any level: an
+operator is entitled to know *who* is watching, not merely that somebody is.
+
+The initial list also travels in `READY`, so an operator attaching to a session that is
+already watched is told immediately rather than on the next change.
+
+<a id="412-0x10-hello--0x11-challenge--0x12-auth--0x13-welcome"></a>
+### 4.12 `0x10 HELLO` / `0x11 CHALLENGE` / `0x12 AUTH` / `0x13 WELCOME`
+
+The control-channel handshake (§ 3.1).
+
+```json
+// HELLO
+{ "device_id": "treadmill-4821", "versions": [0], "nonce_c": "…",
+  "caps": ["shell", "exec", "log", "file", "tcp"],
+  "agent": {"version": "0.1.0", "platform": "android/34"} }
+
+// WELCOME
+{ "version": 0, "gateway_id": "gw-a",
+  "limits": {"frame": 1048576, "batch": 65536, "rate": 262144, "ping_interval": 30},
+  "resume": {"sessions": [{"session_id": "sess_01J8Z…", "ticket": "…",
+                           "url": "wss://gw-a.example.org/ws/session",
+                           "profile": "shell"}]} }
+```
+
+`versions` is a list and `version` is the single one chosen — the gateway picks the
+highest it shares with the agent. An agent offering no version the gateway knows is
+closed with `version_unsupported`, which is a clearer failure than a mysterious
+parse error six frames later.
+
+`caps` is how a device says what it can actually do. An agent built without a PTY —
+a locked-down build, a platform where `forkpty` is unavailable — omits `shell`, and
+the gateway can then refuse the session at open time with a real reason instead of
+after a round trip.
+
+`resume` is the interesting field: if the agent reconnects while the gateway still
+holds live sessions for it, `WELCOME` carries one invitation per session and the
+agent dials back for each. A reconnecting agent keeps the operator's shell alive —
+which matters, because a device on cellular loses its socket regularly and a shell
+that dies with the radio is a shell nobody trusts with a long command.
+
+<a id="413-0x14-ping--0x15-pong--on-either-kind-of-connection"></a>
+### 4.13 `0x14 PING` / `0x15 PONG` — **on either kind of connection**
+
+8-byte payload: a monotonic timestamp in microseconds, echoed verbatim. Drives the
+latency readout in the UI, holds ingress idle timeouts off, and detects a peer that
+is gone rather than quiet. Three missed pongs (`3 × 30 s`) closes the connection.
+
+Like `ERROR`, these are valid on **both** connection kinds, and for the same
+underlying reason: they are about the connection itself rather than about what it
+carries. A control channel quiet for an hour still has to be known to be alive, and
+so does a session where nobody is typing. Those three — `ERROR`, `PING`, `PONG` —
+are the complete set of frames exempt from the one-kind rule.
+
+<a id="414-0x16-dial--gateway--agent-control-channel-only"></a>
+### 4.14 `0x16 DIAL` — gateway → agent, control channel only
+
+```json
+{ "session_id": "sess_01J8Z…", "ticket": "hK3…",
+  "url": "wss://gw-a.example.org/ws/session",
+  "profile": "shell",
+  "pty": {"cols": 132, "rows": 38, "term": "xterm-256color"},
+  "exec": null, "principal": "admin@mail.com",
+  "expires_at": "2026-08-21T09:15:02Z" }
+```
+
+For a `tcp` session the invitation carries `"tcp": \{"port": 3000\}` instead of `pty` or
+`exec`. A **port, never a host**: the agent dials `127.0.0.1` and nothing else, so a
+gateway cannot name a third party and turn the device into a proxy into the network it
+sits on. The port is matched against the device's own allow-list on arrival, and refused
+with `not_authorized` if it is not on it.
+
+For a `log` session it carries `"log": \{"name": "messages", "follow": true, "lines": 200\}`.
+A **name, never a path.** The device publishes a map of logical name to file and the
+gateway only ever sees the name, so one authorisation rule — "may read the agent log" —
+applies across a fleet whose members keep that log in different places, and a compromised
+gateway cannot turn the profile into an arbitrary file read. A name the device does not
+publish is refused, with the same refusal as a name that does not exist: distinguishing
+them would let the gateway enumerate the device's filesystem one guess at a time.
+
+`lines` is how much history to send before following; zero means the device's default and
+a negative value means none, which is how a script asks for only what happens next.
+
+The target travels here rather than in a request frame, for the same reason `exec` and
+`file` do: the ticket is scoped to a profile *and* to what was authorised, so one session
+is one connection to one port — or one log source — and cannot be repointed after it
+opens.
+
+*Dial me for this session.* This is the entire content of the control channel's
+usefulness, and it is why the channel exists.
+
+`url` names a **specific node**, not a load balancer. That is what lets a multi-node
+deployment work without forwarding a session between replicas: the node the operator
+is waiting on is the node named here, and the agent connects to it directly.
+
+`principal` is passed so the agent can *log* who is on it. It is not an
+authorisation input — the agent trusts the gateway completely and cannot check
+anything itself.
+
+The identical payload is what a `Dispatcher` delivers in `dispatch` mode. One shape,
+two delivery paths, one handler.
+
+<a id="415-0x17-cancel--gateway--agent-control-channel-only"></a>
+### 4.15 `0x17 CANCEL` — gateway → agent, control channel only
+
+```json
+{ "session_id": "sess_01J8Z…", "reason": "operator_gave_up" }
+```
+
+That invitation is dead; do not dial. Without it a device that woke slowly would
+dial for a session nobody is waiting on any more, spend a ticket, and be told to go
+away — which looks like a bug from the device's side and costs a handshake for
+nothing.
+
+<a id="416-0x18-goaway--either-direction"></a>
+### 4.16 `0x18 GOAWAY` — either direction
+
+```json
+{ "reason": "gateway_shutdown", "reconnect_after_ms": 4200 }
+```
+
+`reconnect_after_ms` is jittered per agent by the gateway during a drain. Without
+it, every agent in the fleet reconnects at the same instant and the replacement pod
+dies of the herd — a self-inflicted outage, and the failure mode of `persistent`
+mode that bites hardest at scale.

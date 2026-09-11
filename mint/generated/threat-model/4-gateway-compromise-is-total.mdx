@@ -1,0 +1,27 @@
+---
+title: "4. Gateway compromise is total"
+description: "The gateway reads every keystroke and every byte of output, and can inject its own."
+mode: wide
+---
+
+**The gateway reads every keystroke and every byte of output, and can inject its own.**
+Not a bug, not a mitigation gap — it is the direct cost of the decision that makes
+recording and mid-session revocation possible. An attacker with code execution in
+`oarlockd` can read live sessions, replay recordings, mint tickets, forge authorisation
+decisions, and open a shell on any device in the fleet.
+
+Anyone considering Oarlock should read that paragraph and decide whether they are
+comfortable, before reading anything else. If the answer is no, mode A passthrough (§8) is
+the shape that removes it — at the cost of the recording, and only for CLI operators.
+
+What follows from accepting it:
+
+- The gateway is the most sensitive service in the deployment. Treat it like a KMS, not
+  like an API pod: minimal image, no shell in the container, read-only root filesystem,
+  its own node pool if you have one, its own build and review path.
+- Nothing else should share its process. No sidecar with a debug endpoint, no
+  `pprof` on a listening port in production, no log agent that can read its memory.
+- Every deploy is a supply-chain event. Pin dependencies, review upgrades, and sign the
+  image.
+- Access to the host is access to the fleet. Audit it separately and more loudly than the
+  sessions themselves.

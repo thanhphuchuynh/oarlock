@@ -1,0 +1,18 @@
+---
+title: "Golden signals"
+mode: wide
+---
+
+| metric | type | labels | what it is |
+|---|---|---|---|
+| `oarlock_sessions_opened_total` | counter | `profile`, `surface` | Sessions that reached the point of carrying bytes. **Traffic.** |
+| `oarlock_sessions_closed_total` | counter | `profile`, `reason` | Sessions that ended. `reason` is the closed set from ARCHITECTURE § 6, so `reason!="operator_close"` is the **error** signal. |
+| `oarlock_session_open_duration_seconds` | histogram | `profile`, `mode` | Operator asking → session carrying bytes. **Latency**, and what NFR1 is measured against. |
+| `oarlock_api_requests_total` | counter | `status` | API requests by status *class* — `2xx`, `4xx`, `5xx`. A label per code across every route is cardinality nobody asked for. |
+| `oarlock_connections_refused_total` | counter | `door`, `reason` | Refused before any work was done: rate limits, budgets, ceilings. |
+| `oarlock_sessions_live` | gauge | — | Sessions running on this node. **Saturation.** |
+| `oarlock_agents_connected` | gauge | — | Devices holding a control channel here. |
+| `oarlock_invitations_outstanding` | gauge | — | Invitations sent to a device that has not dialled back. A rising value is devices not answering. |
+| `oarlock_tickets_outstanding` | gauge | — | Minted, unredeemed, unexpired tickets. |
+| `oarlock_recording_spool_bytes` | gauge | — | Recording bytes buffered and not yet written. **The saturation metric with minutes in it.** |
+| `oarlock_audit_events_dropped_total` | counter | — | Audit events dropped because the queue was full. Any non-zero rate means the trail has holes. |

@@ -1,0 +1,27 @@
+---
+title: "5. `AuditSink` — what happened"
+description: "Emit cannot fail by contract."
+mode: wide
+---
+
+```go
+type AuditSink interface {
+    Emit(ctx context.Context, e AuditEvent)
+}
+```
+
+`Emit` cannot fail by contract. Audit must never become the thing that breaks a shell, so
+the built-in sink is an async bounded queue. When the queue is full, events are dropped and
+the drop counter is incremented and logged; silent audit loss is the failure this avoids.
+
+The default sink writes JSON lines to stderr:
+
+```yaml
+audit:
+  kind: stderr   # stderr | none
+  buffer: 1024
+```
+
+Current event kinds include `session.opened`, `session.closed`, `session.rejected`,
+`api.error`, and `observe.issued`. A `policy_conflict` API error carries the conflict text
+that names both matching rules.

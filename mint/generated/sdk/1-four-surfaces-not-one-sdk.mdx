@@ -1,0 +1,28 @@
+---
+title: "1. Four surfaces, not one SDK"
+description: "Most people will not run Oarlock as a product."
+mode: wide
+---
+
+Most people will not run Oarlock as a product. They will bolt a shell onto something they
+already have: an admin console, a support tool, a device-management backend. This document
+is the contract for doing that.
+
+> **Status: design phase.** Nothing here is implemented. Package names and paths are
+> proposals, and the `v0` wire protocol underneath is unstable.
+
+---
+
+
+"Integrate" means four different things depending on which side of the session you are on,
+and they have almost nothing in common.
+
+| surface | who uses it | what it is |
+|---|---|---|
+| **Control API** | your backend | HTTP + JSON. Open a session, list, kill, fetch a recording. Where most integrations start and stop. |
+| **Terminal embed** | your web app | `@oarlock/terminal` — a terminal you drop into a page you already have. |
+| **Agent library** | your device app | A library, not a binary. The device side is usually an existing app, not a new process. |
+| **Events out** | your bus | Signed webhooks, or the `AuditSink` plugin if you are compiling your own gateway. |
+
+A fifth option exists and is easy to miss: **run the gateway inside your own service** (§5).
+If you are already a Go backend, that removes a deployment rather than adding one.

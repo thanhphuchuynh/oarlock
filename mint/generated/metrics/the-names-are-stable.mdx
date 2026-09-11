@@ -1,0 +1,29 @@
+---
+title: "The names are stable"
+description: "listen."
+mode: wide
+---
+
+`listen.metrics: authenticated` serves Prometheus metrics at `/metrics` on the HTTP
+listener. Prometheus sends the same bearer token the API takes:
+
+```yaml
+scrape_configs:
+  - job_name: oarlock
+    authorization:
+      credentials: <the same token you would give the API>
+    static_configs:
+      - targets: ["gateway.example.org:443"]
+    scheme: https
+```
+
+`listen.metrics: public` serves them unauthenticated. That is reasonable on a private
+interface and the boot gate refuses it in production, because the numbers describe the
+fleet — how many devices exist, how many refusals are happening, whether the recorder is
+falling behind. None of it is a credential and all of it is reconnaissance.
+
+
+FR43 says so, and a metric name is a contract with every dashboard and alert written
+against it. A renamed metric does not break loudly — somebody's alert quietly stops firing.
+The names are pinned in a test (`internal/metrics/metrics_test.go`), and changing one fails
+that test with a message saying what it will break.

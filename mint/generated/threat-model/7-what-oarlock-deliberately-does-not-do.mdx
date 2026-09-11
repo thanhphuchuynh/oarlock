@@ -1,0 +1,20 @@
+---
+title: "7. What Oarlock deliberately does not do"
+description: "It does not restrict what an operator types."
+mode: wide
+---
+
+**It does not restrict what an operator types.** No command filtering, no `sudo`
+interception, no per-command approval. An interactive shell is a Turing-complete
+capability: filtering it is theatre, because `sh -c` and a base64 blob defeat any
+allow-list, and each new bypass is discovered in production. The controls are *who gets a
+shell at all*, *on which device*, *for how long*, and *that it is recorded*.
+
+If you need per-command control, do not grant `shell`. Grant `exec` with an allow-list, and
+put the review in front of what goes on the list.
+
+**It does not protect a session from the gateway.** §4.
+
+**It does not authenticate the operator to the device.** The agent trusts the gateway
+completely and cannot verify a principal. `principal` in a `DIAL` invitation is for the agent's
+log, never for a decision.

@@ -1,0 +1,37 @@
+---
+title: "13. Decisions"
+mode: wide
+---
+
+| | decision | because |
+|---|---|---|
+| OL-001 | The device dials out; nothing listens on it | The one assumption in §1. Everything else is downstream. |
+| OL-002 | SSH terminates at the gateway by default | The only shape that gives a real client, a browser, and a recording at once. |
+| OL-003 | Passthrough exists, opt-in, and is never silent | Some sessions must be opaque. None should be opaque by accident. |
+| OL-004 | Both `persistent` and `dispatch`, persistent by default | Zero-dependency out of the box; the doorbell is what scales. Same pump behind both. |
+| OL-005 | Binary frames, one type byte, no length field | No base64 tax on the hot path, and no length for a peer to lie about — the message boundary is the frame boundary, so the decoder never allocates on a claim. |
+| OL-006 | Authorisation is re-checked mid-session, and streamable | Revocation that waits for the next login is not revocation. |
+| OL-007 | asciicast v2, streamed | A killed gateway still leaves a playable file. |
+| OL-008 | `shell` backpressures; `log` and `exec` drop | Dropping bytes from a full-screen program corrupts the terminal beyond repair. |
+| OL-009 | Every integration point is an interface with a working default | `go run` must need nothing. Scale must not need a fork. |
+| OL-010 | `record_input` defaults to off | Keystroke capture makes recordings a credential store. |
+| OL-011 | Single node first, ownership map designed | Node-to-node forwarding beats sticky routing, but not on day one. |
+| OL-012 | `pkg/frame` and `pkg/plugin` are the only public Go API | The Android agent is somebody else's binary. |
+| OL-013 | The control API is the integration surface, and its OpenAPI is generated from the handlers | A spec written beside the code drifts from it, and a drifted spec is worse than none because people trust it. |
+| OL-014 | Sessions are opened on behalf of a human; a service account holds no shell grant of its own | A recording attributed to `svc-crm` shows someone typing `rm -rf` with a robot's name on it. |
+| OL-015 | The agent ships as a library first, a binary second | Android 10 forbids executing a binary from app storage, so on the target platform in-process is the only option. |
+| OL-016 | An authorisation *error* is not a denial; live sessions get a grace window | Fail-closed with no tolerance turns someone else's bad minute into a fleet-wide kill, during the incident that put operators on the devices. |
+| OL-017 | A bounded spool sits between the pump and the recorder | Keeps the audit guarantee while surviving object storage's bad minutes, and still leaves a playable partial file when it gives up. |
+| OL-018 | Delegated authority is a signed assertion, never a header | A plain `On-Behalf-Of` lets any service token act as any human, which is privilege escalation in the one place the design claims attribution as its reason to exist. |
+| OL-019 | Idle is measured on both directions, with a separate input-only ceiling | Counting operator input alone kills a twenty-minute firmware flash at minute five. |
+| OL-020 | `batch`, `rate` and `frame` are chosen as one set | Chosen independently they end up orders of magnitude apart, and then nobody can tell which of the three is wrong. |
+| OL-021 | Both reachability modes ship in M0 | The primary platform requires the doorbell. Building the other one first for three milestones tests the path Android resists. |
+| OL-022 | `record_input` resolves from a selector policy over operator *and* device attributes; conflicts refuse the session | The two regimes attach to different parties, and a gateway that silently picks one to violate is worse than one that stops. |
+| OL-023 | `observe` is its own action, and the observed operator is told | Watching someone work is a different capability from working, with a consent dimension that must not be inherited from `shell`. |
+| OL-024 | **Oarlock does not multiplex.** A connection is one session or the control channel. | Found while building the codec: adopting a multiplexer needs a byte stream, which puts a length field back and hands back the allocation surface the framing removes; hand-rolling one means owning flow control and the head-of-line problem. Not multiplexing costs a TLS handshake per session — for sessions that are rare and short — and makes the two reachability modes one data path. |
+| OL-025 | The invitation names a gateway **node**, not a load balancer | An agent dials the replica the operator is already waiting on, which removes the need to forward a session between replicas (§ 10). |
+| OL-026 | Forwarded connections are capped separately from sessions, and never claim the device's slot | One `ssh -L` is as many TCP connections as the client opens — a browser page load is six. Sharing `sessions_per_device` would fail the second image on a page with "this device already has a session open", and let a forward starve the shell needed to fix it. Splitting the cap keeps "one interactive session per device" meaning what the session list says (§ 9.5). |
+| OL-026 | Where a replay may start is tracked as bytes are written to the ring, not decided when they are read | A ring drops its oldest bytes, and the byte it drops may be the `ESC` that opened a sequence still in the buffer. From the middle of a stream, a parameter byte and a printable byte are the same byte, so a reader cannot tell `1;2` inside a CSI from the text "1;2" — the information only exists while the stream is being parsed in order. A minimal parser marks the positions between sequences on the way in; the replay starts at the oldest surviving mark and reports what it skipped. |
+| OL-029 | The re-check interval is the revocation guarantee; `Watch` is only an optimisation | A stream can die quietly — a proxy timing out an SSE connection looks like nothing at all. A design where `Watch` carries the load passes every test that exercises it and stops revoking the day it breaks, silently. So the interval loop runs regardless, and a dropped stream reconnects rather than closing anything. |
+| OL-027 | A watcher's read-only-ness is structural: the pump never reads their connection | A check is a line somebody can later move, and the thing being prevented is a second person typing into a shell they are only supposed to be reading. With no code path from a watcher's socket to the device, the guarantee survives a mistake about who they are. Their socket is still read — by the handler holding it — so that leaving is noticed promptly and attempted input is counted rather than vanishing. |
+| OL-028 | An absent operator never blocks the device | Output drains into the ring at full speed while nobody is attached. The alternative is backpressure to a PTY, which stalls a background job because somebody's wifi dropped — and the ring is bounded, so the memory cost of draining is a fixed 256 KiB rather than an unbounded queue. |

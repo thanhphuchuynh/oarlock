@@ -1,0 +1,68 @@
+---
+title: "9. `Dispatcher` — the doorbell (`dispatch` mode only)"
+description: "URL names the specific node."
+mode: wide
+---
+
+```go
+type Dispatcher interface {
+    // Wake must be fast and must distinguish "device is not reachable" from
+    // "I could not deliver". The gateway shows the operator different things.
+    Wake(ctx context.Context, dev *Device, inv frame.Invitation) error
+}
+
+type Invitation struct {
+    Ticket    string
+    SessionID string
+    URL       string        // which gateway to dial — the node, not the LB
+    Profile   string
+    ExpiresAt time.Time
+}
+```
+
+`URL` names the specific node. That is what makes `dispatch` mode scale without the
+node-to-node forwarding `persistent` mode needs: the agent connects to the right replica
+the first time.
+
+**Distinguishing the two failures matters more than it sounds.** "Device is offline" sends
+someone to look at hardware in a gym. "I couldn't deliver the wake-up" sends someone to
+look at the broker. Returning the wrong one wastes an on-call hour.
+
+| built-in | notes |
+|---|---|
+| `mqtt` | publish to a per-device topic, QoS 1. |
+| `webhook` | `POST` to your own push service. |
+| `exec` | run a command with the invitation on stdin. For testing, and for the one place a shell script is genuinely the right integration. |
+
+Configured examples:
+
+```yaml
+dispatcher:
+  kind: mqtt
+  url: mqtts://broker.example.org:8883
+  topic: oarlock/devices/{device_id}/wake
+  client_id: oarlock-gateway-a
+  username: oarlock
+  password: ${OARLOCK_MQTT_PASSWORD}
+  qos: 1
+  timeout: 10s
+```
+
+```yaml
+dispatcher:
+  kind: webhook
+  url: https://push.example.org/oarlock/wake
+  secret: shared-webhook-secret
+  timeout: 10s
+```
+
+```yaml
+dispatcher:
+  kind: exec
+  command: ["/usr/local/bin/oarlock-doorbell"]
+  timeout: 10s
+```
+
+The MQTT topic must contain `\{device_id\}`. Oarlock only substitutes the registry device
+id; the ticket stays in the JSON payload and never appears in the topic, command line or
+URL.

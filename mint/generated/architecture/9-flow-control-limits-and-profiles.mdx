@@ -1,0 +1,205 @@
+---
+title: "9. Flow control, limits and profiles"
+description: "Device→operator output is batched into windows of up to 25 ms."
+mode: wide
+---
+
+<a id="91-coalescing"></a>
+### 9.1 Coalescing
+
+Device→operator output is batched into windows of up to 25 ms. A `logcat` firehose is
+thousands of tiny writes per second; one frame per write is a syscall storm on both ends
+and a WebSocket header per byte. Coalescing is order-preserving and lossless, so it is
+always on.
+
+<a id="92-throttling-is-per-profile-and-the-shell-must-never-drop"></a>
+### 9.2 Throttling is per profile, and the shell must never drop
+
+Line-oriented output can be dropped and announced: a log stream loses a line, a `THROTTLE`
+frame says how many bytes went missing, and the reader is no worse off.
+
+**A full-screen program cannot survive that.** A dropped chunk lands in the middle of an
+escape sequence and leaves the terminal corrupt until something forces a full redraw —
+`vi`, `tmux`, `htop` and anything `ncurses` render as garbage, and a "42 bytes dropped"
+marker cannot repair it.
+
+| profile | policy |
+|---|---|
+| `shell`, `sshpass` | **backpressure.** The gateway stops reading the device socket at the high-water mark and resumes at the low one. WebSocket flow control carries the stall to the agent, which blocks on its own PTY write. |
+| `log`, `exec` | **coalesce and drop**, with a `THROTTLE` frame naming the byte count. |
+| `file`, `tcp` | backpressure; dropping is meaningless for a byte-exact transfer. |
+
+A device producing faster than the operator consumes then behaves exactly as it would on a
+local terminal: it blocks. That is correct, not a stall to fix. The pod stays protected —
+memory is bounded by the ring buffer and the socket buffers, and the hard ceilings are the
+idle and max-duration timers, not the drop policy.
+
+<a id="93-limits"></a>
+### 9.3 Limits
+
+| limit | default | why |
+|---|---|---|
+| `limits.idle` | 5 min | no bytes in **either** direction — an abandoned root shell on a device in a gym |
+| `limits.idle_input` | 60 min | no operator *input*, while output still flows. Catches a `tail -f` nobody is reading without killing work in progress. |
+| `limits.max_duration` | 4 h | the ceiling on any session, however active |
+
+**A window resize is not participation.** It counts as activity for `limits.idle` but
+not as input for `limits.idle_input`: dragging a browser edge is not the operator
+working, and treating it as such would keep an abandoned session alive on reflow
+alone. **Both ends are told why** — a `CLOSE` frame carrying the reason goes to the
+operator and the device before the session is torn down, so an operator sees
+"idle_timeout" rather than a connection that simply stopped.
+| `limits.max_duration` | 4 h | nothing legitimate needs longer, and it bounds a forgotten session |
+| `limits.rate` | 256 KiB/s sustained, 1 MiB burst | one `cat /dev/urandom` must not saturate the pod; the bucket absorbs a screen redraw |
+| `limits.batch` | 64 KiB | ceiling on one coalesced `DATA` frame, so the batch size and the frame ceiling are not two unrelated numbers |
+| `limits.scrollback` | 256 KiB ring | what a reattaching operator gets replayed |
+| `limits.sessions_per_device` | 1 | two shells on one device is almost always a mistake; enforced by the store, not hoped for |
+| `limits.sessions_per_principal` | 5 | bounds one compromised account |
+| `limits.frame` | 1 MiB | protocol-wide ceiling for *any* frame. `DATA` never approaches it — `limits.batch` binds first — so it is a safety net, not a working limit. |
+
+Every one is server-side. A client-side limit is a suggestion.
+
+**How the three throughput numbers relate**, since choosing them independently is how a
+spec ends up with a 1 MiB frame ceiling on a 256 KiB/s stream and no way to tell which
+number is wrong:
+
+```
+coalesce window   25 ms      ─┐
+limits.batch      64 KiB     ─┤ one DATA frame ≤ 64 KiB
+limits.rate       256 KiB/s  ─┤ sustained, token bucket, 1 MiB burst
+limits.frame      1 MiB      ─┘ protocol ceiling — control frames and safety only
+```
+
+A 25 ms window at the sustained rate holds ~6.5 KiB; `limits.batch` is set an order of
+magnitude above that so a burst — a full-screen redraw, a `dmesg` dump — travels in one
+frame rather than being chopped into ten. `limits.frame` sits above `limits.batch` so that
+a frame at the ceiling is unambiguously a bug or an attack, never traffic.
+
+<a id="94-profiles"></a>
+### 9.4 Profiles
+
+`OPEN` names a profile, and the profile is what the ticket is scoped to.
+
+| profile | agent does | recorded |
+|---|---|---|
+| `shell` | `forkpty` → the platform shell | yes |
+| `exec` | one allow-listed argv, no shell interpretation, exit code returned | yes |
+| `log` | tail a named log source from the device's own allow-list | yes |
+| `file` | read/write under a configured root | no |
+| `tcp` | dial `127.0.0.1:port` from an allow-list | no |
+| `sshpass` | dial the device-local `sshd` (mode A) | never |
+
+`log` names a *source*, never a path, and the mapping lives on the device. That is what
+makes "may read the agent log" a policy somebody can write across a fleet whose members
+keep that log in different places — and what stops a compromised gateway turning the
+profile into an arbitrary file read, which `file` deliberately can be within its root.
+
+`exec` exists so that automation does not need a shell. Most of what calls a shell wants
+one command, and an allow-listed argv is a far smaller thing to audit than
+`sh -c "$anything"`.
+
+Three properties, each a deliberate refusal:
+
+- **No shell interpretation.** The argv goes to `execve`. No quoting to get wrong, no
+  globbing, no `$(…)`, no `;`, no redirection.
+- **The device holds the allow-list.** The gateway authorises the *action*; the device
+  decides what may actually run on it. A gateway that could name arbitrary commands would
+  make every device's capability a property of the network.
+- **Exact argvs.** An entry matches element for element. The tempting alternative — an
+  allow-list of *programs* with caller-supplied arguments — is where the shell problem
+  returns in a new shape: `tail` with a chosen path reads any file, `find -exec` runs
+  anything, `curl -o` writes anywhere, `git -c` runs a configured pager. Deciding which
+  flags of which binary are safe is a per-binary research project and getting it wrong is
+  silent. Parameterised commands are spelled out one per variant.
+
+Two operator surfaces. `ssh device some command` runs it, with stderr on the SSH
+extended-data channel — which is what `DATA_ERR` is in the frame vocabulary for — and the
+exit status propagating. `POST /api/v1/devices/\{id\}/exec` runs the session on the gateway
+itself and answers with stdout, stderr and a code, because there is no terminal to attach
+to and a backend wanting one command should not have to speak the session protocol.
+
+<a id="the-file-profile"></a>
+### The `file` profile
+
+Confinement is delegated to `os.Root`, deliberately. Every hand-rolled version of this
+check has the same bug list — `..` surviving a clean, an absolute path bypassing the join,
+a symlink whose target is outside the root, and the time-of-check-to-time-of-use race where
+the symlink is swapped between the check and the open. The last one cannot be fixed by
+inspecting a string at all, which is why the string is not what is inspected: `os.Root`
+resolves each component in the kernel, so check and use are the same syscall.
+
+What the profile adds on top is what `os.Root` has no opinion about. Only regular files —
+a directory read is nonsense, `/dev/zero` is an unbounded transfer, and a FIFO opened for
+reading waits for a writer that may never come, so reads use `O_NONBLOCK` and refuse
+anything that is not regular *after* the open rather than blocking before it. A ceiling on
+each transfer. And an atomic commit: a write goes to a temporary in the same directory and
+is renamed into place, because a half-written configuration file is worse than the old one.
+
+Not recorded, and that is enforced rather than documented: an asciicast of a binary
+transfer is unwatchable, and a second copy of every transferred byte in the recording store
+has its own retention and its own disclosure problem. The session row still says
+`not_recorded`, so it is a queryable fact rather than an absence.
+
+`file:read` and `file:write` are separate actions, so a grant to pull logs is not a grant
+to replace a config.
+
+**A session that ends without an `EXIT` frame reports 255**, matching `ssh`'s own
+convention for a session that failed rather than a command that ran. It used to report 0,
+which meant a device refusing a command looked to any caller like a command that succeeded.
+
+<a id="95-port-forwarding"></a>
+### 9.5 Port forwarding
+
+`ssh -L 8080:localhost:3000 treadmill-4821@gw.example.org -N` reaches a web UI, a database
+or an `adb` daemon on a machine that holds no listener. The operator's own `ssh` is the
+client: there is nothing to install, and `scp`, `rsync` and everything else that rides an
+SSH channel come along with it. The gateway handles `direct-tcpip` itself rather than
+using the library's handler, which dials from the *gateway* — the whole point is that the
+**device** dials, on its own loopback.
+
+**The target is a port, never a host.** `-L 8080:localhost:3000` is honoured;
+`-L 8080:10.0.0.5:3000` is refused with a sentence saying why. A device that dialled a
+host the gateway named would be an open proxy into whatever network it sits on — and that
+network is, by construction, the one nobody outside can reach, which is why the device is
+behind Oarlock at all.
+
+**The device holds the allow-list**, exactly as it does for `exec`. `forward_ports` in the
+agent's config is what is actually reachable; an agent with none advertises no `tcp`
+capability, so an upgraded gateway forwards nothing until a device opts in. List ports
+deliberately: a socket bound to loopback is usually bound there *because* it has no
+authentication of its own, so forwarding it hands out whatever it was protecting.
+
+`tcp` is its own action. A grant to open a shell is not a grant to reach every listening
+socket on the device.
+
+A refusal is carried as an SSH channel-open failure with the reason attached, which
+OpenSSH prints only under `ssh -v`; the gateway log always carries it, so "why did my
+forward not open" has an answer on both sides.
+
+**One connection is one session** — ADR-024 applied rather than worked around. Each
+forwarded connection gets its own row, its own invitation and its own websocket, so a
+forward is killable, revocable and auditable with the machinery a shell already has. It is
+not free: a browser opens up to six connections for one page, each costing a handshake to
+the device. ADR-024 accepted that cost for sessions that are "rare and short"; forwarded
+connections are neither, and that is the honest price of not multiplexing.
+
+**Forwards are capped separately** (`limits.tcp_conns_per_device`, default 16) and do not
+count against `sessions_per_device`. Sharing that cap would mean the second image on a page
+failing with "this device already has a session open", and a forward starving the shell
+somebody needs in order to fix it. The one-interactive-session-per-device guarantee keeps
+meaning what the session list says it means.
+
+**Half-close is not represented.** TCP lets one side finish sending while the other keeps
+going, and `direct-tcpip` carries that as EOF; Oarlock's frame vocabulary has no
+half-close, so a peer's EOF ends the whole forward. That is right for HTTP, Postgres, Redis
+and adb, and wrong for protocols that signal end-of-request by shutting down the write side
+— mostly `nc` and HTTP/1.0. Written down rather than half-implemented: a forward that
+silently truncates one direction is worse than one that documents what it does not do.
+
+Not recorded, for the same reason `file` is not: a TLS handshake streamed into an asciicast
+is unwatchable. The audit trail is who forwarded which port and when, never the bytes.
+
+The session timers apply unchanged, and `limits.idle` is the one to look at: a forwarded
+connection with no traffic in either direction for five minutes is closed. A browser simply
+reopens one, which is the common case and invisible; a long-lived idle connection —
+`adb connect`, an open database handle — is not, so raise `idle` if that is the use.

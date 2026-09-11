@@ -1,0 +1,26 @@
+---
+title: "6. `SessionStore` — the ledger"
+description: "Create is where sessions_per_device and sessions_per_principal are enforced, and it must be atomic — a unique index or a transaction, not a read-then-write."
+mode: wide
+---
+
+```go
+type SessionStore interface {
+    Create(ctx context.Context, s *Session) error   // enforces the concurrency caps
+    Update(ctx context.Context, id string, f func(*Session) error) error
+    Close(ctx context.Context, id string, reason CloseReason, res Result) error
+    Get(ctx context.Context, id string) (*Session, error)
+    List(ctx context.Context, q Query) ([]*Session, string, error) // cursor-paginated
+}
+```
+
+`Create` is where `sessions_per_device` and `sessions_per_principal` are enforced, and it
+must be **atomic** — a unique index or a transaction, not a read-then-write. Two operators
+opening a shell on the same device in the same second is exactly the race this exists to
+lose gracefully, and "we checked and it was fine" is not an enforcement mechanism.
+
+| built-in | notes |
+|---|---|
+| `memory` (default) | single node; sessions are lost on restart, which is honest rather than surprising. |
+| `sqlite` | one file, survives restarts, plenty for one gateway. |
+| `postgres` | multi-node, partial unique index for the per-device cap. |

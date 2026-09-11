@@ -1,0 +1,58 @@
+---
+title: "6. Error codes"
+description: "These codes are the closed set, and pkg/condition is where it is written down — with the operator-facing sentence and next action for each one."
+mode: wide
+---
+
+| code | meaning | retryable |
+|---|---|---|
+| `ticket_invalid` | unknown, expired, or already redeemed | no |
+| `ticket_scope` | ticket does not cover this device or profile | no |
+| `auth_failed` | signature, key, or credential rejected | no |
+| `device_unknown` | no such device id | no |
+| `device_not_connected` | `persistent` mode, no control channel — the device is not there | yes |
+| `device_offline` | the doorbell was delivered and nobody dialled in | yes |
+| `device_unreachable` | the wake-up service says it cannot reach the device | yes |
+| `no_wake_method` | a `dispatch` device with no dispatcher configured — a deployment fault, ours | no |
+| `doorbell_failed` | `Dispatcher.Wake` errored — *our* fault, not the device's | yes |
+| `not_authorized` | `Authorizer` said no | no |
+| `revoked` | the grant was withdrawn mid-session | no |
+| `authz_unavailable` | `Authorizer` could not be reached; the grace window expired | yes |
+| `profile_unsupported` | agent did not advertise this capability | no |
+| `policy_denied` | e.g. passthrough where `allow_unrecorded` is false | no |
+| `policy_conflict` | two `record_input` rules disagree and one is non-overridable | no |
+| `session_limit` | per-device, per-principal, or per-device forward cap reached | yes |
+| `version_unsupported` | no shared protocol version | no |
+| `frame_too_large` | exceeded `limits.frame` | no |
+| `protocol_error` | malformed frame, wrong order, text frame | no |
+| `recorder_failed` | recording could not start or continue | no |
+| `gateway_shutdown` | draining | yes |
+| `already_attached` | the session already has an operator | no |
+| `no_wake_method` | see above | no |
+| `wrong_node` | that session is live on a different gateway replica | yes |
+| `internal` | anything else, with a correlation id in `message` | yes |
+
+**These codes are the closed set, and `pkg/condition` is where it is written down** —
+with the operator-facing sentence and next action for each one. Both surfaces render from
+it and CI fails when the browser's generated copy drifts, so a code the gateway can emit
+cannot be a screen a client does not have.
+
+Three of these used to be one. `device_not_connected`, `device_offline` and
+`device_unreachable` all travelled as `device_offline`, with the difference carried in
+`message` — which this document says is for humans and is never parsed. A client could
+therefore render one screen for three conditions that send somebody to three different
+places, or break the contract to tell them apart. Splitting the codes was the smaller
+change.
+
+`recorder_failed` is fatal, but only after the spool gives up. If the recording cannot be
+written at all the session does not open; a running session whose backend starts failing
+keeps going until `recorder.spool_bytes` or `recorder.flush_deadline` is exhausted, and
+then closes. **The alternative to closing is an unrecorded session that looks recorded**,
+which is worse than no session at all — an audit trail with silent holes is one nobody can
+rely on. The alternative to the spool is object storage's bad minute killing every session
+in the fleet. `Recorder = none` is a deliberate, configured choice; a failing recorder is
+not. See [ARCHITECTURE § 8.1](/generated/architecture/8-recording#81-what-happens-when-the-recorder-fails).
+
+`authz_unavailable` exists for the same reason: it is the close reason for *could not ask*,
+and it is deliberately not `revoked`, which means a human decided. See
+[ARCHITECTURE § 7.1](/generated/architecture/7-authorisation-and-revocation#71-denied-and-could-not-ask-are-different-facts).

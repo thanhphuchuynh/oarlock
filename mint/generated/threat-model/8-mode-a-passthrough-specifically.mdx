@@ -1,0 +1,22 @@
+---
+title: "8. Mode A passthrough, specifically"
+description: "Passthrough removes the gateway from the plaintext and adds its own set of problems, all of which are the reason it is opt-in and off by default."
+mode: wide
+---
+
+Passthrough removes the gateway from the plaintext and adds its own set of problems, all
+of which are the reason it is opt-in and off by default.
+
+| threat | note |
+|---|---|
+| **No recording, ever** | Ciphertext. There is nothing to record. The session row says `not_recorded` so this is a queryable fact rather than a missing file, and the operator is shown a banner before the first prompt. |
+| **A listener on the device** | "Bound to loopback" reads as private and is not, on Android: apps share a network namespace, so any other app holding `INTERNET` can reach `127.0.0.1:2222`. On a locked kiosk that is low probability; it is still a new local attack surface on hardware the public stands on. |
+| **A second PKI** | Every device needs a host key and every client must trust it, which at fleet scale means an SSH CA: a signing service, short-lived host certificates, re-signing sweeps, and a revocation story that amounts to keeping the TTL short. OpenSSH certificates are their own format, not X.509, so an existing device PKI (an MQTT mTLS one, say) contributes nothing. |
+| **Operator authorisation on the device** | `authorized_keys` on the device means revoking someone is a push to the fleet, and a device offline for a week still honours a departed employee's key. One shared key instead means any bypass of the gateway is a fleet-wide shell from a single credential. Neither is good, and the device has no notion of tenant or role to check against. |
+| **Free port forwarding** | `direct-tcpip` arrives with the protocol. On the device's own network. Disable it in the device `sshd` config unless it is wanted. |
+| **Coarse failure diagnosis** | A blind relay cannot tell "device refused" from "auth failed" from "shell died". The six failure states in ARCHITECTURE § 11 collapse to "connection closed". An operational cost, not a security one — but it is the cost paid on every incident. |
+| **No mid-session revocation** | The gateway can kill the pipe, which is real. It cannot re-check a grant against a session it cannot read, so `revoked` becomes "the tunnel was cut" with no record of what was happening. |
+
+**Mode A does not buy a more capable shell.** Both modes run as the agent's uid;
+`sshd`-on-device and `forkpty`-in-agent have identical privilege. "Real SSH" does not mean
+"real Linux box".

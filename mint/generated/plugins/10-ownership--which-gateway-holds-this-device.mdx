@@ -1,0 +1,23 @@
+---
+title: "10. `Ownership` — which gateway holds this device"
+description: "Only used with more than one replica."
+mode: wide
+---
+
+```go
+type Ownership interface {
+    Claim(ctx context.Context, deviceID, nodeID string, ttl time.Duration) (bool, error)
+    Renew(ctx context.Context, deviceID, nodeID string, ttl time.Duration) error
+    Release(ctx context.Context, deviceID, nodeID string) error
+    Lookup(ctx context.Context, deviceID string) (nodeID string, err error)
+}
+```
+
+Only used with more than one replica. `Lookup` is what lets replica B forward an
+operator's session to replica A, which holds the agent's socket. Leases expire so that a
+node dying does not strand its devices; TTL defaults to 3× the renew interval.
+
+| built-in | notes |
+|---|---|
+| `memory` (default) | single node. `Lookup` always returns self. |
+| `redis` | `SET NX PX` claim, `EXPIRE` renew. |

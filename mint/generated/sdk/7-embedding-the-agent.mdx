@@ -1,0 +1,47 @@
+---
+title: "7. Embedding the agent"
+description: "A library, not a binary — and that is a platform constraint, not a preference."
+mode: wide
+---
+
+**A library, not a binary — and that is a platform constraint, not a preference.** Android
+10 forbids executing a binary from app storage, so on the platform this was designed for
+the agent *must* live inside an existing APK. Everywhere else, in-process means one thing
+to supervise instead of two.
+
+```go
+import "github.com/oarlock/oarlock-go/agent"
+
+a := agent.New(agent.Config{
+    Gateway:  "wss://gw.example.org/ws/control",
+    DeviceID: deviceID,
+    Signer:   hardwareKeySigner,          // never a key on disk if the platform offers better
+    PinSHA256: []string{"sha256/AbCd…"},
+
+    Shell: agent.ShellFunc(func(ctx context.Context, r agent.ShellRequest) (agent.PTY, error) {
+        return agent.Forkpty(ctx, "/system/bin/sh", agent.WithEnv("TERM", r.Term))
+    }),
+    ExecAllowlist: []agent.ExecEntry{
+        {Name: "logcat", Argv: []string{"logcat", "-d"}, MaxArgs: 4},
+        {Name: "df",     Argv: []string{"df", "-h"}},
+    },
+    FileRoot:     "/data/oarlock/share",
+    TCPAllowlist: nil,                     // empty by default, and usually correct
+
+    OnSession: func(ev agent.SessionEvent) { log.Printf("shell %s by %s", ev.SessionID, ev.Principal) },
+})
+go a.Run(ctx)
+```
+
+- **`Shell` is a hook because "a shell" is platform-specific.** Which binary, which
+  environment, which uid, whether a PTY is available at all. A device that cannot provide
+  one omits the capability, and the gateway then refuses the session at open time with a
+  real reason instead of after a round trip.
+- **`OnSession` is for your logs, not for a decision.** The agent trusts the gateway
+  completely and cannot verify a principal. Do not gate on it.
+- **Kotlin binding** (`oarlock-android`) wraps the same core as a `Service` with a
+  foreground notification, because that is what Android requires of a process holding a
+  socket.
+- **Any other language:** the wire protocol is public and the frame codec is 200 lines.
+  [docs/protocol.md](/generated/protocol/1-transport) is the whole contract; `pkg/frame` is the reference, not
+  a requirement.

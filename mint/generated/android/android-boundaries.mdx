@@ -1,0 +1,10 @@
+---
+title: "Android boundaries"
+description: "The shell is /system/bin/sh running as the app's Android UID."
+mode: wide
+---
+
+The shell is `/system/bin/sh` running as the app's Android UID. It is not root and cannot
+read other apps' private storage. Some headset vendors apply additional background or
+battery policies; allow unrestricted background activity for Oarlock Agent if the service
+is suspended while the headset sleeps.

@@ -1,0 +1,82 @@
+---
+title: "3. Service authentication, and who the session belongs to"
+description: "A service authenticates with a token (Authorization: Bearer), OIDC client credentials, or mTLS — Authenticator."
+mode: wide
+---
+
+A service authenticates with a token (`Authorization: Bearer`), OIDC client credentials, or
+mTLS — `Authenticator.AuthHTTP` decides, same interface as everything else.
+
+Then it must answer a second question, and this is the part integrations get wrong:
+**on whose behalf?**
+
+```
+Authorization: Bearer svc_…          ← which service is calling
+On-Behalf-Of-Token: eyJhbGciOi…      ← proof of who is at the keyboard  (authoritative)
+On-Behalf-Of: admin@mail.com       ← the same subject, for logs; must match, or 400
+```
+
+**The proof is not optional, and a bare identifier is not proof.** A plain
+`On-Behalf-Of: someone@example.com` would let any holder of any service token act as any
+human — including one with broader grants than the caller has. That is privilege
+escalation in the one place this design claims attribution as its reason to exist. So
+`Authenticator.AuthDelegated` verifies a signed assertion, in one of two shapes:
+
+| shape | when | what Oarlock checks |
+|---|---|---|
+| **Subject token** (preferred) | your users log in through an IdP you can get a token from | signature, `exp`, audience, and that `sub` is the subject. The human's own credential travels with the request. |
+| **Service-signed assertion** | your users hold opaque server-side sessions and there is no user token to forward | signature against the service's registered key, `exp` under 60 s, plus **`may_act_for`** — an explicit allow-list of subjects or groups this service may act for. |
+
+The fallback is weaker and it is honest about being weaker: a compromised service can act
+for anyone on its allow-list. Keep the list narrow, keep the assertion lifetime short, and
+prefer the subject token wherever an IdP makes one available.
+
+`api.allow_unattended` is the only way to open a session with no subject at all, and those
+sessions are tagged (§3.1).
+
+- `Authorizer` is called with the **human** principal. A service account cannot hold shell
+  grants of its own; it can only pass through a human who has them.
+- The recording and session row attribute the human. `opened_by` records the service
+  separately, so both are visible and neither is lost.
+- The audit event carries both, always.
+
+The API enforces that split before any handler sees the request:
+
+| request shape | result |
+|---|---|
+| `On-Behalf-Of` without `On-Behalf-Of-Token` | `400 delegation_missing_assertion` |
+| `On-Behalf-Of-Token` on an authenticator with no `AuthDelegated` | `501 delegation_unsupported` |
+| assertion rejected, expired, replayed or outside `may_act_for` | `401 delegation_invalid` |
+| `On-Behalf-Of` value disagrees with the assertion subject | `400 delegation_subject_mismatch` |
+| valid assertion | session `principal` is the human; `opened_by` is the service |
+
+For the service-signed fallback, configure the gateway with an assertion audience, a
+signing secret, and the narrowest allow-list that works:
+
+```yaml
+api:
+  delegation_audience: oarlock-api
+  delegation_secret: 32-bytes-or-more-of-secret-material
+  delegation_max_ttl: 60s
+  may_act_for:
+    svc-crm:
+      - admin@mail.com
+      - "group:oncall-*"
+```
+
+**Why this is not optional.** A fleet of sessions attributed to `svc-crm` is an audit trail
+nobody can use: the recording shows someone typing `rm -rf`, and the only name attached is
+a robot's. The whole value of terminating SSH at the gateway is knowing who did it.
+
+<a id="31-sessions-with-no-human"></a>
+### 3.1 Sessions with no human
+
+A service may be allowed to act without one — a scheduled diagnostic, say. That needs an
+explicit `api.allow_unattended` grant, the service account must hold the action grant in
+its own right, and the session is tagged `unattended: true` so it can be excluded from
+"who touched this device" queries. Robots and people should never be summed into one
+number, and an unattended session is the only case where a service account's own grants
+are what authorise a session.
+
+Session listing accepts `?unattended=true` or `?unattended=false` so dashboards can keep
+scheduled diagnostics out of human-access reports.

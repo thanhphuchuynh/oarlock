@@ -1,0 +1,107 @@
+---
+title: "6. Embedding the terminal"
+description: "Without React:"
+mode: wide
+---
+
+```
+npm i @oarlock/terminal        # framework-agnostic core, bundles xterm.js
+npm i @oarlock/react           # <Terminal /> wrapper
+```
+
+```tsx
+import { Terminal } from "@oarlock/react";
+import "@oarlock/terminal/oarlock.css";
+
+<Terminal
+  url={attach.url}
+  ticket={attach.ticket}
+  device="treadmill-4821"
+  principal="admin@mail.com"
+  renewTicket={() => api.renewAttach(session.id)}   // POST /sessions/{id}/attach
+  onState={(s) => setState(s)}          // connecting | attached | reconnecting | closed
+  onClosed={(reason) => showSummary(reason)}
+  onError={(e) => report(e.code)}       // the same codes as everywhere else
+  theme="inherit"
+/>
+```
+
+Without React:
+
+```ts
+import { mount } from "@oarlock/terminal";
+import "@oarlock/terminal/oarlock.css";
+
+const handle = mount(document.getElementById("shell")!, { url, ticket, device, principal });
+handle.dispose();
+```
+
+Design rules the package enforces rather than documents:
+
+- **The browser never holds a long-lived credential.** It gets a single-use attach ticket
+  from *your* backend, which is where authorisation was checked. When a ticket is refused
+  at open time the component calls `renewTicket` once and re-dials — so the retry goes
+  through your backend and re-checks authorisation, rather than resuming on the strength
+  of an old decision. A second refusal is reported, not retried: a renewal loop against a
+  gateway that refuses everything is a denial of service you would be running on
+  yourself.
+- **An unrecorded session will not render without an acknowledgement.** `<Terminal>`
+  shows its own blocking gate when `READY` says the session is unrecorded or in
+  passthrough, and there is no terminal behind the gate while it is up — a gate over a
+  live terminal is decoration. The single way past it is
+  `acknowledgeUnrecordedWithoutPrompt`, named for its consequence so that reaching for it
+  is a decision. Device output that arrives during the gate is held and replayed
+  afterwards rather than shown or dropped.
+- **A dropped connection is not a failure, and is not reported as one.** The gateway
+  keeps the session attached when a browser drops and holds what the device produced in a
+  ring, so the component reconnects rather than surfacing an error: the bar says
+  *Reconnecting*, the screen dims, and on return the scrollback replays. It fetches a
+  fresh ticket through `renewTicket` for each attempt, backs off with jitter — a gateway
+  that just dropped every operator gets them all back at once otherwise — and gives up
+  after `maxReconnects` (6) rather than leaving somebody staring at *Reconnecting* for a
+  session that is not coming back. A `CLOSE` from the gateway is a decision, not an
+  accident, and is never reconnected through.
+- **Keystrokes typed while disconnected are dropped, not queued.** This is a deliberate
+  departure from what a text field would do. A terminal interprets bytes in context, so
+  input replayed eight seconds later can land somewhere that has moved on — a pager that
+  exited, a confirmation prompt that is now a different question. Losing the characters is
+  visible; delivering them somewhere unintended is not.
+- **A missing field is not a promise.** A `READY` with no `recording` — an older gateway,
+  a proxy that dropped it, a mock that forgot it — counts as unrecorded. Falling the other
+  way would make a missing byte indistinguishable from a guarantee.
+- **The status bar is not a prop.** It states the four facts (which device, recorded or
+  not, who else is watching, connection state) and has no dismissal affordance. Build your
+  own chrome if you want to — `<StatusBar>` and `<PreflightGate>` are exported for exactly
+  that — but the core still refuses to hand you a terminal for an unacknowledged
+  unrecorded session, so composing your own layout cannot lose the disclosure.
+- **The failure states are typed events, not strings, and every one has a screen.** A UI
+  must be able to tell "you don't have access" from "we could not check your access"
+  without parsing prose, because they send someone to different places. The closed set
+  lives in `pkg/condition` and is generated into the package as `@oarlock/terminal/conditions`,
+  so `<Terminal>` renders a screen per condition and a code the gateway can emit cannot be
+  one the component has never heard of. An unknown code — a gateway newer than your build
+  — renders as "we don't recognise this", never as a blank pane. `<FailureScreen>` is
+  exported if you want to place it yourself.
+- **A watcher's input is disabled, not ignored.** `read_only` in `READY` makes the
+  component set the terminal read-only — `readonly`, not `disabled`, so somebody using a
+  screen reader can still read the session they came to watch — and the status bar leads
+  with `READ-ONLY · watching <operator>`. The prop of the same name can only *add* the
+  restriction: a host can voluntarily disable its own input, and can never make a
+  read-only connection writable.
+- **The operator being watched is told, by name.** The bar carries a persistent
+  `OBSERVED by …` indicator for as long as it is true, inside an `aria-live` region so it
+  is announced rather than only drawn. Anonymous observation is not offered at any level.
+- **A retry is offered only where retrying could work.** The table says which conditions
+  are retryable, so a withdrawn grant does not get a button that invites somebody to keep
+  pressing it at a decision that will not change.
+- **OSC 52 clipboard writes and title reporting are off**, and off by our own handler
+  rather than by upstream's default — the risk being a default that changes under a
+  dependency bump. A compromised device cannot write to the operator's clipboard, read it
+  back, set the window title, or ask for the window's size or position. Opt in per
+  instance with `allowDeviceClipboardWrites` / `allowDeviceTitleChanges` if you trust your
+  fleet.
+- **`theme="inherit"`** reads your CSS custom properties instead of shipping a palette
+  that fights your app. Every rule we write is scoped under one `.oarlock-term` class and
+  every property is namespaced `--oarlock-*`; xterm's own stylesheet arrives under its
+  `.xterm*` namespace. Nothing we ship is a bare element selector, and mounting does not
+  touch your `<body>`.

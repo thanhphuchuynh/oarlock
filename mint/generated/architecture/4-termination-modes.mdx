@@ -1,0 +1,89 @@
+---
+title: "4. Termination modes"
+description: "The gateway runs a real SSH server."
+mode: wide
+---
+
+<a id="41-mode-c--gateway-terminated-default"></a>
+### 4.1 Mode C — gateway-terminated (default)
+
+```
+ssh client ──SSH──▶ oarlockd ──frames──▶ agent ──▶ PTY
+                       └─ recorder (plaintext)
+browser ────WSS───▶ oarlockd ──frames──▶ agent ──▶ PTY
+```
+
+The gateway runs a real SSH server. It authenticates the operator, authorises them against
+the target device, allocates the session, and bridges. The device runs no `sshd`, holds no
+host key, and opens no port.
+
+The browser path is the same session reached over a WebSocket instead of SSH, which is the
+point: a browser cannot speak SSH, so *something* server-side has to be the SSH endpoint.
+Mode C makes that thing the gateway, once, instead of a per-session SSH client process.
+
+**Cost:** the gateway is fully trusted. It reads every keystroke and can inject its own.
+[docs/threat-model.md § Gateway compromise](/generated/threat-model/4-gateway-compromise-is-total)
+says so plainly rather than pretending otherwise.
+
+<a id="42-mode-a--passthrough-opt-in-per-device"></a>
+### 4.2 Mode A — passthrough (opt-in per device)
+
+```
+ssh client ──SSH────────────tunnel, opaque────────────▶ sshd on 127.0.0.1
+                       (gateway cannot read a byte)
+```
+
+The gateway becomes a blind relay: the operator's SSH connection is tunneled to a `sshd`
+the device already runs, and the SSH protocol terminates at both ends. `scp`, `sftp`,
+`ssh -L`, agent forwarding and everything else the protocol offers arrive free.
+
+What you give up is the reason mode C exists:
+
+| | Mode C | Mode A |
+|---|---|---|
+| Session recording | asciicast, always | **impossible** — ciphertext |
+| Per-command audit | keystrokes are visible | connection-level only |
+| Failure diagnosis | six distinct states (§11) | "connection closed" |
+| Device key material | none | a host key per device, and a CA to sign them |
+| Operator authorisation | central, revocable mid-session | central *and* `authorized_keys` on the device |
+| Browser terminal | native | needs a server-side SSH client anyway |
+| Device-side listener | none | a loopback socket |
+| `scp` / `sftp` / `-L` | gateway implements them | free with the protocol |
+
+Guard rails, because an unrecorded session must never be an accident. All four are
+enforced in `internal/sshsrv/passthrough.go`, and an operator reaches this mode with
+`ssh -s sshpass <device>@gateway` — usually as a `ProxyCommand`, so the inner `ssh`
+terminates at the device:
+
+1. `devices[].allow_passthrough` must be `true` for that specific device.
+2. Policy `allow_unrecorded` must be `true` gateway-wide. The gateway-wide key is checked
+   *first*, so a deployment that has not opted in answers identically for every device and
+   the refusal cannot be used to discover which devices carry the flag.
+3. The session row is written with `recording_state: not_recorded` — an unrecorded session
+   is a queryable fact, not a missing file.
+4. The operator sees a banner naming the mode before the first prompt, **and again as
+   the session closes**. Nobody should discover which mode they were in from the
+   absence of a recording six weeks later — and a disclosure carried by a single
+   early message is one deleted packet away from never having been said. Terrapin
+   (CVE-2023-48795) lets an attacker who can modify traffic delete a bounded prefix
+   right after the channel opens; strict key exchange removes that primitive, and
+   saying it twice removes the dependency on strict key exchange having worked. The
+   one message inside that window carries progress text and no security claim.
+
+**When mode A is the right answer:** an operator who needs `rsync` at speed on a device
+that genuinely runs `sshd`, in a jurisdiction or contract where the gateway operator must
+not be able to read the session. Both are real. Neither is the common case.
+
+<a id="43-why-not-only-mode-a"></a>
+### 4.3 Why not only mode A
+
+Mode A cannot serve a browser, and a browser is where most sessions start. Serving one
+means terminating SSH in a server-side client — in the clear, exactly where mode C already
+is. Mode A therefore does not remove the plaintext hop; it adds a fleet-wide SSH PKI
+*and keeps* the plaintext hop for the primary interface. End-to-end survives only for
+operators on a CLI.
+
+Mode C also does not foreclose mode A: the `tcp` profile forwards a device-local port, so
+mode A is "run `sshd` on loopback, forward 22" on an architecture that already exists.
+Built the other way round, the PKI and key-distribution machinery are built *and* mode C
+still has to be built for the browser.

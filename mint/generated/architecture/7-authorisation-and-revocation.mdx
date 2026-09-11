@@ -1,0 +1,107 @@
+---
+title: "7. Authorisation and revocation"
+description: "Authentication answers *who*; authorisation answers *may they, on this device, right now*."
+mode: wide
+---
+
+Authentication answers *who*; authorisation answers *may they, on this device, right now*.
+The second question is asked more than once, which is the whole reason the gateway
+terminates SSH.
+
+```
+open      Authorize(principal, device, action)         must return allow
+every 30s Authorize(...) again                         deny → close(revoked)
+always    Authorizer.Watch() → RevocationEvent         deny → close(revoked) in <1 s
+on demand DELETE /api/sessions/{id}                    → close(admin_kill)
+```
+
+`Watch()` is optional — a backend that cannot stream just returns
+`ErrUnsupported` and the re-check interval carries the load. The interval is the floor on
+how stale a grant can be; `Watch` is the optimisation that makes it feel instant.
+
+**The two are deliberately unequal, and building them the other way round is a trap.** A
+system where `Watch` does the work and the interval is a backstop nobody exercises passes
+every happy-path test and stops revoking the day a proxy starts timing out the stream. So
+the re-check loop runs per session whether or not `Watch` is connected, and the test that
+matters kills the stream *first* and then withdraws the grant.
+
+A dropped stream is **not** a revocation. It means the gateway stopped hearing, not that
+everybody's access was withdrawn — closing sessions on a disconnect would turn a network
+blip into a fleet-wide kill, which is the same failure as conflating an outage with a
+denial, arriving by a different door. The gateway reconnects with backoff and the stream's
+state is observable, because a `Watch` that has been down for an hour is still *correct*
+and somebody should still be able to see it.
+
+<a id="71-denied-and-could-not-ask-are-different-facts"></a>
+### 7.1 Denied and could-not-ask are different facts
+
+A re-check has three outcomes, not two, and conflating the last two is how an authorisation
+service's bad minute becomes a fleet-wide outage during an incident.
+
+| outcome | new sessions | live sessions |
+|---|---|---|
+| `Allow: true` | open | continue |
+| `Allow: false` | refused, `not_authorized` | closed, `revoked` |
+| **error** | **refused immediately** | **continue for `authz.grace` re-checks, then closed with `authz_unavailable`** |
+
+`authz.grace` defaults to 3 consecutive failures — about 90 s at the default interval.
+Inside that window the gateway keeps the last successful decision, counts the failures, and
+emits an `authz.degraded` audit event on the first one. New sessions are refused from the
+first failure, because opening a session on a stale decision is a different risk from
+letting an operator finish a command on one.
+
+Two things this buys that a bare fail-closed does not:
+
+- **A transient outage does not kill work in progress.** Fail-closed with no tolerance means
+  a thirty-second blip in the permissions API terminates every shell in the fleet — and it
+  does so at the moment operators most need shells, because the same infrastructure event is
+  usually why they are logged in.
+- **The close reason is true.** `revoked` means a human decided to withdraw access.
+  `authz_unavailable` means the gateway could not find out. Recording the first when the
+  second happened poisons every audit query built on top of it.
+
+`authz.grace: 0` restores strict fail-closed for anyone who wants it, and it is the right
+setting where a session is more dangerous than an outage.
+
+**Actions** are coarse on purpose: `shell`, `exec`, `file:read`, `file:write`, `tcp`,
+`passthrough`, `replay`, `observe`, `sql:read`, and the three administrative ones —
+`admin:devices`, `admin:permissions`, `admin:kill`. `exec` does not imply `shell` and
+`passthrough` implies nothing — a grant that lets someone open an unrecorded session is not
+a grant you want inherited.
+
+**The administrative actions exist because authentication is not authorisation.** A bearer
+token proves who is calling; it says nothing about whether they may rewrite the policy that
+decides what they may do. Without a gate on the admin surface, every token holder is a
+super-administrator and every other action here is advisory — anyone refused `shell` can
+grant themselves `shell`, and under `authorizer.kind: sqlite` the store that answers the
+question is the store the API writes to. So:
+
+- `admin:devices` is checked against the device being changed, against its **stored**
+  record, so that a tag-scoped grant or deny means what it says. `admin:kill` likewise. A
+  fleet lead can hold `admin:devices` on `treadmill-*` and nothing else.
+- `admin:permissions` is checked against the synthetic `gateway` device, because a
+  permission is not device-scoped. Reading the policy needs it too: a list of who may reach
+  what is a map of whom to go after.
+- Ending your own session is not administration. `admin:kill` governs ending somebody
+  else's, which is an intervention in their work.
+
+**The break-glass.** The policy store is edited through an API the policy store authorises,
+so an empty store has nobody who may write the first rule, and deleting the last
+`admin:permissions` grant would lock the room. `authorizer.admins` in the config file names
+principals allowed the administrative actions regardless of the backend's answer — logged at
+boot and on every use. It grants `admin:*` and nothing else: a config administrator can
+repair the policy, but to open a shell they must write themselves a grant, which is a
+visible row and an audit line rather than a line in a file nobody re-reads. Because the
+admin and session actions are disjoint sets, deny-beats-allow survives intact for
+everything an operator actually does on a device.
+
+`observe` is attaching read-only to a session somebody else is driving. It is deliberately
+its own action and deliberately not implied by `shell`: watching a colleague work is a
+different capability from working, it carries a consent dimension `shell` does not, and the
+person being watched is told. An `observe` attachment sends no input, and the attachment
+itself is an audited event.
+
+**On `authorized_keys`.** The gateway's default `Authenticator` reads one, because it is
+what everyone already has. It is fine for a handful of operators and wrong past that:
+revocation means editing a file on every replica. The OIDC and SSH-certificate backends
+exist for the same reason `Watch()` does.

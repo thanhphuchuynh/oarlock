@@ -9,10 +9,8 @@ packages/*/dist/
 # The landing sheet is a static build, same reasoning.
 /landing/dist/
 
-# Mintlify pages generated from the canonical Markdown. `pnpm docs` writes them.
-/mint/generated/
-/mint/openapi.yaml
-/mint/figures/
+# Mintlify CLI cache only. generated/, figures/, and openapi.yaml are committed so
+# a Mintlify dashboard update can fetch the pages and the API tab from git.
 /mint/.mintlify/
 
 # TypeScript's incremental build metadata: a cache, and it names absolute paths.

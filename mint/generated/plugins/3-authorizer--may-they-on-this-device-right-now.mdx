@@ -1,0 +1,302 @@
+---
+title: "3. `Authorizer` — may they, on this device, right now"
+description: "This is the interface that justifies the whole architecture, so it gets called more than once per session:"
+mode: wide
+---
+
+```go
+type Authorizer interface {
+    Authorize(ctx context.Context, p *Principal, dev *Device, a Action, t Target) (Decision, error)
+
+    // Watch streams revocations as they happen. Returning ErrUnsupported is fine —
+    // the gateway falls back to polling Authorize on recheck_interval.
+    Watch(ctx context.Context) (<-chan RevocationEvent, error)
+}
+
+type Action string // shell, exec, file:read, file:write, tcp, passthrough, replay, observe
+
+// Target is the specific thing the action is aimed at, for the actions that have one.
+// A zero Target means the action names none — `shell` is a whole device either way.
+// A backend that ignores Target answers for every target, which is what every backend
+// did before the field existed, so adding it narrowed nobody's policy.
+type Target struct {
+    Port int      // tcp: the device-local port
+    Path string   // file:read / file:write: the path, as the operator wrote it
+    Argv []string // exec: the command and its arguments
+}
+
+type Decision struct {
+    Allow  bool
+    Reason string        // shown to the operator on a deny; make it actionable
+    Limits *Limits       // optional per-grant override, only ever more restrictive
+    TTL    time.Duration // re-check sooner than the default for this grant
+}
+
+type RevocationEvent struct {
+    PrincipalID string // "" means every principal
+    DeviceID    string // "" means every device
+    Reason      string
+}
+```
+
+This is the interface that justifies the whole architecture, so it gets called more than
+once per session:
+
+**`plugintest` enforces this table**, and its most important case is the last column: a
+backend that answers `Allow: false` when its own dependency is down fails the suite. See
+§ 11.1.
+
+| when | on a deny | on an *error* |
+|---|---|---|
+| at open | `403`, no session row, `not_authorized` | `503`, no session row, `authz_unavailable` |
+| every `recheck_interval` (default 30 s) | closed, `revoked` | grace window, then `authz_unavailable` |
+| on a `RevocationEvent` | closed, `revoked`, typically <1 s | n/a — a dropped stream is not a denial |
+| `DELETE /api/sessions/\{id\}` | closed, `admin_kill` | n/a |
+
+**`Limits` may only tighten.** A grant that widened a limit would let an authorisation
+backend raise the ceilings the gateway operator set, which inverts who is in charge. The
+gateway takes the minimum of the two, always.
+
+`Watch` reconnects with backoff if the stream drops, and **a broken `Watch` is not a
+security failure** — the re-check interval is the guarantee and `Watch` is the
+optimisation. Design your backend so that being disconnected for a minute costs you a
+minute of staleness, not a missed revocation.
+
+Two things follow, and `plugintest` checks both. **Close the channel when the context
+ends**, or the gateway leaks a watcher goroutine per reconnect. And **never close it to
+mean "everything is revoked"** — the gateway treats a close as "reconnect", because a
+stream that dies must not be able to kill a fleet. Say that with a `RevocationEvent`
+naming neither a principal nor a device, which is the explicit way to state it.
+
+| built-in | notes |
+|---|---|
+| `rules` (default) | `principal → device selector → actions` in YAML, reloaded on file change. Selectors match on device id, tags, or glob; a `deny: true` rule beats every allow. **Never returns an error** — its source of truth is a file already in memory, so there is no outage in which it starts denying people, and a file that fails to reload leaves the previous rules in place. |
+| `sqlite` | Durable permissions in the operational database, managed through `/api/v1/permissions` and the admin UI. Supports principal/device globs, exact device tags, actions, deny precedence and grant limits. A database failure is reported as `authz_unavailable`, never as a denial. |
+| `webhook` | `POST` per decision with a short cache TTL, plus an SSE endpoint for `Watch`. The escape hatch for anything: Casdoor, OPA, a permission table in your own database. |
+
+<a id="31-sqlite-permissions"></a>
+### 3.1 SQLite permissions
+
+```yaml
+store:
+  kind: sqlite
+  path: ./oarlock.db
+
+authorizer:
+  kind: sqlite
+  recheck_interval: 30s
+```
+
+The backend creates `oarlock_permissions` on first boot. Permission selectors and actions
+are stored as JSON columns so one permission is replaced atomically; public policy data is
+also available in the curated SQL Explorer snapshot. Private operator and device keys are
+not stored in this table.
+
+**`Watch` is unsupported here**, so revocation lands on the re-check interval rather than
+within the second. ADR-029 makes the interval the guarantee and `Watch` the optimisation,
+so this is a supported configuration — but a permission disabled in the admin UI does not
+close a live session immediately. Kill the session if you need it gone now.
+
+<a id="311-administering-the-policy"></a>
+### 3.1.1 Administering the policy
+
+The admin API is authorised by the policy it edits, which needs saying out loud because the
+first version of it was not. Three actions govern the surface:
+
+| action | checked against | governs |
+|---|---|---|
+| `admin:devices` | the device being changed, as **stored** | `POST`/`PUT`/`DELETE /api/v1/devices` |
+| `admin:permissions` | the synthetic `gateway` device | all of `/api/v1/permissions`, reads included |
+| `admin:kill` | the session's or agent's device | `DELETE /api/v1/sessions/\{id\}` for somebody else's session, `DELETE /api/v1/agents/\{id\}` |
+
+`exec` is worth granting where `shell` is not. It is the capability most support work
+actually needs — read a log, restart a service, print a version — and on a device in
+somebody's home the difference matters:
+
+```yaml
+# What field service needs, most days: allow-listed commands, on a leash.
+- principals: ["*@field.example.com"]
+  devices: ["*"]
+  actions: ["exec"]
+  max_duration: 15m
+  idle: 2m
+  ttl: 10s
+```
+
+The gateway authorises the *action*; the **device** holds the list of commands, in its own
+config. Those are different questions, and the second must not be answerable from the
+network. `exec` does not imply `shell` and `shell` does not imply `exec`.
+
+```yaml
+# A fleet lead who runs the treadmills and cannot touch policy.
+- principals: ["lead@example.com"]
+  devices: ["treadmill-*"]
+  actions: ["admin:devices", "admin:kill"]
+
+# Access management, which is a different job.
+- principals: ["security@example.com"]
+  devices: ["gateway"]
+  actions: ["admin:permissions"]
+```
+
+`GET /api/v1/devices/\{id\}/access` answers the other direction — which rules are written
+about one device, denials first. It exists because a flat rule list cannot answer "who can
+reach this thing": that needs glob-and-tag matching, and the one place it must not be
+re-implemented is a browser one hop from the backend that owns it. `plugin.Permission`'s
+`AppliesTo`, `MatchesPrincipal` and `Grants` are the shared predicates, so the admin view
+and the decision cannot disagree about what a rule means.
+
+Notes worth having before you write these:
+
+- **Reading the policy needs `admin:permissions`.** A list of who may reach what is a map
+  of whom to phish, so `GET` is gated with the writes.
+- **`admin:devices` is checked against the stored record**, so a `tags:` deny reaches the
+  admin surface. On *create* there is no stored record yet, so a caller who may create
+  devices can create one whose tags a deny would have matched. Scope create-capable grants
+  accordingly.
+- **Ending your own session needs nothing.** `admin:kill` is about ending somebody else's.
+- **Neither implies the other, and neither implies a session.** `admin:devices` on `*` does
+  not get you a shell.
+
+<a id="312-authorizeradmins-the-break-glass"></a>
+### 3.1.2 `authorizer.admins`: the break-glass
+
+```yaml
+authorizer:
+  kind: sqlite
+  admins:
+    - root@example.com
+```
+
+An empty policy store has nobody who may write the first rule, and deleting the last
+`admin:permissions` grant locks the room. This field names principals — exact ids, patterns
+are refused at boot — who are allowed the administrative actions regardless of what the
+backend answers, so whoever owns the config file can always get back in. It is logged at
+boot and on every use.
+
+**It grants `admin:*` and nothing else.** A config administrator may repair the policy; to
+open a shell, watch a session or query the database they must write themselves a grant,
+which is a visible row and an audit line rather than a line in a file nobody re-reads.
+
+**It does outrank a deny on the administrative actions.** That is deliberate: anyone who
+can edit this file can also edit the rules file, repoint the database or restart with a
+different backend, so a deny row cannot meaningfully constrain them, and pretending
+otherwise would only cost the recovery the field exists for. It does not reach a session
+action, so `deny`-beats-`allow` holds for everything an operator does on a device.
+
+Every administrative request emits `admin.change`, refusals included, and a policy write
+records what the rule granted — principals, devices, actions, effect — rather than just its
+id, because the row it names may since have been edited away.
+
+<a id="32-the-rules-file"></a>
+### 3.2 The `rules` file
+
+```yaml
+rules:
+  # Everyone on call gets a shell on the treadmills.
+  - principals: ["*@oncall.example.com"]
+    devices: ["treadmill-*"]
+    actions: ["shell", "exec"]
+
+  # A contractor, on a leash: fifteen minutes, and re-checked every ten seconds.
+  - principals: ["contractor@partner.example.com"]
+    devices: ["treadmill-4821"]
+    actions: ["shell"]
+    max_duration: 15m
+    idle: 2m
+    ttl: 10s
+
+  # Auditors read recordings and watch live sessions. They never get a keyboard.
+  - principals: ["auditor@example.com"]
+    actions: ["replay", "observe"]
+
+  # A carve-out. A matching deny beats every allow, wherever it appears in the file,
+  # so this cannot be defeated by rule ordering somebody else controls.
+  - principals: ["*"]
+    tags: {scope: "pci"}
+    actions: ["*"]
+    deny: true
+    reason: "PCI-scoped devices need a change ticket"
+```
+
+- **`actions` is never defaulted.** An empty list is refused at load: it is far more
+  likely to be an unfinished rule than an intent to grant the fleet. Write
+  `actions: ["*"]` if you mean every action.
+- **Every listed tag must match.** A rule scoped to PCI *and* the EU does not grant on a
+  device that is only one of them.
+- **`max_duration`, `idle` and `ttl` only tighten**, like every per-grant limit: the
+  gateway takes the minimum of its own ceiling and the grant's.
+- **A file that fails to load changes nothing.** A syntax error, or a deleted file, leaves
+  the rules already in memory in place and logs loudly. Dropping to no rules would deny
+  everybody instantly because of a typo — and it would look exactly like a mass revocation
+  to every operator it hit.
+- **Unknown keys are refused.** A typo in a key name must not silently mean "default".
+
+<a id="33-the-webhook-authorizer"></a>
+### 3.3 The `webhook` authorizer
+
+Use `webhook` when the source of truth lives somewhere else: OPA, Casdoor, an internal
+permission table, or a service that already understands on-call state.
+
+```yaml
+authorizer:
+  kind: webhook
+  url: https://permissions.example.com/oarlock/authorize
+  watch_url: https://permissions.example.com/oarlock/revocations
+  token: ${OARLOCK_AUTHZ_TOKEN}
+  timeout: 2s
+  cache_ttl: 5s
+  recheck_interval: 30s
+```
+
+`cache_ttl` must be shorter than `recheck_interval`. The re-check interval is the promise
+that a withdrawn grant goes stale for no longer than that window; a cache that outlived it
+would make the promise untrue, so the boot check refuses it.
+
+The decision endpoint receives:
+
+```json
+{
+  "principal": {
+    "id": "admin@mail.com",
+    "email": "admin@mail.com",
+    "groups": ["on-call"],
+    "attrs": {"jurisdiction": "EU"}
+  },
+  "device": {
+    "id": "treadmill-4821",
+    "platform": "android",
+    "mode": "",
+    "resolved_mode": "dispatch",
+    "tags": {"scope": "pci"},
+    "profiles": ["shell"]
+  },
+  "action": "shell"
+}
+```
+
+Return `2xx` with a decision:
+
+```json
+{
+  "allow": true,
+  "limits": {"max_duration": "15m", "idle": "2m", "rate": 262144},
+  "ttl": "5s"
+}
+```
+
+A denial is still a decision: return `2xx` with `"allow": false` and an actionable
+`reason`, or return `403` with the same JSON body. Other non-2xx responses, malformed JSON
+and transport errors are **unavailable**, not denied; the gateway reports
+`authz_unavailable` and applies the grace-window contract from § 3.
+
+`watch_url` is optional. When set, it is a server-sent event stream whose `data:` payload is
+a JSON `RevocationEvent`:
+
+```text
+data: {"principal_id":"admin@mail.com","device_id":"treadmill-4821","reason":"left on-call"}
+```
+
+An empty `principal_id` or `device_id` means every principal or every device. Closing the
+stream is not a revocation; the gateway reconnects and the re-check interval remains the
+guarantee.

@@ -1,0 +1,93 @@
+---
+title: "5. Behaviour the frames do not show"
+description: "Device→operator DATA is batched into windows of up to 25 ms."
+mode: wide
+---
+
+<a id="51-coalescing"></a>
+### 5.1 Coalescing
+
+Device→operator `DATA` is batched into windows of up to 25 ms. `logcat` is thousands of
+tiny writes per second; one frame each is a syscall storm plus a WebSocket header per byte.
+Batching is order-preserving and lossless, so it is always on, in both modes, for every
+profile. Operator→device input is never batched — a human is waiting for the echo, and
+25 ms of added latency on every keystroke is felt.
+
+<a id="52-throttle-policy-is-per-profile"></a>
+### 5.2 Throttle policy is per profile
+
+`shell` and `sshpass` backpressure. `log` and `exec` coalesce and drop, announcing it with
+`THROTTLE`. `file` and `tcp` backpressure, because dropping bytes from a byte-exact
+transfer is corruption.
+
+The reason is that a dropped chunk lands in the middle of an escape sequence and leaves the
+terminal broken until something forces a full redraw. `vi`, `tmux` and anything `ncurses`
+render as garbage, and no marker can repair it. Full reasoning in
+[ARCHITECTURE.md § 9.2](/generated/architecture/9-flow-control-limits-and-profiles#92-throttling-is-per-profile-and-the-shell-must-never-drop).
+
+<a id="53-scrollback-and-where-a-replay-may-start"></a>
+### 5.3 Scrollback, and where a replay may start
+
+A dropped operator socket is not a close. The session stays `attached`, the device keeps
+producing into a bounded ring (`limits.scrollback`, 256 KiB), and a reconnecting operator
+gets it replayed. Operators lose wifi constantly; a shell that dies with it is a shell
+nobody trusts with a long command. What bounds an abandoned session is `limits.idle` — a
+detached session receives no operator input — rather than a second timer with its own
+edge cases.
+
+The device is never blocked by an absent operator. Output drains into the ring at full
+speed, because the alternative is backpressure all the way to a PTY, where a background
+job stalls because somebody's wifi dropped.
+
+**A ring cannot simply replay from its oldest byte.** The byte it dropped may have been
+the `ESC` that opened a sequence whose remaining bytes are still in the buffer. Replaying
+from there feeds a terminal the tail of a sequence it never saw the head of: `[38;5;196m`
+arrives as text, or `2J` clears the screen, and the operator has no way to know it is an
+artefact of reconnecting rather than what the device printed.
+
+It cannot be fixed at replay time by guessing, because a parameter byte and a printable
+byte are the same byte — from the middle of a stream there is no way to tell `1;2` inside
+a CSI from the text "1;2". So the gateway tracks it on the way *in*: a minimal parser
+marks the positions where the stream is between sequences, and a replay starts at the
+oldest surviving mark. The bytes skipped to reach it are counted, so a client can show a
+gap rather than a silence.
+
+A device that opens a sequence and never closes it fills the ring with bytes that can
+never be safely replayed. That is a hostile device rather than a shell, and the operator
+gets the gap and nothing else.
+
+<a id="54-watching-a-session-read-only"></a>
+### 5.4 Watching a session read-only
+
+A second operator can attach to a live session as a watcher (FR13). Two properties hold
+and both matter:
+
+**Read-only is structural, not enforced.** The gateway never reads a watcher's connection
+for forwarding — there is no code path from a watcher's socket to the device — so their
+keystrokes cannot reach the shell even if the gateway is wrong about who they are. That is
+a stronger guarantee than a check, because a check is a line somebody can later move. The
+connection *is* read, by the handler holding it, for two other reasons: to notice promptly
+when a watcher leaves, and so that input from a watcher is counted and logged rather than
+vanishing.
+
+**The operator is told, by name, for as long as it is true.** `OBSERVERS` (§ 4.11) goes to
+the operator whenever the list changes, and the initial list is in `READY`. Whether an
+operator may *refuse* observation is a separate product question and deliberately not
+built: FR13 requires telling.
+
+A watch ticket is a different kind from an attach ticket, minted by a different endpoint
+(`POST /api/v1/sessions/\{id\}/observe`), and presenting one gets a read-only session rather
+than the keyboard. Watchers are capped per session, because each one is a socket the output
+path writes to.
+
+<a id="55-mode-a-passthrough"></a>
+### 5.5 Mode A passthrough
+
+Passthrough is not a separate protocol. The operator's raw SSH bytes are `DATA` on a
+stream opened with `profile: "sshpass"`, and the agent connects that stream to the
+device-local `sshd` instead of to a PTY. The gateway does not parse, cannot record, and
+never emits `RESIZE`, `SIGNAL` or `EXIT` on such a stream — SSH is carrying all of that
+inside the ciphertext.
+
+Note that `sshpass` *must* backpressure, and here it is not a policy choice: dropping
+bytes out of an SSH stream breaks the MAC and kills the connection.
