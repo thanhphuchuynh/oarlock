@@ -1,0 +1,12 @@
+{"version":3,"term":{"cols":96,"rows":16},"timestamp":1789143349,"command":"sh mint/demos/01-shell.sh","env":{"SHELL":"/bin/zsh"}}
+[0.020, "o", "\r\n\u001b[2m# treadmill-4821 sits behind NAT. It has no sshd, no open port, no host key.\u001b[0m\r\n"]
+[1.304, "o", "\r\n\u001b[2m# It dialled out to the gateway. We connect to the gateway, not to it.\u001b[0m\r\n"]
+[1.306, "o", "\u001b[1;31m$\u001b[0m ssh -p 2222 -i ./operator_key treadmill-4821@gateway\r\n"]
+[0.841, "o", "oarlock: waking treadmill-4821…\r\r\n"]
+[0.003, "o", "oarlock: treadmill-4821 · gateway-terminated · this session is recorded\r\r\n"]
+[0.036, "o", "sh-3.2$ "]
+[1.563, "o", "uname -sm\r\r\nDarwin arm64\r\r\nsh-3.2$ "]
+[1.808, "o", "sw_vers -productName\r\r\nmacOS\r\r\nsh-3.2$ "]
+[1.808, "o", "exit\r\r\nexit\r\r\n"]
+[0.022, "o", "\r\r\noarlock: session sess_jjur5xh62sro on treadmill-4821 ended (device_close) · gateway-terminated · was recorded\r\r\n"]
+[2.007, "x", "0"]

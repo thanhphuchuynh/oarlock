@@ -1,0 +1,9 @@
+{"version":3,"term":{"cols":96,"rows":16},"timestamp":1789143369,"command":"sh mint/demos/03-file.sh","env":{"SHELL":"/bin/zsh"}}
+[0.018, "o", "\r\n\u001b[2m# The file profile reads under one root the device configured.\u001b[0m\r\n"]
+[1.303, "o", "\u001b[1;31m$\u001b[0m curl $GW/devices/treadmill-4821/file?path=device.conf -H \"$AUTH\"\r\n"]
+[0.860, "o", "model=treadmill-4821\r\nfirmware=2.4.1\r\nlast_service=2026-08-30\r\n"]
+[1.409, "o", "\r\n\u001b[2m# A path that climbs out of that root does not fail in a string check.\u001b[0m\r\n"]
+[1.308, "o", "\r\n\u001b[2m# It fails in the kernel, because os.Root is what holds it.\u001b[0m\r\n"]
+[1.308, "o", "\u001b[1;31m$\u001b[0m curl $GW/devices/treadmill-4821/file?path=../../../../etc/passwd -H \"$AUTH\"\r\n"]
+[0.869, "o", "{\r\n    \"type\": \"https://oarlock.dev/errors/invalid_argument\",\r\n    \"title\": \"That path is not allowed\",\r\n    \"status\": 400,\r\n    \"code\": \"invalid_argument\",\r\n    \"detail\": \"paths are relative to the device's file root and cannot climb out of it\",\r\n"]
+[3.420, "x", "0"]

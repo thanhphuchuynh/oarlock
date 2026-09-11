@@ -1,0 +1,72 @@
+---
+title: "Use cases"
+description: "The problems inbound SSH cannot touch, and the four times you actually open Oarlock."
+mode: wide
+---
+
+A support engineer needs a shell on a machine in someone else's building. The usual answers put a listener on that machine. Oarlock does not.
+
+<div className="oar-story">
+  <div className="board" id="oar-board" data-scene="0">
+    <div className="copy">
+      <div className="scene s0">
+        <span className="tag problem">The problem</span>
+        <div className="title">treadmill-4821 is on a customer LAN</div>
+        <p>It is behind NAT, often on a cellular APN, often asleep. It has no public address. You cannot put a listener, a host key, or an open port on it.</p>
+      </div>
+      <div className="scene s1">
+        <span className="tag problem">What fails</span>
+        <div className="title">Inbound SSH never arrives</div>
+        <p className="fail">ssh: connect to host treadmill-4821 port 22: Connection timed out</p>
+        <p>A VPN overlay is a fleet on a network. You wanted one shell, on one device, for one person, recorded.</p>
+      </div>
+      <div className="scene s2">
+        <span className="tag fix">What Oarlock does</span>
+        <div className="title">The device only ever dials out</div>
+        <p>The agent opens TLS to :443. The gateway is the SSH server. Nothing new listens on the internet, and nothing at all listens on the device.</p>
+      </div>
+      <div className="scene s3">
+        <span className="tag fix">The session</span>
+        <div className="title">A real ssh prompt, in the plaintext</div>
+        <p className="fail">ssh treadmill-4821@gw · this session is recorded</p>
+        <p>Because the gateway terminates SSH, every session can be recorded, and a failure is a named reason — not “connection closed”.</p>
+      </div>
+      <div className="scene s4">
+        <span className="tag fix">While it is open</span>
+        <div className="title">Access can be withdrawn now</div>
+        <p>Authorisation is re-checked while the shell is live. A departed operator does not keep a session until they hang up. The device never held their credential.</p>
+      </div>
+      <div className="scene s5">
+        <span className="tag">Where this is the job</span>
+        <div className="title">Four times you actually open it</div>
+        <p>Not a mesh. One session, one device, one person, with a recording you can stand behind.</p>
+      </div>
+    </div>
+    <div className="viz">
+      <div className="scene s0 s1 s2 s3 s4">
+        <div className="node op"><b>Operator</b><span>ssh client or browser</span></div>
+        <div className="wall" aria-hidden="true"></div>
+        <div className="node gw"><b>oarlockd</b><span>SSH server · records</span></div>
+        <div className="node"><b>treadmill-4821</b><span>agent · dials out</span></div>
+        <div className="path"></div>
+        <div className="packet bad"></div>
+        <div className="packet out"></div>
+        <div className="x">×</div>
+        <div className="rec"><span className="rec-dot"></span>REC</div>
+      </div>
+      <div className="scene s5">
+        <div className="use"><b>Gym hardware</b><span>A rower in a customer building. Persistent agent on mains, or a doorbell if it sleeps.</span></div>
+        <div className="use"><b>Android / cellular</b><span>No inbound port, no sshd you can supervise. Dispatch wakes the app; it dials out.</span></div>
+        <div className="use"><b>Mid-incident, in a browser</b><span>Same session as ssh, from a phone, with the two waits named: waking, then the tunnel.</span></div>
+        <div className="use"><b>Whoever owns access</b><span>Replay the recording. Kill the session. Change the grant while it is still open.</span></div>
+      </div>
+    </div>
+  </div>
+  <div className="nav" id="oar-nav"></div>
+</div>
+
+## What it is not for
+
+- An L3 overlay for the whole fleet. That is Tailscale or OpenZiti.
+- Device management, enrollment, or OTA. It opens shells.
+- A product that hides the cost: the gateway reads the plaintext. If that is unacceptable, mode A passthrough exists and is unrecorded on purpose.

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Oarlock",
+  "colors": {
+    "primary": "#b3231c",
+    "dark": "#b3231c",
+    "light": "#e0706a"
+  },
+  "appearance": {
+    "default": "dark",
+    "strict": false
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Report a vulnerability",
+        "href": "/generated/security/reporting-a-vulnerability"
+      }
+    ]
+  },
+  "footer": {
+    "title": "Apache 2.0 · Wire version 0 — unstable"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": [
+          "index",
+          "use-cases",
+          "quickstart",
+          "diagrams",
+          "generated/overview/the-shape",
+          "generated/overview/two-ways-to-reach-a-device",
+          "generated/overview/two-ways-to-terminate-ssh",
+          "generated/overview/what-is-actually-pluggable",
+          "generated/overview/revoking-an-operator"
+        ]
+      },
+      {
+        "group": "Gateway",
+        "pages": [
+          "generated/architecture/1-scope",
+          "generated/architecture/2-components",
+          "generated/architecture/3-reachability-modes",
+          "generated/architecture/4-termination-modes",
+          "generated/architecture/5-opening-a-session",
+          "generated/architecture/6-session-lifecycle",
+          "generated/architecture/7-authorisation-and-revocation",
+          "generated/architecture/8-recording",
+          "generated/architecture/9-flow-control-limits-and-profiles",
+          "generated/architecture/10-more-than-one-gateway",
+          "generated/architecture/11-failure-paths",
+          "generated/architecture/13-decisions"
+        ]
+      },
+      {
+        "group": "Wire",
+        "pages": [
+          {
+            "group": "Protocol",
+            "pages": [
+              "generated/protocol/1-transport",
+              "generated/protocol/2-frame-layout",
+              "generated/protocol/3-handshakes",
+              "generated/protocol/4-frame-reference",
+              "generated/protocol/5-behaviour-the-frames-do-not-show",
+              "generated/protocol/6-error-codes",
+              "generated/protocol/7-versioning"
+            ]
+          },
+          {
+            "group": "SDK",
+            "pages": [
+              "generated/sdk/1-four-surfaces-not-one-sdk",
+              "generated/sdk/2-the-control-api-is-the-contract",
+              "generated/sdk/3-service-authentication-and-who-the-session-belongs-to",
+              "generated/sdk/5-running-the-gateway-inside-your-service",
+              "generated/sdk/6-embedding-the-terminal",
+              "generated/sdk/61-replay",
+              "generated/sdk/7-embedding-the-agent",
+              "generated/sdk/8-events-out",
+              "generated/sdk/9-what-is-stable-and-what-is-not"
+            ]
+          },
+          {
+            "group": "Plugins",
+            "pages": [
+              "generated/plugins/1-how-a-plugin-is-wired",
+              "generated/plugins/2-authenticator--who-is-this-operator",
+              "generated/plugins/3-authorizer--may-they-on-this-device-right-now",
+              "generated/plugins/4-recorder--the-artefact",
+              "generated/plugins/5-auditsink--what-happened",
+              "generated/plugins/6-sessionstore--the-ledger",
+              "generated/plugins/7-deviceregistry--what-the-gateway-knows-about-a-device",
+              "generated/plugins/8-agentauthenticator--is-this-really-that-device",
+              "generated/plugins/9-dispatcher--the-doorbell-dispatch-mode-only",
+              "generated/plugins/10-ownership--which-gateway-holds-this-device",
+              "generated/plugins/11-writing-one--a-worked-example"
+            ]
+          }
+        ]
+      },
+      {
+        "group": "Security",
+        "pages": [
+          "generated/threat-model/1-what-is-worth-stealing",
+          "generated/threat-model/2-trust-boundaries",
+          "generated/threat-model/3-adversaries",
+          "generated/threat-model/4-gateway-compromise-is-total",
+          "generated/threat-model/5-operator-authentication-and-authorisation",
+          "generated/threat-model/6-the-device-leg",
+          "generated/threat-model/7-what-oarlock-deliberately-does-not-do",
+          "generated/threat-model/8-mode-a-passthrough-specifically",
+          "generated/threat-model/9-recordings-are-as-sensitive-as-the-sessions",
+          "generated/threat-model/10-denial-of-service",
+          "generated/threat-model/11-hardening-checklist",
+          "generated/threat-model/12-what-is-actually-built",
+          "generated/security/reporting-a-vulnerability",
+          "generated/security/what-we-will-do",
+          "generated/security/scope",
+          "generated/security/supply-chain"
+        ]
+      },
+      {
+        "group": "Operate",
+        "pages": [
+          "generated/metrics/the-names-are-stable",
+          "generated/metrics/golden-signals",
+          "generated/metrics/every-plugins-latency-and-error-rate",
+          "generated/metrics/a-starter-alert-set",
+          "generated/android/build",
+          "generated/android/install-without-adb",
+          "generated/android/android-boundaries",
+          "generated/android/as-an-init-service-on-your-own-image"
+        ]
+      },
+      {
+        "group": "API",
+        "openapi": "openapi.yaml"
+      }
+    ]
+  },
+  "openapi": "openapi.yaml",
+  "api": {
+    "mdx": {
+      "server": "http://127.0.0.1:8443"
+    }
+  }
+}

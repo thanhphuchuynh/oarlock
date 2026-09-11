@@ -128,8 +128,8 @@ help:
 		'  make dev-ui       Start Vite console dev server' \
 		'  make landing      Serve the landing sheet source on :5180, live reload' \
 		'  make landing-preview  Build it and serve the output on :5181' \
-		'  make documents    Re-render the document sheets from the Markdown' \
-		'  make landing-lan  Serve the sheets to this network, on this LAN address' \
+		'  make documents    Generate the Mintlify pages from the Markdown' \
+		'  make landing-lan  Serve the landing sheet to this network, on this LAN address' \
 		'  make android-apk  Build the standalone ARM64 Android/VR agent APK' \
 		'  make android-binary  Build the ARM64 agent binary for a system image'
 
@@ -373,10 +373,9 @@ landing-build:
 landing-preview:
 	$(NPM) run preview:landing
 
-# Sheets 2 and 3, rendered from the Markdown that is already the source of truth.
-# Separate from landing-build so a documentation edit does not wait on a vite build.
+# Mintlify pages, split from the Markdown that is already the source of truth.
 documents:
-	$(NPM) run documents
+	$(NPM) run docs:gen
 
 # The sheets, readable by other machines on this network.
 #
@@ -391,8 +390,8 @@ documents:
 landing-lan:
 	@addr=$$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null); \
 	if [ -z "$$addr" ]; then echo 'no LAN address on en0/en1'; exit 1; fi; \
-	printf 'sheet 1   http://%s:5181/\n' "$$addr"; \
-	printf 'register  http://%s:5181/documents/\n' "$$addr"; \
+	printf 'sheet     http://%s:5181/\n' "$$addr"; \
+	printf 'docs      http://127.0.0.1:3000/  (pnpm docs)\n'; \
 	printf 'readable by every host on this network until you stop it (ctrl-c)\n\n'; \
 	OARLOCK_DOCS_HOST=$$addr $(NPM) run preview:landing:lan
 

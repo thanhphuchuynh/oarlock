@@ -1,0 +1,130 @@
+---
+title: "Demos"
+description: "Four profiles and the console, recorded against a running gateway — including the refusals."
+mode: wide
+---
+
+These are recordings, not mockups. Each one is a real session against a real `oarlockd` with a
+real agent dialled in; the scripts that drive them live in `mint/demos/` and you can run them
+yourself. Nothing here is typed for the camera.
+
+Two of the profiles spend as much time on a **refusal** as on the success. That is deliberate: a
+profile is only as interesting as what it will not do, and a demo that shows only the happy
+path is advertising rather than documentation.
+
+<CardGroup cols={2}>
+  <Card title="shell" href="#shell">
+    A prompt on a device with no listener and no open port.
+  </Card>
+  <Card title="exec" href="#exec">
+    Complete argvs, matched element for element.
+  </Card>
+  <Card title="file" href="#file">
+    One root, held by the kernel rather than a string check.
+  </Card>
+  <Card title="tcp" href="#tcp">
+    A port on the device's own loopback, and nothing else.
+  </Card>
+  <Card title="console" href="#console">
+    The fleet, a device, and the policy behind both.
+  </Card>
+</CardGroup>
+
+## shell
+
+The device has no `sshd`, no open port and no host key of its own. It dialled out. The operator
+connects to the *gateway* and names the device as the username, using their own client and their
+own key.
+
+Two lines are worth reading closely. `waking treadmill-4821…` is dispatch mode: the device is not
+holding a session open, so the gateway has to ask for one. `this session is recorded` is printed
+before the shell appears, because consent that arrives after the fact is not consent.
+
+<Frame caption="ssh to a device behind NAT, through the gateway">
+  <img src="/media/01-shell.gif" alt="An SSH session opening on treadmill-4821 through the gateway" className="block dark:hidden w-full rounded-xl" />
+  <img src="/media/01-shell-dark.gif" alt="An SSH session opening on treadmill-4821 through the gateway" className="hidden dark:block w-full rounded-xl" />
+</Frame>
+
+## exec
+
+The device publishes a list of complete argvs. Not "this program with any arguments" — deciding
+which flags of which binary are safe is a per-binary research project, so the allow-list holds
+whole commands.
+
+The refusal is the point. `/bin/cat /etc/passwd` is turned down by the **device**, not by the
+gateway: a compromised gateway cannot widen this list, because it never held it.
+
+<Frame caption="An allow-listed argv, and one that is not">
+  <img src="/media/02-exec.gif" alt="exec running an allow-listed command, then refusing one that is not" className="block dark:hidden w-full rounded-xl" />
+  <img src="/media/02-exec-dark.gif" alt="exec running an allow-listed command, then refusing one that is not" className="hidden dark:block w-full rounded-xl" />
+</Frame>
+
+## file
+
+One configured root, and paths relative to it. The second call tries to climb out with `../../../../`
+and fails — but not because a string was inspected for `..`. Confinement below the root is
+`os.Root`, which means the escape fails in the kernel. String checks are where path-traversal bugs
+live; this one cannot be argued with.
+
+<Frame caption="A read under the root, and a path that tries to leave it">
+  <img src="/media/03-file.gif" alt="Reading a file under the device root, then a refused path traversal" className="block dark:hidden w-full rounded-xl" />
+  <img src="/media/03-file-dark.gif" alt="Reading a file under the device root, then a refused path traversal" className="hidden dark:block w-full rounded-xl" />
+</Frame>
+
+## tcp
+
+`ssh -L` to a service on the device's own loopback — here a console on `127.0.0.1:3000` that has no
+authentication, because it was never meant to leave the device. That is the usual reason a port is
+bound to loopback, and the reason this profile is an allow-list of ports rather than a switch.
+
+The invitation carries **a port, never a host**. The agent dials `127.0.0.1` and nothing else, so
+this can never become a route into the network the device is sitting on.
+
+<Frame caption="Forwarding a device-local port, and fetching it">
+  <img src="/media/04-tcp.gif" alt="Forwarding a device-loopback port and fetching the device's own console" className="block dark:hidden w-full rounded-xl" />
+  <img src="/media/04-tcp-dark.gif" alt="Forwarding a device-loopback port and fetching the device's own console" className="hidden dark:block w-full rounded-xl" />
+</Frame>
+
+## console
+
+The same gateway, from the other side. This is the admin console `oarlockd` serves at `/ui/` —
+signing in with a development token, opening the fleet, then `treadmill-4821`, then the policy
+that allowed every session above.
+
+The permissions table is the part worth pausing on. `PCI change control` is a **deny**, and it
+sits at the top because a denial outranks every allow beneath it — there is no ordering to get
+wrong and no precedence to reason about. `Operator shell` is the grant these demos ran under, and
+its actions are exactly the five the profiles needed.
+
+<Frame caption="The fleet, a device, and the policy behind both">
+  <video src="/media/05-console.mp4" controls muted playsInline className="w-full rounded-xl" />
+</Frame>
+
+## Running these yourself
+
+The gateway, the agent and the device-local service are all local. From a checkout:
+
+```sh
+make binaries
+make local-config
+cd demo && ../oarlockd -config ./oarlock.local.yaml        # terminal 1
+
+sh mint/demos/00-setup.sh                                  # once
+cd demo && python3 -m http.server 3000 --bind 127.0.0.1 --directory ./device-web   # terminal 2
+cd demo && ../oarlock-agent -config ./agent.demo.yaml      # terminal 3
+
+sh mint/demos/01-shell.sh                                  # and the rest
+```
+
+`00-setup.sh` writes the agent config, the `file` root and the device's own web page into
+`demo/`, then registers the profiles and widens the grant to cover them. It has to generate
+them rather than ship them: `demo/` holds private keys and a local database, so it is not in
+the repository.
+
+The config it writes is what gives the device its `exec` allow-list, its `file` root and its
+forwardable ports — the same keys a real deployment sets, documented at
+`android/system/agent.conf.example`.
+
+Every session above also left a recording behind: an asciicast with a hash chain and a signed
+manifest, written by the gateway rather than by the client. That is its own feature, and it is
+what the console's player reads.

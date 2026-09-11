@@ -1,0 +1,9 @@
+{"version":3,"term":{"cols":96,"rows":12},"timestamp":1789143360,"command":"sh mint/demos/02-exec.sh","env":{"SHELL":"/bin/zsh"}}
+[0.017, "o", "\r\n\u001b[2m# The device publishes an allow-list of complete argvs. This one is on it:\u001b[0m\r\n"]
+[1.307, "o", "\u001b[1;31m$\u001b[0m ssh treadmill-4821@gateway /usr/bin/uptime\r\n"]
+[0.864, "o", "23:16  up 2 days,  2:32, 4 users, load averages: 17.15 28.34 18.59\r\n"]
+[0.006, "o", "\r\r\n"]
+[1.409, "o", "\r\n\u001b[2m# This one is not. The device refuses it; the gateway never gets to decide.\u001b[0m\r\n"]
+[1.303, "o", "\u001b[1;31m$\u001b[0m ssh treadmill-4821@gateway /bin/cat /etc/passwd\r\n"]
+[0.846, "o", "\r\r\n[oarlock] not_authorized: agent: that command is not allowed on this device: /bin/cat /etc/passwd\r\r\n\r\r\n"]
+[3.410, "x", "0"]

@@ -1,0 +1,60 @@
+---
+title: "Diagrams"
+description: "Trust boundaries, port forwarding, and the two authentications — drawn from the code."
+mode: wide
+---
+
+These three figures are the ones the landing sheet called Fig. 2–4. They are compiled from `docs/diagrams/*.json`; if a frame is empty, the HTML has not been generated on this machine.
+
+<CardGroup cols={3}>
+  <Card title="Trust boundaries" href="#trust-boundaries">
+    Who is trusted with what, and where each control sits.
+  </Card>
+  <Card title="Port forwarding" href="#port-forwarding">
+    What `ssh -L` passes through, and every way it is refused.
+  </Card>
+  <Card title="Authentication" href="#authentication">
+    The operator's credential, and the device's, as two separate exchanges.
+  </Card>
+</CardGroup>
+
+## Trust boundaries
+
+<Frame caption="Who is trusted with what">
+  <iframe
+    src="/figures/security-boundaries.html"
+    title="Security boundaries"
+    className="w-full rounded-xl"
+    height="900"
+  />
+</Frame>
+
+[Open full screen](/figures/security-boundaries.html)
+
+## Port forwarding
+
+<Frame caption="What ssh -L passes through">
+  <iframe
+    src="/figures/port-forwarding.html"
+    title="Port forwarding"
+    className="w-full rounded-xl"
+    height="900"
+  />
+</Frame>
+
+[Open full screen](/figures/port-forwarding.html)
+
+## Authentication
+
+<Frame caption="Operator and device authentications">
+  <iframe
+    src="/figures/authentication.html"
+    title="Authentication sequence"
+    className="w-full rounded-xl"
+    height="1000"
+  />
+</Frame>
+
+[Open full screen](/figures/authentication.html)
+
+The sequence diagrams for opening a session (persistent and dispatch) live on [Opening a session](/generated/architecture/5-opening-a-session). The session state machine is on [Session lifecycle](/generated/architecture/6-session-lifecycle).

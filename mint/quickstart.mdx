@@ -1,0 +1,97 @@
+---
+title: "Quickstart"
+description: "The gateway and the agent on one machine, an operator key, and a shell. These are the real flags."
+mode: wide
+---
+
+The gateway and the agent on one machine. What is printed below is what the terminal prints.
+
+```bash
+go build -o oarlockd ./cmd/oarlockd
+go build -o oarlock-agent ./cmd/oarlock-agent
+mkdir demo && cd demo
+```
+
+<Steps>
+  <Step title="A device key, and an operator key">
+    ```bash
+    ../oarlock-agent -key ./device.key -generate-key
+    ssh-keygen -t ed25519 -N "" -f ./operator_key -C admin@mail.com
+    cat operator_key.pub > authorized_keys
+    ```
+    `-generate-key` writes `device.key` and prints the public half for `devices.yaml`.
+  </Step>
+  <Step title="Three config files">
+    Copy `examples/oarlock.yaml`, `examples/rules.yaml`, and a device registry naming the device and the public half of its key:
+
+    ```yaml
+    # devices.yaml
+    devices:
+      - id: treadmill-4821
+        platform: linux
+        keys:
+          - "<what -generate-key printed>"
+        retired_keys: []
+        profiles: [shell]
+    ```
+
+    For a real deployment, generate `ssh.host_key` once and distribute the same private key to every gateway replica. Use `ssh.generate_host_key` only for this local demo.
+  </Step>
+  <Step title="Check, then start">
+    ```bash
+    ../oarlockd -config ./oarlock.yaml -check
+    ../oarlockd -config ./oarlock.yaml
+    ```
+
+    `-check` validates the file — unknown keys are refused, not ignored — and runs the boot gate.
+  </Step>
+  <Step title="The agent, on the device">
+    ```bash
+    ../oarlock-agent -gateway ws://127.0.0.1:8443/ws/control \
+                     -device treadmill-4821 -key ./device.key \
+                     -shell /bin/sh -insecure-skip-pin
+    ```
+
+    <Warning>
+    The agent refuses to start without either a pinned gateway certificate or an explicit `-insecure-skip-pin`. Handshake v1 binds the signature to the TLS channel; both ends still accept v0 by default. Pinning is what stands under the downgrade.
+    </Warning>
+  </Step>
+  <Step title="A shell">
+    ```bash
+    ssh -p 2222 -i ./operator_key treadmill-4821@127.0.0.1
+    ```
+
+    ```
+    oarlock: waking treadmill-4821…
+    oarlock: treadmill-4821 · gateway-terminated · this session is recorded
+    sh-3.2$
+    ```
+
+    That is a recording of this exact step, not a mock-up:
+
+    <Frame caption="The step above, as it runs">
+      <img src="/media/01-shell.gif" alt="An SSH session opening on treadmill-4821 through the gateway" className="block dark:hidden w-full rounded-xl" />
+      <img src="/media/01-shell-dark.gif" alt="An SSH session opening on treadmill-4821 through the gateway" className="hidden dark:block w-full rounded-xl" />
+    </Frame>
+
+    `waking treadmill-4821…` is dispatch mode asking the device for a session. The recorded
+    line is printed *before* the prompt, because consent that arrives afterwards is not consent.
+  </Step>
+  <Step title="What happened">
+    ```bash
+    curl -s -H "Authorization: Bearer dev-token-long-enough-for-the-check" \
+         http://127.0.0.1:8443/api/v1/sessions | jq '.sessions[0]'
+    curl -s http://127.0.0.1:8443/readyz
+    ```
+
+    The console is a separate build: `pnpm install && pnpm build:ui`, then rebuild `oarlockd`. Open `http://127.0.0.1:8443/ui/` and paste the same token.
+
+    <Frame caption="The console, from that token to the policy behind it">
+      <video src="/media/05-console.mp4" controls muted playsInline className="w-full rounded-xl" />
+    </Frame>
+  </Step>
+</Steps>
+
+This device offers `shell` and nothing else. The other three profiles — `exec` with its
+allow-list, `file` under a confined root, and `tcp` to a device-local port — are each
+recorded on the [Demos](/demos) page, refusals included.

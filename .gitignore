@@ -8,6 +8,12 @@ packages/*/dist/
 # The landing sheet is a static build, same reasoning.
 /landing/dist/
 
+# Mintlify pages generated from the canonical Markdown. `pnpm docs` writes them.
+/mint/generated/
+/mint/openapi.yaml
+/mint/figures/
+/mint/.mintlify/
+
 # TypeScript's incremental build metadata: a cache, and it names absolute paths.
 *.tsbuildinfo
 

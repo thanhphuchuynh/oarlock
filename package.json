@@ -14,10 +14,12 @@
     "build:ui": "vite build --mode console --outDir ../cmd/oarlockd/app/ui/dist --emptyOutDir && node tokens/keep-dist.mjs",
     "dev:ui": "vite dev --mode console",
     "landing": "vite --mode landing",
-    "build:landing": "vite build --mode landing && node landing/documents.mjs",
-    "documents": "node landing/documents.mjs",
-    "preview:landing": "vite build --mode landing && node landing/documents.mjs && vite preview --mode landing",
-    "preview:landing:lan": "vite build --mode landing && node landing/documents.mjs && vite preview --mode landing --host ${OARLOCK_DOCS_HOST:-0.0.0.0}"
+    "build:landing": "vite build --mode landing",
+    "docs:gen": "node mint/generate.mjs",
+    "docs:check": "node --test mint/lib.test.mjs && node mint/generate.mjs --check",
+    "docs": "node mint/generate.mjs && node mint/dev.mjs",
+    "preview:landing": "vite build --mode landing && vite preview --mode landing",
+    "preview:landing:lan": "vite build --mode landing && vite preview --mode landing --host ${OARLOCK_DOCS_HOST:-0.0.0.0}"
   },
   "devDependencies": {
     "@oarlock/react": "workspace:*",

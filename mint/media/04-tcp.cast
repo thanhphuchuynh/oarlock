@@ -1,0 +1,9 @@
+{"version":3,"term":{"cols":96,"rows":14},"timestamp":1789143380,"command":"sh mint/demos/04-tcp.sh","env":{"SHELL":"/bin/zsh"}}
+[0.018, "o", "\r\n\u001b[2m# treadmill-4821 runs a console on its own 127.0.0.1:3000.\u001b[0m\r\n"]
+[1.308, "o", "\r\n\u001b[2m# It has no authentication, because it was never meant to leave the device.\u001b[0m\r\n"]
+[1.304, "o", "\u001b[1;31m$\u001b[0m ssh -L 8080:localhost:3000 -N -f treadmill-4821@gateway\r\n"]
+[2.232, "o", "\r\n\u001b[2m# That port is reachable here now — and nowhere else on the device's network.\u001b[0m\r\n"]
+[1.308, "o", "\u001b[1;31m$\u001b[0m curl -s http://localhost:8080/\r\n"]
+[0.849, "o", "<!doctype html><title>treadmill-4821 · on-device console</title>\r\n<h1>treadmill-4821</h1>\r\n<p>This page is served by the device on 127.0.0.1:3000.</p>\r\n<p>It has no authentication, because it was never meant to leave the device.</p>\r\n"]
+[1.434, "o", "\u001b[2m\u001b[0m\r\n\u001b[2m# tunnel closed\u001b[0m\r\n"]
+[2.006, "x", "0"]
