@@ -58,6 +58,7 @@ import (
 	"github.com/oarlock/oarlock/internal/auth/statictoken"
 	"github.com/oarlock/oarlock/internal/authsrv"
 	"github.com/oarlock/oarlock/internal/authz"
+	"github.com/oarlock/oarlock/internal/buildinfo"
 	"github.com/oarlock/oarlock/internal/config"
 	"github.com/oarlock/oarlock/internal/controlsrv"
 	"github.com/oarlock/oarlock/internal/handshake"
@@ -89,9 +90,6 @@ import (
 	dispatchwebhook "github.com/oarlock/oarlock/plugins/dispatch/webhook"
 )
 
-// Version is stamped at build time with -ldflags.
-var Version = "dev"
-
 // Main is the entry point. It never returns; it exits.
 func Main() {
 	var (
@@ -104,7 +102,7 @@ func Main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("oarlockd", Version)
+		fmt.Println("oarlockd", buildinfo.Version)
 		return
 	}
 
@@ -683,7 +681,7 @@ func (g *Gateway) Serve(ctx context.Context) error {
 	g.Log.Info("oarlockd is listening",
 		"ssh", g.sshListener.Addr().String(),
 		"http", g.httpListener.Addr().String(),
-		"url", g.Cfg.URL, "env", g.Cfg.Env, "version", Version,
+		"url", g.Cfg.URL, "env", g.Cfg.Env, "version", buildinfo.Version,
 		"console", ui.Built())
 	if !ui.Built() {
 		g.Log.Info("the console is not built into this binary; " +

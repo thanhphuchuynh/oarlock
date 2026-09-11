@@ -36,11 +36,10 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 
 	"github.com/oarlock/oarlock/agent"
+	"github.com/oarlock/oarlock/internal/buildinfo"
 	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/transport/websocket"
 )
-
-var version = "dev"
 
 func main() {
 	var (
@@ -59,7 +58,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("oarlock-agent", version)
+		fmt.Println("oarlock-agent", buildinfo.Version)
 		return
 	}
 
@@ -260,7 +259,7 @@ func main() {
 		PinSHA256: cfg.Pins,
 		Caps:      caps,
 		Info: frame.AgentInfo{
-			Version:  version,
+			Version:  buildinfo.Version,
 			Platform: platform(),
 		},
 		Shell: agent.ForkptyWith(strings.Fields(cfg.Shell), agent.ShellOptions{
@@ -285,7 +284,7 @@ func main() {
 	// one is worse than no line at all.
 	log.Info("oarlock-agent starting",
 		"device", cfg.Device, "gateway", cfg.Gateway, "shell", cfg.Shell,
-		"pinned", len(cfg.Pins) > 0, "version", version)
+		"pinned", len(cfg.Pins) > 0, "version", buildinfo.Version)
 	if err := control.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Error("control channel", "error", err)
 		os.Exit(1)

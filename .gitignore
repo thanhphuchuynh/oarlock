@@ -1,6 +1,7 @@
 # ── build outputs ────────────────────────────────────────────────────────────────
 /oarlockd
 /oarlock-agent
+/oarlockctl
 /dist/
 packages/*/dist/
 # A stale console build lands here when vite is run without the outDir override.

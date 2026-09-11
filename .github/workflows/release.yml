@@ -1,0 +1,66 @@
+name: release
+
+# Unsigned artefacts. `make release-sign` is interactive (encrypted minisign key) and
+# does not run here: an unattended signing key is a signing key an intruder also has.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: the tag is MAJOR.MINOR.PATCH
+        run: |
+          set -euo pipefail
+          if ! printf '%s' '${{ github.ref_name }}' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ref ${{ github.ref_name }} is not a product tag (v0.1.0)" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: build the matrix
+        run: make release NPM=pnpm RELEASE_VERSION=${{ github.ref_name }}
+        env:
+          OARLOCK_VERSION: ${{ github.ref_name }}
+
+      - name: publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ github.ref_name }}'
+          notes="Unsigned binaries, an SBOM beside each, and SHA256SUMS over the lot.
+
+          SHA256SUMS proves a download arrived intact, not that it came from this repository.
+          Sign locally with \`make release-sign\` and attach SHA256SUMS.minisig if you want a signature.
+          The public key belongs in SECURITY.md, not next to the binaries.
+
+          The Android APK is not built here (needs the NDK). Wire protocol and handshake domain are not this number."
+          gh release create "$tag" dist/release/* \
+            --title "$tag" \
+            --notes "$notes"

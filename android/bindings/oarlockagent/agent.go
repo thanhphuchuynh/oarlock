@@ -18,6 +18,7 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 
 	core "github.com/oarlock/oarlock/agent"
+	"github.com/oarlock/oarlock/internal/buildinfo"
 	"github.com/oarlock/oarlock/pkg/frame"
 	"github.com/oarlock/oarlock/pkg/transport/websocket"
 )
@@ -91,7 +92,7 @@ func (a *Agent) Start() error {
 	control, err := core.NewControl(core.Config{
 		Gateway: a.gateway, DeviceID: a.device, Signer: key,
 		Dialer: websocket.Dialer{}, PinSHA256: pins, Caps: []string{"shell"},
-		Info:  frame.AgentInfo{Version: "android-apk", Platform: "android/" + runtime.GOARCH},
+		Info:  frame.AgentInfo{Version: buildinfo.Version, Platform: "android/" + runtime.GOARCH},
 		Shell: core.Forkpty(strings.Fields(a.shell)), Log: log,
 	})
 	if err != nil {

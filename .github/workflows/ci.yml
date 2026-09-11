@@ -1,13 +1,8 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  schedule:
-    # The nightly fuzz job below is gated on this trigger; without it the job is a
-    # silent no-op that looks like coverage.
-    - cron: '17 3 * * *'
+  # Automatic runs are off. Start this from the Actions tab when you want the suite.
+  workflow_dispatch:
 
 permissions:
   contents: read

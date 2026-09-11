@@ -25,11 +25,13 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/oarlock/oarlock/internal/buildinfo"
 )
 
 const usage = `oarlockctl — the Oarlock operator CLI
 
-usage: oarlockctl [--url URL] [--token TOKEN] [--json] <command>
+usage: oarlockctl [--url URL] [--token TOKEN] [--json] [--version] <command>
 
 commands:
   sessions list [--device D] [--principal P] [--state S] [--limit N]
@@ -100,6 +102,9 @@ func run(args []string) error {
 		return cmdRecordingsVerify(ctx, g, tail)
 	case "help ", "help help":
 		fmt.Print(usage)
+		return nil
+	case "version ", "version version":
+		fmt.Println("oarlockctl", buildinfo.Version)
 		return nil
 	}
 	if verb == "" {

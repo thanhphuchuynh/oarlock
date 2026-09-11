@@ -372,6 +372,16 @@ func TestListFollowsTheCursor(t *testing.T) {
 
 // TestUnknownCommandsAreNamed rather than printing usage and leaving somebody to spot the
 // typo.
+func TestVersionPrintsTheBuild(t *testing.T) {
+	out, err := captureStdout(t, func() error { return run([]string{"--version"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out, "oarlockctl ") {
+		t.Fatalf("got %q", out)
+	}
+}
+
 func TestUnknownCommandsAreNamed(t *testing.T) {
 	t.Setenv("OARLOCK_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
 	err := run([]string{"sessions", "delete", "x"})

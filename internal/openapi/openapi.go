@@ -27,6 +27,7 @@ package openapi
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -35,13 +36,17 @@ import (
 	"github.com/oarlock/oarlock/internal/apisrv"
 )
 
-// Version is the document's version, and it is the *API's* version rather than the
-// gateway's build.
-//
-// `0.0.0` on purpose while the API is unstable: README says there are no releases and no
-// API stability, and a document claiming 1.0 would be the first place somebody read
-// otherwise.
+// Version is the committed document's version. The file in the tree stays `0.0.0` so an
+// unstamped checkout does not look like a release. `make release` and the tag workflow
+// set OARLOCK_VERSION to the product number when they generate a copy.
 const Version = "0.0.0"
+
+func infoVersion() string {
+	if v := strings.TrimSpace(os.Getenv("OARLOCK_VERSION")); v != "" {
+		return strings.TrimPrefix(v, "v")
+	}
+	return Version
+}
 
 // Generate returns the document as YAML.
 func Generate() ([]byte, error) {
@@ -49,7 +54,7 @@ func Generate() ([]byte, error) {
 		OpenAPI: "3.1.0",
 		Info: info{
 			Title:   "Oarlock",
-			Version: Version,
+			Version: infoVersion(),
 			Summary: "Gateway-terminated SSH for machines you cannot dial.",
 			Description: strings.TrimSpace(`
 This document is generated from the gateway's route table and checked by a test; it cannot

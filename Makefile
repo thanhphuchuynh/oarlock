@@ -6,6 +6,7 @@ GOCACHE ?= $(CURDIR)/.cache/go-build
 
 OARLOCKD := oarlockd
 OARLOCK_AGENT := oarlock-agent
+OARLOCKCTL := oarlockctl
 DEMO_DIR := demo
 DEMO_CONFIG := $(DEMO_DIR)/oarlock.yaml
 LOCAL_CONFIG := $(DEMO_DIR)/oarlock.local.yaml
@@ -50,9 +51,14 @@ RELEASE_SERVER_ONLY ?= windows/amd64 windows/arm64
 RELEASE_AGENT_ONLY ?= netbsd/amd64
 
 # A release binary that answers `dev` to -version is a binary nobody can tie to a commit
-# when it misbehaves at 03:00. Both variables already existed and nothing had ever set them.
-RELEASE_LD_SERVER := -s -w -X github.com/oarlock/oarlock/cmd/oarlockd/app.Version=$(RELEASE_VERSION)
-RELEASE_LD_AGENT := -s -w -X main.version=$(RELEASE_VERSION)
+# when it misbehaves at 03:00. One ldflag, three binaries, same product number.
+VERSION_LD := -X github.com/oarlock/oarlock/internal/buildinfo.Version=$(RELEASE_VERSION)
+RELEASE_LD := -s -w $(VERSION_LD)
+
+# npm / Android want MAJOR.MINOR.PATCH with no `v` and no git-describe junk.
+PRODUCT_VERSION := $(shell printf '%s' '$(RELEASE_VERSION)' | awk '/^v?[0-9]+\.[0-9]+\.[0-9]+$$/ { sub(/^v/, ""); print }')
+ANDROID_VERSION_NAME ?= $(if $(PRODUCT_VERSION),$(PRODUCT_VERSION),0.1.0)
+ANDROID_VERSION_CODE ?= $(shell printf '%s' '$(ANDROID_VERSION_NAME)' | awk -F. '{print $$1*10000+$$2*100+$$3}')
 
 # ── supply chain ────────────────────────────────────────────────────────────────
 #
@@ -101,13 +107,13 @@ ANDROID_APK := $(ANDROID_APP)/app/build/outputs/apk/debug/app-debug.apk
 ANDROID_DIST := dist/oarlock-agent-android-arm64-debug.apk
 ANDROID_BIN := dist/oarlock-agent-android-arm64
 
-.PHONY: help build binaries ui typecheck test vet check clean release release-list release-sign release-verify release-keygen landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
+.PHONY: help build binaries ui typecheck test vet check clean release release-list release-sign release-verify release-keygen stamp-version landing landing-build landing-preview landing-lan documents local-config local-server demo-url demo-reset demo-server demo-seed-device demo-seed-permissions demo-agent dev-ui android-tools android-test android-aar android-apk android-binary android-check android-key android-conf android-push android-reverse android-register android-agent android-up
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make build        Build Go binaries and embedded admin UI' \
-		'  make binaries     Build ./oarlockd and ./oarlock-agent' \
+		'  make binaries     Build ./oarlockd, ./oarlock-agent and ./oarlockctl' \
 		'  make ui           Build embedded admin UI assets' \
 		'  make check        Run typecheck, UI build, Go tests, and go vet' \
 		'  make release      Build oarlockd and oarlock-agent for every supported machine' \
@@ -136,21 +142,31 @@ help:
 build: binaries
 
 binaries: ui
-	GOCACHE=$(GOCACHE) $(GO) build -o $(OARLOCKD) ./cmd/oarlockd
-	GOCACHE=$(GOCACHE) $(GO) build -o $(OARLOCK_AGENT) ./cmd/oarlock-agent
+	GOCACHE=$(GOCACHE) $(GO) build -ldflags='$(VERSION_LD)' -o $(OARLOCKD) ./cmd/oarlockd
+	GOCACHE=$(GOCACHE) $(GO) build -ldflags='$(VERSION_LD)' -o $(OARLOCK_AGENT) ./cmd/oarlock-agent
+	GOCACHE=$(GOCACHE) $(GO) build -ldflags='$(VERSION_LD)' -o $(OARLOCKCTL) ./cmd/oarlockctl
 
 ui:
 	$(NPM) run build:ui
 
-# Every machine type, both binaries, stamped and stripped.
+# Every machine type, stamped and stripped. oarlockctl ships where oarlockd does, except
+# android/arm64 (an operator CLI does not belong on a headset).
 #
 # Depends on `ui` so the console embedded in each gateway is the current one. That makes a
 # release need the frontend toolchain, which is deliberate: `go build` alone still works on
 # a clean checkout thanks to the .gitkeep in the embed directory, but shipping that to
 # somebody means shipping a gateway whose console is an empty page.
+stamp-version:
+	node scripts/stamp-version.mjs '$(RELEASE_VERSION)'
+
 release: ui $(SBOM_TOOL)
 	@rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	@printf 'oarlock %s\n\n' '$(RELEASE_VERSION)'
+	@if [ -n '$(PRODUCT_VERSION)' ]; then \
+	  node scripts/stamp-version.mjs '$(RELEASE_VERSION)'; \
+	else \
+	  printf 'npm packages left at 0.0.0: %s is not MAJOR.MINOR.PATCH\n' '$(RELEASE_VERSION)'; \
+	fi
 	@set -e; \
 	for spec in $(addsuffix :both,$(RELEASE_BOTH)) \
 	            $(addsuffix :server,$(RELEASE_SERVER_ONLY)) \
@@ -160,12 +176,13 @@ release: ui $(SBOM_TOOL)
 	  if [ "$$arch" = arm ]; then goarm=7; label=armv7; fi; \
 	  ext=; if [ "$$os" = windows ]; then ext=.exe; fi; \
 	  case $$which in \
-	    both) cmds='oarlockd oarlock-agent';; \
-	    server) cmds='oarlockd';; \
+	    both) cmds='oarlockd oarlock-agent oarlockctl';; \
+	    server) cmds='oarlockd oarlockctl';; \
 	    agent) cmds='oarlock-agent';; \
 	  esac; \
 	  for cmd in $$cmds; do \
-	    if [ "$$cmd" = oarlockd ]; then ld='$(RELEASE_LD_SERVER)'; else ld='$(RELEASE_LD_AGENT)'; fi; \
+	    if [ "$$cmd" = oarlockctl ] && [ "$$os" = android ]; then continue; fi; \
+	    ld='$(RELEASE_LD)'; \
 	    out=$(RELEASE_DIR)/$$cmd-$$os-$$label$$ext; \
 	    GOOS=$$os GOARCH=$$arch GOARM=$$goarm CGO_ENABLED=0 GOCACHE=$(GOCACHE) \
 	      $(GO) build -trimpath -ldflags="$$ld" -o $$out ./cmd/$$cmd; \
@@ -289,7 +306,7 @@ check: typecheck ui
 	GOCACHE=$(GOCACHE) $(GO) vet ./...
 
 clean:
-	rm -f $(OARLOCKD) $(OARLOCK_AGENT)
+	rm -f $(OARLOCKD) $(OARLOCK_AGENT) $(OARLOCKCTL)
 	rm -rf dist web/dist landing/dist .cache/go-build
 
 # The address a device dials back on has to be reachable *by the device*, so for a phone
@@ -409,7 +426,7 @@ android-aar: android-tools android-test
 		PATH=$(MOBILE_BIN):$$PATH ANDROID_HOME=$(ANDROID_HOME) ANDROID_NDK_HOME=$(ANDROID_NDK_HOME) \
 		$(MOBILE_BIN)/gomobile bind -target=android/arm64 -androidapi 26 \
 		-javapkg dev.oarlock.mobile -trimpath \
-		-ldflags='-s -w -extldflags=-Wl,-z,max-page-size=16384' \
+		-ldflags='$(RELEASE_LD) -extldflags=-Wl,-z,max-page-size=16384' \
 		-o ../../$(ANDROID_AAR) ./oarlockagent
 
 # The agent as an ordinary binary for a device whose system image you control.
@@ -423,12 +440,13 @@ android-aar: android-tools android-test
 android-binary:
 	mkdir -p $(dir $(ANDROID_BIN))
 	GOOS=android GOARCH=arm64 CGO_ENABLED=0 GOCACHE=$(GOCACHE) \
-		$(GO) build -trimpath -ldflags='-s -w' -o $(ANDROID_BIN) ./cmd/oarlock-agent
+		$(GO) build -trimpath -ldflags='$(RELEASE_LD)' -o $(ANDROID_BIN) ./cmd/oarlock-agent
 	@printf 'binary: %s\n' '$(CURDIR)/$(ANDROID_BIN)'
 	@printf 'install: adb push %s /system/bin/oarlock-agent  (or bake it into the image)\n' '$(ANDROID_BIN)'
 
 android-apk: android-aar
-	cd $(ANDROID_APP) && ./gradlew --offline --no-daemon assembleDebug
+	cd $(ANDROID_APP) && ./gradlew --offline --no-daemon assembleDebug \
+		-PversionName=$(ANDROID_VERSION_NAME) -PversionCode=$(ANDROID_VERSION_CODE)
 	mkdir -p $(dir $(ANDROID_DIST))
 	install -m 0644 $(ANDROID_APK) $(ANDROID_DIST)
 	@printf 'APK: %s\n' '$(CURDIR)/$(ANDROID_DIST)'

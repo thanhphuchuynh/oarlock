@@ -29,6 +29,7 @@ import (
 // Run in CI by `go test ./...` rather than only by a separate command, so a route added
 // without regenerating fails the ordinary build.
 func TestTheCommittedDocumentIsCurrent(t *testing.T) {
+	t.Setenv("OARLOCK_VERSION", "")
 	want, err := openapi.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -46,10 +47,25 @@ func TestTheCommittedDocumentIsCurrent(t *testing.T) {
 	}
 }
 
+func TestOARLOCK_VERSIONStampsTheDocument(t *testing.T) {
+	t.Setenv("OARLOCK_VERSION", "v0.1.0")
+	b, err := openapi.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "\n  version: 0.1.0\n") {
+		t.Fatalf("stamped document does not carry the product version:\n%s", b[:400])
+	}
+	if strings.Contains(string(b), "\n  version: 0.0.0\n") {
+		t.Fatal("stamped document still claims 0.0.0")
+	}
+}
+
 // doc parses the generated document, so the assertions below read it the way a generator
 // would rather than the way this package wrote it.
 func doc(t *testing.T) map[string]any {
 	t.Helper()
+	t.Setenv("OARLOCK_VERSION", "")
 	b, err := openapi.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +265,7 @@ func TestTheSessionSchemaMatchesTheStruct(t *testing.T) {
 // TestTheDocumentIsDeterministic. A generated file whose key order moved between runs would
 // fail its own drift check for no reason, and teach everybody to regenerate blindly.
 func TestTheDocumentIsDeterministic(t *testing.T) {
+	t.Setenv("OARLOCK_VERSION", "")
 	first, err := openapi.Generate()
 	if err != nil {
 		t.Fatal(err)

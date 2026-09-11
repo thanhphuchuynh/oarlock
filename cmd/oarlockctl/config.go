@@ -63,6 +63,8 @@ func parseGlobals(args []string) (globals, []string, error) {
 			g.token = v
 		case a == "-h" || a == "--help" || a == "help":
 			return g, []string{"help"}, nil
+		case a == "--version" || a == "-version" || a == "version":
+			return g, []string{"version"}, nil
 		case strings.HasPrefix(a, "-"):
 			// Not ours — a command's own flag. Everything from here is the command's.
 			rest = append(rest, args[i:]...)
