@@ -215,10 +215,14 @@ release-list:
 # provenance, so fetching an unverified executable to produce a provenance document would
 # be a joke at its own expense. `go install pkg@version` verifies against the checksum
 # database, which is a real check that costs nothing.
+#
+# cyclonedx-gomod v1.12 needs Go 1.26 to compile itself. The product stays on 1.25.
+# GOTOOLCHAIN=auto lets `go install` fetch that toolchain; CI sets GOTOOLCHAIN=local,
+# which is why a release on 1.25 died with `requires go >= 1.26.0`.
 $(SBOM_TOOL):
 	@mkdir -p $(TOOLS_DIR)
 	@printf 'building cyclonedx-gomod %s, once\n' '$(SBOM_TOOL_VERSION)'
-	@GOBIN=$(TOOLS_DIR) GOCACHE=$(GOCACHE) $(GO) install \
+	@GOBIN=$(TOOLS_DIR) GOCACHE=$(GOCACHE) GOTOOLCHAIN=auto $(GO) install \
 	  github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@$(SBOM_TOOL_VERSION)
 
 $(MINISIGN):
